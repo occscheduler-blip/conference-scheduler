@@ -5,7 +5,7 @@ export default function Home() {
     <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center gap-8 px-6 py-20">
       <h1 className="text-4xl font-bold">Conference Scheduler</h1>
       <p className="text-lg text-zinc-700">
-        Frontend is connected to a FastAPI backend and ready to query Supabase.
+        Frontend is connected to a FastAPI backend and ready to query Supabasee.
       </p>
       <div className="rounded-xl border border-zinc-200 p-5">
         <BackendStatus />
@@ -16,4 +16,5 @@ export default function Home() {
       </p>
     </div>
   );
+
 }
