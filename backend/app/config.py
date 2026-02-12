@@ -14,6 +14,7 @@ class Settings(BaseSettings):
 
     supabase_url: str = ""
     supabase_key: str = ""
+    supabase_db_url: str = ""
     supabase_events_table: str = "events"
 
     @property
