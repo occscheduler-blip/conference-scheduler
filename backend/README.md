@@ -15,7 +15,7 @@ source .venv/bin/activate
 cp .env.example .env
 ```
 
-Set `SUPABASE_URL` and `SUPABASE_KEY` in `.env`.
+Set `SUPABASE_URL`, `SUPABASE_KEY`, and `SUPABASE_DB_URL` in `.env`.
 
 ## 3. Run API
 
@@ -26,3 +26,4 @@ uvicorn app.main:app --reload --port 8000
 The API includes:
 - `GET /health`
 - `GET /api/events?limit=10`
+- `POST /api/events/ingest`
