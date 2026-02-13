@@ -6,6 +6,7 @@ export default function Home() {
       <h1 className="text-4xl font-bold">Conference Scheduler</h1>
       <p className="text-lg text-zinc-700">
         Frontend is connected to a FastAPI backend and ready to query Supabasee.
+        hello world!
       </p>
       <div className="rounded-xl border border-zinc-200 p-5">
         <BackendStatus />
