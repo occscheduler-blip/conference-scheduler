@@ -27,6 +27,9 @@ Optionally set:
 uvicorn app.main:app --reload --port 8000
 ```
 
+# IMPORTANT: For all database functionality testing, use the following UUID as the symposium ID (for now at least):
+9e1fd0da-ea43-48f2-85df-5281a495f054
+
 #### To view locally visit: http://127.0.0.1:8000/docs#/
 
 The API includes:
