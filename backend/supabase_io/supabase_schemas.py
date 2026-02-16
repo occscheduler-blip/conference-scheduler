@@ -38,7 +38,8 @@ class Presentation(BaseModel):
     start_time: datetime
     end_time: datetime
 
-class Timeframes(BaseModel):
+
+class Timeframe(BaseModel):
     id: UUID
     start_time: datetime
     end_time: datetime
@@ -50,33 +51,3 @@ class PresentingStudents(BaseModel):
 class ProfRequests(BaseModel):
     student_id: UUID
     prof_id: UUID
-
-
-class TimeframeWindow(BaseModel):
-    start_time: datetime
-    end_time: datetime
-
-
-class AddSymposiumRequest(BaseModel):
-    symposium_name: str
-    rooms_available: int
-    timeframes: list[TimeframeWindow]
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "symposium_name": "Spring Symposium",
-                "rooms_available": 5,
-                "timeframes": [
-                    {
-                        "start_time": "2026-04-20T09:00:00Z",
-                        "end_time": "2026-04-20T12:00:00Z",
-                    },
-                    {
-                        "start_time": "2026-04-21T13:00:00Z",
-                        "end_time": "2026-04-21T16:00:00Z",
-                    },
-                ],
-            }
-        }
-    )
