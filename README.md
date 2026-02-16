@@ -32,10 +32,13 @@ uvicorn app.main:app --reload --port 8000
 Required backend env values in `backend/.env`:
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
+- `SUPABASE_STUDENTS_TABLE` (optional, default `students`)
 
 ## Endpoints
 
 - `GET /health`
 - `GET /api/events?limit=10`
+- `POST /api/events/upload-students-csv` (multipart upload, field name: `file`)
+  - Required CSV columns: `Student Name`, `Student ID`, `Class Level`, `Preferred Email`
 
 `/api/events` reads from the Supabase table in `SUPABASE_EVENTS_TABLE` (default: `events`).

@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     supabase_key: str = ""
     supabase_db_url: str = ""
     supabase_events_table: str = "events"
+    supabase_symposiums_table: str = "symposiums"
+    supabase_timeframes_table: str = "timeframes"
+    supabase_students_table: str = "students"
 
     @property
     def cors_origins(self) -> list[str]:

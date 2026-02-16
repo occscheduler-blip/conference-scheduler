@@ -16,6 +16,10 @@ cp .env.example .env
 ```
 
 Set `SUPABASE_URL`, `SUPABASE_KEY`, and `SUPABASE_DB_URL` in `.env`.
+Optionally set:
+- `SUPABASE_SYMPOSIUMS_TABLE` (defaults to `symposiums`)
+- `SUPABASE_TIMEFRAMES_TABLE` (defaults to `timeframes`)
+- `SUPABASE_STUDENTS_TABLE` (defaults to `students`)
 
 ## 3. Run API
 

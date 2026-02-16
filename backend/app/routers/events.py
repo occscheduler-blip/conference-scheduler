@@ -1,12 +1,10 @@
-from datetime import datetime, timezone
+from io import StringIO
 from typing import Any
 from uuid import uuid4
 
 import pandas as pd
-from fastapi import APIRouter, Body, HTTPException
-from supabase_io import delete
-from typing import Annotated
-import re
+from fastapi import APIRouter, HTTPException
+from supabase_io import delete, write
 
 from app.config import get_settings
 from app.supabase_client import get_supabase_client
@@ -187,78 +185,221 @@ def list_events(limit: int = 10):
         raise HTTPException(status_code=502, detail=f"Supabase request failed: {exc}") from exc
 
 
+@router.post("")
+def create_event(payload: schemas.SymposiumCreatePayload = Body(...)):
+    settings = get_settings()
+    supabase = get_supabase_client()
+
+    symposium_id = str(uuid4())
+    symposium_row = {
+        "id": symposium_id,
+        "symposium_name": payload.symposium_name,
+        "rooms": payload.rooms,
+    }
+    timeframe_rows = [
+        {
+            "symposium_id": symposium_id,
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        }
+        for start, end in payload.timeframes
+    ]
+
+    try:
+        symposium_response = supabase.table(settings.supabase_symposiums_table).insert(symposium_row).execute()
+        timeframe_response = supabase.table(settings.supabase_timeframes_table).insert(timeframe_rows).execute()
+
+        return {
+            "status": "accepted",
+            "symposium_id": symposium_id,
+            "symposiums_table": settings.supabase_symposiums_table,
+            "timeframes_table": settings.supabase_timeframes_table,
+            "symposium_rows_written": len(symposium_response.data or []),
+            "timeframe_rows_written": len(timeframe_response.data or []),
+        }
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        try:
+            supabase.table(settings.supabase_symposiums_table).delete().eq("id", symposium_id).execute()
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=f"Supabase insert failed: {exc}") from exc
+
+
+@router.post("/upload-students-csv")
+async def upload_students_csv(file: UploadFile = File(...)):
+    """Upload a CSV file and insert rows into the configured students table."""
+    required_columns = {"name", "student_id", "class_level", "email"}
+    preferred_headers = "Student Name, Student ID, Class Level, Preferred Email"
+    column_aliases = {
+        "name": "name",
+        "student_name": "name",
+        "student_id": "student_id",
+        "class_level": "class_level",
+        "email": "email",
+        "preferred_email": "email",
+    }
+
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a file with a .csv extension.")
+
+    try:
+        content = await file.read()
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="CSV must be UTF-8 encoded.") from exc
+
+    try:
+        df = pd.read_csv(StringIO(text))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {exc}") from exc
+
+    if df.empty:
+        raise HTTPException(status_code=422, detail="CSV contains no rows.")
+
+    rename_map: dict[str, str] = {}
+    unknown_columns: list[str] = []
+    seen_targets: set[str] = set()
+    for original_column in df.columns.astype(str):
+        normalized_key = original_column.strip().lower().replace(" ", "_")
+        target_column = column_aliases.get(normalized_key)
+        if not target_column:
+            unknown_columns.append(original_column)
+            continue
+        if target_column in seen_targets:
+            raise HTTPException(
+                status_code=422,
+                detail=f"CSV contains duplicate data for '{target_column}'.",
+            )
+        seen_targets.add(target_column)
+        rename_map[original_column] = target_column
+
+    if unknown_columns:
+        raise HTTPException(
+            status_code=422,
+            detail=f"CSV has unexpected columns: {', '.join(sorted(unknown_columns))}.",
+        )
+
+    df = df.rename(columns=rename_map)
+    csv_columns = set(df.columns.astype(str))
+    missing_columns = sorted(required_columns.difference(csv_columns))
+    if missing_columns:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"CSV is missing required columns: {', '.join(missing_columns)}. "
+                f"Use headers: {preferred_headers}."
+            ),
+        )
+
+    # Keep a stable insert shape regardless of CSV column order.
+    df = df[["name", "student_id", "class_level", "email"]]
+
+    records = df.where(pd.notnull(df), None).to_dict(orient="records")
+    if not records:
+        raise HTTPException(status_code=422, detail="CSV contains no insertable rows.")
+
+    settings = get_settings()
+    supabase = get_supabase_client()
+    chunk_size = 500
+    total_inserted = 0
+
+    try:
+        for start in range(0, len(records), chunk_size):
+            chunk = records[start : start + chunk_size]
+            response = supabase.table(settings.supabase_students_table).insert(chunk).execute()
+            total_inserted += len(response.data or [])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Supabase insert failed: {exc}") from exc
+
+    return {
+        "status": "accepted",
+        "table": settings.supabase_students_table,
+        "rows_received": len(records),
+        "rows_inserted": total_inserted,
+    }
+
+
 @router.post("/add_symposium")
-def add_symposium(
-    symposium_name: Annotated[
-        str,
-        Body(
-            ...,
-            description="Symposium name.",
-            openapi_examples={
-                "symposium_name": {
-                    "summary": "Symposium name payload",
-                    "value": "Spring Symposium",
-                }
-            },
-        ),
-    ],
-    timeframes: Annotated[
-        list[tuple[datetime, datetime]],
-        Body(
-            ...,
-            description="List of (start_time, end_time) tuples for symposium availability windows.",
-            openapi_examples={
-                "timeframes": {
-                    "summary": "Two symposium windows",
-                    "value": [
-                        ["2026-04-20T09:00:00Z", "2026-04-20T12:00:00Z"],
-                        ["2026-04-21T13:00:00Z", "2026-04-21T16:00:00Z"],
-                    ],
-                }
-            },
-        ),
-    ],
-):
-    """Validate symposium + timeframe data and return write-ready records.
+def add_symposium(payload: schemas.AddSymposiumRequest):
+    """Validate symposium + timeframe data and insert into Supabase tables.
 
     Args:
-        symposium_name (str): symposium name.
-        timeframes (list[tuple[datetime, datetime]]): list of start/end time tuples.
+        payload (schemas.AddSymposiumRequest): symposium request payload.
 
     Returns:
-        dict[str, Any]: validated payload for `supabase_io.write.write_validated_records`.
+        dict[str, Any]: status payload with inserted record counts.
     """
     try:
-        cleaned_name = symposium_name.strip()
+        cleaned_name = payload.symposium_name.strip()
         if not cleaned_name:
             raise ValueError("Symposium name cannot be empty.")
-        if not timeframes:
+        if not payload.timeframes:
             raise ValueError("At least one timeframe is required.")
+
+        symposium_table = "symposiums"
+        timeframes_table = "timeframes"
+        schema = "public"
+        symposium_table = write._validate_identifier(symposium_table, "table name")
+        timeframes_table = write._validate_identifier(timeframes_table, "table name")
+        schema = write._validate_identifier(schema, "schema")
+
         symposium_id = uuid4()
-        symposium_model = schemas.Symposium(
-            id=symposium_id,
-            name=cleaned_name,
-            created_at=datetime.now(timezone.utc),
-        )
+        created_at = datetime.now(timezone.utc)
         timeframe_models = [
             schemas.Timeframes(
                 id=uuid4(),
-                start_time=start_time,
-                end_time=end_time,
+                start_time=timeframe.start_time,
+                end_time=timeframe.end_time,
                 symposium_id=symposium_id,
             )
-            for start_time, end_time in timeframes
+            for timeframe in payload.timeframes
         ]
 
-        symposium_row = symposium_model.model_dump(mode="json")
-        timeframe_rows = [timeframe.model_dump(mode="json") for timeframe in timeframe_models]
+        symposium_records = [
+            {
+                "id": symposium_id,
+                "created_at": created_at,
+                "name": cleaned_name,
+                "rooms_available": payload.rooms_available,
+            }
+        ]
+        timeframe_records = [
+            {
+                "id": timeframe.id,
+                "start_time": timeframe.start_time,
+                "end_time": timeframe.end_time,
+                "symposium_id": timeframe.symposium_id,
+            }
+            for timeframe in timeframe_models
+        ]
+
+        db_url = write._resolve_db_url()
+        with write._connection(db_url) as conn:
+            write.insert_records(
+                table_name=symposium_table,
+                records=symposium_records,
+                schema=schema,
+                conn=conn,
+            )
+            write.insert_records(
+                table_name=timeframes_table,
+                records=timeframe_records,
+                schema=schema,
+                conn=conn,
+            )
+
         return {
-            "status": "validated",
+            "status": "inserted",
             "symposium_id": str(symposium_id),
             "name": cleaned_name,
-            "records_by_table": {
-                "symposiums": [symposium_row],
-                "timeframes": timeframe_rows,
+            "rooms_available": payload.rooms_available,
+            "records_inserted": {
+                "symposiums": 1,
+                "timeframes": len(timeframe_models),
             },
         }
     except HTTPException:
