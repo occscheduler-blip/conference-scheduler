@@ -23,7 +23,10 @@ Set `SUPABASE_URL`, `SUPABASE_KEY`, and `SUPABASE_DB_URL` in `.env`.
 uvicorn app.main:app --reload --port 8000
 ```
 
+#### To view locally visit: http://127.0.0.1:8000/docs#/
+
 The API includes:
 - `GET /health`
 - `GET /api/events?limit=10`
 - `POST /api/events/ingest`
+TODO: update this ^

@@ -1,9 +1,12 @@
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 from fastapi import APIRouter, Body, HTTPException
-from pydantic import ValidationError
-from supabase_io import delete, read, write
+from supabase_io import delete
+from typing import Annotated
+import re
 
 from app.config import get_settings
 from app.supabase_client import get_supabase_client
@@ -185,35 +188,85 @@ def list_events(limit: int = 10):
 
 
 @router.post("/add_symposium")
-def add_symposium(data: Any = Body(...)):
-    """Endpoint for adding a new symposium.
+def add_symposium(
+    symposium_name: Annotated[
+        str,
+        Body(
+            ...,
+            description="Symposium name.",
+            openapi_examples={
+                "symposium_name": {
+                    "summary": "Symposium name payload",
+                    "value": "Spring Symposium",
+                }
+            },
+        ),
+    ],
+    timeframes: Annotated[
+        list[tuple[datetime, datetime]],
+        Body(
+            ...,
+            description="List of (start_time, end_time) tuples for symposium availability windows.",
+            openapi_examples={
+                "timeframes": {
+                    "summary": "Two symposium windows",
+                    "value": [
+                        ["2026-04-20T09:00:00Z", "2026-04-20T12:00:00Z"],
+                        ["2026-04-21T13:00:00Z", "2026-04-21T16:00:00Z"],
+                    ],
+                }
+            },
+        ),
+    ],
+):
+    """Validate symposium + timeframe data and return write-ready records.
 
     Args:
-        data (Any): symposium payload as JSON (single record, list of records, or DataFrame-like dict).
+        symposium_name (str): symposium name.
+        timeframes (list[tuple[datetime, datetime]]): list of start/end time tuples.
 
     Returns:
-        dict[str, Any]: status and number of rows written.
+        dict[str, Any]: validated payload for `supabase_io.write.write_validated_records`.
     """
     try:
-        df = _to_dataframe(data, "symposium")
-        if df.empty:
-            raise HTTPException(status_code=422, detail="Symposium payload is empty.")
-        schemas.Symposium.model_validate(df.iloc[0].to_dict())
-
-        settings = get_settings()
-        rows_written = write.write(
-            df=df,
-            table_name=settings.supabase_events_table,
-            schema="public",
-            if_exists="append",
+        cleaned_name = symposium_name.strip()
+        if not cleaned_name:
+            raise ValueError("Symposium name cannot be empty.")
+        if not timeframes:
+            raise ValueError("At least one timeframe is required.")
+        symposium_id = uuid4()
+        symposium_model = schemas.Symposium(
+            id=symposium_id,
+            name=cleaned_name,
+            created_at=datetime.now(timezone.utc),
         )
-        return {"status": "accepted", "rows_written": rows_written}
+        timeframe_models = [
+            schemas.Timeframes(
+                id=uuid4(),
+                start_time=start_time,
+                end_time=end_time,
+                symposium_id=symposium_id,
+            )
+            for start_time, end_time in timeframes
+        ]
+
+        symposium_row = symposium_model.model_dump(mode="json")
+        timeframe_rows = [timeframe.model_dump(mode="json") for timeframe in timeframe_models]
+        return {
+            "status": "validated",
+            "symposium_id": str(symposium_id),
+            "name": cleaned_name,
+            "records_by_table": {
+                "symposiums": [symposium_row],
+                "timeframes": timeframe_rows,
+            },
+        }
     except HTTPException:
         raise
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to write symposium: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc
 
 
 @router.delete("/remove_symposium/{symposium_id}")
