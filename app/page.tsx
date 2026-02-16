@@ -1,20 +1,34 @@
-import { BackendStatus } from "./components/backend-status";
+import Link from "next/link";
 
 export default function Home() {
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center gap-8 px-6 py-20">
-      <h1 className="text-4xl font-bold">Conference Scheduler</h1>
-      <p className="text-lg text-zinc-700">
-        Frontend is connected to a FastAPI backend and ready to query Supabasee.
-      </p>
-      <div className="rounded-xl border border-zinc-200 p-5">
-        <BackendStatus />
-      </div>
-      <p className="text-sm text-zinc-600">
-        Set <code>NEXT_PUBLIC_BACKEND_URL</code> in your frontend environment if your backend is not
-        running on <code>http://localhost:8000</code>.
-      </p>
-    </div>
-  );
+    <main className="min-h-screen bg-[#f5f5f5] px-4 py-10">
+      <div className="mx-auto flex w-full max-w-4xl flex-col items-center">
+        <h1 className="mb-6 text-center text-3xl font-extrabold tracking-wide text-black md:text-5xl">
+          OCC THESIS SYMPOSIUM
+        </h1>
 
+        <div className="flex flex-wrap justify-center gap-3">
+          <Link
+            href="/admin"
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
+          >
+            Admin Page
+          </Link>
+          <Link
+            href="/faculty"
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
+          >
+            Faculty Page
+          </Link>
+          <Link
+            href="/student"
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
+          >
+            Student Page
+          </Link>
+        </div>
+      </div>
+    </main>
+  );
 }

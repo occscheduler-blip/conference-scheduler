@@ -44,3 +44,9 @@ class Symposium(BaseModel):
     id: int
     name: str
     departments: list[Department]
+
+
+class SymposiumCreatePayload(BaseModel):
+    symposium_name: str
+    rooms: int
+    timeframes: list[tuple[datetime, datetime]]
