@@ -3,11 +3,13 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, model_validator
 from uuid import UUID
 
+
 class Symposium(BaseModel):
     id: UUID
     created_at: datetime
     name: str
     rooms_available: int
+
 
 class Department(BaseModel):
     id: UUID
@@ -16,10 +18,12 @@ class Department(BaseModel):
     email: str
     symposium_id: UUID
 
+
 class Class(BaseModel):
     id: UUID
     name: str
     department_id: UUID
+
 
 class Professor(BaseModel):
     id: UUID
@@ -27,12 +31,14 @@ class Professor(BaseModel):
     email: str
     class_id: UUID
 
+
 class Student(BaseModel):
     id: UUID
     name: str
     email: str
     class_id: UUID
     presentation_id: UUID | None
+
 
 class Presentation(BaseModel):
     id: UUID
@@ -42,17 +48,21 @@ class Presentation(BaseModel):
     start_time: datetime | None
     end_time: datetime | None
 
+
 class Timeframe(BaseModel):
     id: UUID
     linked_id: UUID
     start_time: datetime
     end_time: datetime
 
+
 class PresentingStudents(BaseModel):
     id: UUID
     presentation_id: UUID
     student_id: UUID
 
+
 class ProfRequest(BaseModel):
+    id: UUID
     student_id: UUID
     professor_id: UUID
