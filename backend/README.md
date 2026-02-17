@@ -34,6 +34,6 @@ uvicorn app.main:app --reload --port 8000
 
 The API includes:
 - `GET /health`
-- `GET /api/events?limit=10`
-- `POST /api/events/ingest`
-TODO: update this ^
+- `GET /api/events/add_symposium`
+- `Get /api/events/add_department`
+- `Get /api/events/add_class`
