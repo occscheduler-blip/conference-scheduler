@@ -3,6 +3,16 @@ from uuid import UUID
 from app.supabase_io import read
 
 
+def delete_timeframes(linked_id: UUID | list[UUID]):
+    del_timeframes_query = supabase.table("timeframes").delete()
+    
+    if isinstance(linked_id, UUID):
+        del_timeframes_query = del_timeframes_query.eq("linked_id", linked_id)
+    elif isinstance(linked_id, list[UUID]):
+        del_timeframes_query = del_timeframes_query.in_("linked_id", linked_id)
+
+    del_timeframes_resp = del_timeframes_query.execute()
+
 def delete_student(student_id: UUID | list[UUID]):
     # TODO: Make sure that if the last student is deleted from a presentation, the presentation is deleted as well.
     del_stu_query = supabase.table("students").delete()
@@ -22,6 +32,7 @@ def delete_student(student_id: UUID | list[UUID]):
         )
         del_prof_request_query = del_prof_request_query.in_("student_id", student_id)
 
+    delete_timeframes(student_id)
     del_stu_resp = del_stu_query.execute()
     del_presenting_student_resp = del_presenting_student_query.execute()
     del_prof_request_resp = del_prof_request_query.execute()
@@ -39,6 +50,7 @@ def delete_professor(prof_id: UUID | list[UUID]):
         del_prof_query = del_prof_query.in_("id", prof_id)
         del_prof_request_query = del_prof_request_query.in_("professor_id", prof_id)
 
+    delete_timeframes(prof_id)
     del_prof_resp = del_prof_query.execute()
     del_prof_request_resp = del_prof_request_query.execute()
 
@@ -58,6 +70,7 @@ def delete_presentation(presentation_id: UUID | list[UUID]):
             "presentation_id", presentation_id
         )
 
+    delete_timeframes(presentation_id)
     del_pres_resp = del_pres_query.execute()
     del_presenting_student_resp = del_presenting_student_query.execute()
 
@@ -83,3 +96,30 @@ def delete_class(class_id: UUID | list[UUID]):
         delete_presentation(presentation_id=presentation["id"])
 
     del_class_resp = supabase.table("classes").delete().eq("id", class_id).execute()
+
+
+def delete_multiple_departments(department_ids: list[UUID]):
+    for department in department_ids:
+        delete_department(department)
+
+
+def delete_department(department_id: UUID | list[UUID]):
+    if isinstance(department_id, list[UUID]):
+        delete_multiple_departments(department_id)
+
+    classes = read.get_classes(department_id).data
+    for class_ in classes:
+        delete_class(class_)
+
+    del_dept_resp = (
+        supabase.table("departments").delete().eq("id", department_id).execute()
+    )
+
+
+def delete_symposium(symposium_id: UUID):
+    departments = read.get_departments(symposium_id).data
+    for department in departments:
+        delete_department(department["id"])
+
+    delete_timeframes(symposium_id)
+    del_symposium_resp = supabase.table("symposiums").delete().eq("id", symposium_id).execute()

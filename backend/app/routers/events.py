@@ -331,3 +331,19 @@ def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None 
         raise HTTPException(
             status_code=400, detail=f"Failed to get professor requests: {exc}"
         ) from exc
+
+
+@router.delete("/delete_symposium")
+def delete_symposium(symposium_id: UUID):
+    try:
+        delete.delete_symposium(symposium_id)
+        return {
+            "status": "deleted",
+            "records deleted": {
+                "symposiums": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Failed to delete symposium: {exc}")
