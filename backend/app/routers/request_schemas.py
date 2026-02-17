@@ -22,7 +22,7 @@ class TimeframeWindow(BaseModel):
         return self
 
 class AddSymposiumRequest(BaseModel):
-    symposium_id: uuid.UUID | None = None
+    symposium_id: UUID | None = None
     symposium_name: str
     rooms_available: int
     timeframes: list[TimeframeWindow]
