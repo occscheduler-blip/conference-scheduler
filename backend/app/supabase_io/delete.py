@@ -8,7 +8,7 @@ def delete_timeframes(linked_id: UUID | list[UUID]):
     
     if isinstance(linked_id, UUID):
         del_timeframes_query = del_timeframes_query.eq("linked_id", linked_id)
-    elif isinstance(linked_id, list[UUID]):
+    elif isinstance(linked_id, list):
         del_timeframes_query = del_timeframes_query.in_("linked_id", linked_id)
 
     del_timeframes_resp = del_timeframes_query.execute()
@@ -25,7 +25,7 @@ def delete_student(student_id: UUID | list[UUID]):
             "student_id", student_id
         )
         del_prof_request_query = del_prof_request_query.eq("student_id", student_id)
-    elif isinstance(student_id, list[UUID]):
+    elif isinstance(student_id, list):
         del_stu_query = del_stu_query.in_("id", student_id)
         del_presenting_student_query = del_presenting_student_query.in_(
             "student_id", student_id
@@ -46,7 +46,7 @@ def delete_professor(prof_id: UUID | list[UUID]):
     if isinstance(prof_id, UUID):
         del_prof_query = del_prof_query.eq("id", prof_id)
         del_prof_request_query = del_prof_request_query.eq("professor_id", prof_id)
-    elif isinstance(prof_id, list[UUID]):
+    elif isinstance(prof_id, list):
         del_prof_query = del_prof_query.in_("id", prof_id)
         del_prof_request_query = del_prof_request_query.in_("professor_id", prof_id)
 
@@ -64,7 +64,7 @@ def delete_presentation(presentation_id: UUID | list[UUID]):
         del_presenting_student_query = del_presenting_student_query.eq(
             "presentation_id", presentation_id
         )
-    elif isinstance(presentation_id, list[UUID]):
+    elif isinstance(presentation_id, list):
         del_pres_query = del_pres_query.in_("id", presentation_id)
         del_presenting_student_query = del_presenting_student_query.in_(
             "presentation_id", presentation_id
@@ -81,19 +81,19 @@ def delete_multiple_classes(class_ids: list[UUID]):
 
 
 def delete_class(class_id: UUID | list[UUID]):
-    if isinstance(class_id, list[UUID]):
+    if isinstance(class_id, list):
         delete_multiple_classes(class_id)
 
-    student_list = read.get_students(class_id=class_id).data
+    student_list = read.get_students(class_id=UUID(class_id)).data
     for student in student_list:
-        delete_student(student_id=student["id"])
+        delete_student(student_id=UUID(student["id"]))
 
-    prof_list = read.get_professors(class_id=class_id).data
+    prof_list = read.get_professors(class_id=UUID(class_id)).data
     for professor in prof_list:
-        delete_professor(professor["id"])
-    pres_list = read.get_presentations(class_id=class_id).data
+        delete_professor(UUID(professor["id"]))
+    pres_list = read.get_presentations(class_id=UUID(class_id)).data
     for presentation in pres_list:
-        delete_presentation(presentation_id=presentation["id"])
+        delete_presentation(presentation_id=UUID(presentation["id"]))
 
     del_class_resp = supabase.table("classes").delete().eq("id", class_id).execute()
 
@@ -104,12 +104,12 @@ def delete_multiple_departments(department_ids: list[UUID]):
 
 
 def delete_department(department_id: UUID | list[UUID]):
-    if isinstance(department_id, list[UUID]):
+    if isinstance(department_id, list):
         delete_multiple_departments(department_id)
 
     classes = read.get_classes(department_id).data
     for class_ in classes:
-        delete_class(class_)
+        delete_class(class_["id"])
 
     del_dept_resp = (
         supabase.table("departments").delete().eq("id", department_id).execute()
@@ -119,7 +119,7 @@ def delete_department(department_id: UUID | list[UUID]):
 def delete_symposium(symposium_id: UUID):
     departments = read.get_departments(symposium_id).data
     for department in departments:
-        delete_department(department["id"])
+        delete_department(UUID(department["id"]))
 
     delete_timeframes(symposium_id)
     del_symposium_resp = supabase.table("symposiums").delete().eq("id", symposium_id).execute()

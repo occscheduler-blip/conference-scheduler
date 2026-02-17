@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4, UUID
 
 import pandas as pd
@@ -105,7 +105,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         symposium = supabase_schemas.Symposium(
             id=symposium_id,
             name=payload.symposium_name,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone(timedelta(hours=-5), name="EST")),
             rooms_available=payload.rooms_available,
         )
 
@@ -347,3 +347,9 @@ def delete_symposium(symposium_id: UUID):
         raise
     except Exception as exc:
         raise ValueError(f"Failed to delete symposium: {exc}")
+    
+
+# @router.delete("/delete_department")
+# def delete_department(department_id: UUID):
+#     try:
+#         delete.delete_department()
