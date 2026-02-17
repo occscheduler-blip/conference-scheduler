@@ -44,7 +44,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         timeframes_table = write._validate_identifier(timeframes_table, "table name")
         schema = write._validate_identifier(schema, "schema")
 
-        symposium_id = uuid4()
+        symposium_id = payload.symposium_id or uuid4()
         created_at = datetime.now(timezone.utc)
         timeframe_models = [
             request_schemas.Timeframes(

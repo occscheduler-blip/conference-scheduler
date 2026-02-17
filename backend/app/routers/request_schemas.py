@@ -7,12 +7,14 @@ class TimeframeWindow(BaseModel):
     start_time: datetime
     end_time: datetime
 
-class SymposiumCreatePayload(BaseModel):
-    symposium_name: str
-    rooms: int
-    timeframes: list[tuple[datetime, datetime]]
+class Timeframes(BaseModel):
+    id: uuid.UUID
+    start_time: datetime
+    end_time: datetime
+    symposium_id: uuid.UUID | None = None
 
 class AddSymposiumRequest(BaseModel):
+    symposium_id: uuid.UUID | None = None
     symposium_name: str
     rooms_available: int
     timeframes: list[TimeframeWindow]
@@ -20,6 +22,7 @@ class AddSymposiumRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
+                "symposium_id": "9e1fd0da-ea43-48f2-85df-5281a495f054",
                 "symposium_name": "Spring Symposium",
                 "rooms_available": 5,
                 "timeframes": [

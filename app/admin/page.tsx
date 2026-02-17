@@ -9,6 +9,7 @@ const fieldClass =
 
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
 const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const fixedSymposiumId = "9e1fd0da-ea43-48f2-85df-5281a495f054";
 
 function formatTimeLabel(slotIndex: number) {
   const totalMinutes = 9 * 60 + slotIndex * 15;
@@ -158,18 +159,20 @@ export default function AdminPage() {
 
     setIsSaving(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events`, {
+      const response = await fetch(`${backendUrl}/api/events/add_symposium`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          symposium_id: fixedSymposiumId,
           symposium_name: trimmedName,
-          rooms: parsedRooms,
-          timeframes,
+          rooms_available: parsedRooms,
+          timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
         }),
       });
 
       const payload = (await response.json()) as {
         detail?: string;
+        symposium_id?: string;
         rows_written?: number;
       };
 
@@ -178,7 +181,7 @@ export default function AdminPage() {
         return;
       }
 
-      setSaveMessage(`Saved symposium with ${timeframes.length} timeframes.`);
+      setSaveMessage(`Saved symposium ${payload.symposium_id ?? fixedSymposiumId} with ${timeframes.length} timeframes.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {

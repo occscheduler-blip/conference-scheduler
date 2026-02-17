@@ -42,6 +42,9 @@ class Timeframes(BaseModel):
     id: UUID
     start_time: datetime
     end_time: datetime
+    symposium_id: UUID | None = None
+    prof_id: UUID | None = None
+    student_id: UUID | None = None
 
 class PresentingStudents(BaseModel):
     presentation_id: UUID
