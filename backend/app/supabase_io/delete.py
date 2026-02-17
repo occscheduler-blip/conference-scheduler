@@ -5,13 +5,24 @@ from app.supabase_io import read
 
 def delete_timeframes(linked_id: UUID | list[UUID]):
     del_timeframes_query = supabase.table("timeframes").delete()
-    
+
+    num_deleted = (
+        supabase.table("timeframes")
+        .select("linked_id", count="exact")
+        .eq("linked_id", linked_id)
+        .execute()
+        .count
+    )
+
     if isinstance(linked_id, UUID):
         del_timeframes_query = del_timeframes_query.eq("linked_id", linked_id)
     elif isinstance(linked_id, list[UUID]):
         del_timeframes_query = del_timeframes_query.in_("linked_id", linked_id)
 
     del_timeframes_resp = del_timeframes_query.execute()
+
+    return num_deleted
+
 
 def delete_student(student_id: UUID | list[UUID]):
     # TODO: Make sure that if the last student is deleted from a presentation, the presentation is deleted as well.
@@ -122,4 +133,6 @@ def delete_symposium(symposium_id: UUID):
         delete_department(department["id"])
 
     delete_timeframes(symposium_id)
-    del_symposium_resp = supabase.table("symposiums").delete().eq("id", symposium_id).execute()
+    del_symposium_resp = (
+        supabase.table("symposiums").delete().eq("id", symposium_id).execute()
+    )

@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.supabase_io.client import supabase
+
 # NOTE: This is possibly not necessary and for now is just an arbitrary value, we can determine what the real max is later.
 MAX_ROOMS = 100
 MAX_TIME = 60
@@ -264,3 +266,8 @@ class AddProfReqRequest(BaseModel):
             }
         }
     )
+
+
+class UpdateTimeframesRequest(BaseModel):
+    linked_id: UUID
+    timeframes: list[TimeframeWindow]

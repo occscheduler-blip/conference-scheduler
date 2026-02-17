@@ -12,6 +12,8 @@ npm install
 npm run dev
 ```
 
+To view local frontend, visit: http://localhost:3000
+
 Optional frontend env (`.env.local`):
 
 ```bash
