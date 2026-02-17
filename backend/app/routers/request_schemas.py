@@ -83,8 +83,8 @@ class AddDepartmentRequest(BaseModel):
     @classmethod
     def validate_email(cls, email: str):
         email = email.strip().lower()
-        if "@" not in email:
-            raise ValueError("Invalid email")
+        if not email:
+            raise ValueError("Email cannot be blank.")
         if not email.endswith("@hamilton.edu"):
             raise ValueError("Email must be a @hamilton.edu address.")
         return email
@@ -92,7 +92,7 @@ class AddDepartmentRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "symposium": "9e1fd0da-ea43-48f2-85df-5281a495f054",
+                "symposium_id": "9e1fd0da-ea43-48f2-85df-5281a495f054",
                 "department_name": "Biology",
                 "department_head_name": "John Smith",
                 "email": "jsmith@hamilton.edu",
@@ -117,8 +117,8 @@ class ProfessorInit(BaseModel):
     @classmethod
     def validate_email(cls, email: str):
         email = email.strip().lower()
-        if "@" not in email:
-            raise ValueError("Invalid email")
+        if not email:
+            raise ValueError("Email cannot be blank.")
         if not email.endswith("@hamilton.edu"):
             raise ValueError("Email must be a @hamilton.edu address.")
         return email
@@ -140,7 +140,7 @@ class AddClassRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "department_id": "bc9e68ae-85aa-4d31-ace8-f8450ece617c",
+                "department_id": "ba16476b-e00e-4eeb-98e6-d78be76bfd41",
                 "name": "BIO101: Intro to Biology",
                 "professors": [
                     {
@@ -156,7 +156,48 @@ class AddClassRequest(BaseModel):
         }
     )
     
+
+class StudentInit(BaseModel):
+    name: str
+    email: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str):
+        name = name.strip()
+        if not name:
+            raise ValueError("Class name cannot be empty")
+        return name
     
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, email: str):
+        email = email.strip().lower()
+        if not email:
+            raise ValueError("Email cannot be blank.")
+        if not email.endswith("@hamilton.edu"):
+            raise ValueError("Email must be a @hamilton.edu address.")
+        return email
+
+
 class AddStudentsRequest(BaseModel):
     class_id: UUID
-    
+    students: list[StudentInit]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "class_id": "a2d9911c-977b-457f-81dc-672490e4f2ab",
+                "students": [
+                    {
+                        "name": "Jim Brown",
+                        "email": "jbrown@hamilton.edu",
+                    },
+                    {
+                        "name": "George Washington",
+                        "email": "gwashing@hamilton.edu",
+                    }
+                ]
+            }
+        }
+    )

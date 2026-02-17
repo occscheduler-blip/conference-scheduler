@@ -103,7 +103,6 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
 
         timeframe_payloads = [item.model_dump() for item in timeframes]
         timeframe_response = write.insert("timeframes", timeframe_payloads)
-        print(timeframe_response)
 
         symposium = supabase_schemas.Symposium(
             id=symposium_id,
@@ -114,7 +113,6 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
 
         symposium_payload = [symposium.model_dump()]
         response = write.insert("symposiums", symposium_payload)
-        print(response)
 
         return {
             "status": "inserted",
@@ -123,6 +121,49 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
             "records_inserted": {
                 "symposiums": 1,
                 "timeframes": len(timeframes),
+            },
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc
+
+@router.post("/add_students")
+def add_students(payload: request_schemas.AddStudentsRequest):
+    """Adds a list of students to the students table in the database.
+
+    Args:
+        payload (request_schemas.AddStudentsRequest): _description_
+
+    Raises:
+        HTTPException: _description_
+        HTTPException: _description_
+
+    Returns:
+        _type_: _description_
+    """
+    try:
+        students: list[supabase_schemas.Student] = []
+        for student in payload.students:
+            students.append(
+                supabase_schemas.Student(
+                    id=uuid4(),
+                    name=student.name,
+                    email=student.email,
+                    class_id=payload.class_id,
+                    presentation_id=None,
+                )
+            )
+        
+        students_payload = [item.model_dump() for item in students]
+        response = write.insert("students", students_payload)
+        return {
+            "status": "inserted",
+            "class_id": str(payload.class_id),
+            "records_inserted": {
+                "students": len(students),
             },
         }
     except HTTPException:
