@@ -198,3 +198,28 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc
+
+@router.post("/add_prof_req")
+def add_prof_request(payload: request_schemas.AddProfReqRequest):
+    try:
+        request = supabase_schemas.ProfRequest(
+            student_id=payload.student_id,
+            professor_id=payload.professor_id,
+        )
+
+        response = write.insert("prof_requests", [request.model_dump()])
+
+        return {
+            "status": "inserted",
+            "student_id": payload.student_id,
+            "professor_id": payload.professor_id,
+            "records_inserted": {
+                "prof_requests": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc

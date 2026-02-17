@@ -246,3 +246,16 @@ class AddPresentationRequest(BaseModel):
             }
         }
     )
+
+
+class AddProfReqRequest(BaseModel):
+    student_id: UUID
+    professor_id: UUID
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "student_id": "6015d279-a271-4d9d-9c8e-435731caac04",
+                "professor_id": "00d31519-34c9-42ad-8003-134e254d721f"
+            }
+        }
+    )

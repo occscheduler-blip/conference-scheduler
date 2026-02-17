@@ -53,6 +53,6 @@ class PresentingStudents(BaseModel):
     presentation_id: UUID
     student_id: UUID
 
-class ProfRequests(BaseModel):
+class ProfRequest(BaseModel):
     student_id: UUID
-    prof_id: UUID
+    professor_id: UUID
