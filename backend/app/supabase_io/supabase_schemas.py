@@ -38,9 +38,9 @@ class Presentation(BaseModel):
     id: UUID
     title: str
     class_id: UUID
-    start_time: datetime
-    end_time: datetime
-
+    minutes: int
+    start_time: datetime | None
+    end_time: datetime | None
 
 class Timeframe(BaseModel):
     id: UUID
@@ -49,6 +49,7 @@ class Timeframe(BaseModel):
     end_time: datetime
 
 class PresentingStudents(BaseModel):
+    id: UUID
     presentation_id: UUID
     student_id: UUID
 

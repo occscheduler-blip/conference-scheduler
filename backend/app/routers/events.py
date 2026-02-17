@@ -1,6 +1,4 @@
-from io import StringIO
 from datetime import datetime, timezone
-from typing import Any
 from uuid import uuid4
 
 import pandas as pd
@@ -111,8 +109,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
             rooms_available=payload.rooms_available,
         )
 
-        symposium_payload = [symposium.model_dump()]
-        response = write.insert("symposiums", symposium_payload)
+        response = write.insert("symposiums", [symposium.model_dump()])
 
         return {
             "status": "inserted",
@@ -132,18 +129,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
 
 @router.post("/add_students")
 def add_students(payload: request_schemas.AddStudentsRequest):
-    """Adds a list of students to the students table in the database.
-
-    Args:
-        payload (request_schemas.AddStudentsRequest): _description_
-
-    Raises:
-        HTTPException: _description_
-        HTTPException: _description_
-
-    Returns:
-        _type_: _description_
-    """
+    """Adds a list of students to the students table in the database."""
     try:
         students: list[supabase_schemas.Student] = []
         for student in payload.students:
@@ -166,6 +152,46 @@ def add_students(payload: request_schemas.AddStudentsRequest):
                 "students": len(students),
             },
         }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc
+    
+@router.post("/add_presentation")
+def add_presentation(payload: request_schemas.AddPresentationRequest):
+    try:
+        presentation_id = uuid4()
+        presentation = supabase_schemas.Presentation(
+            id=presentation_id,
+            title=payload.title,
+            class_id=payload.class_id,
+            minutes=payload.minutes,
+            start_time=None,
+            end_time=None
+        )
+        pres_resp = write.insert("presentations", [presentation.model_dump()])
+
+        students: list[supabase_schemas.PresentingStudents] = []
+        for student in payload.presenting_students:
+            students.append(supabase_schemas.PresentingStudents(
+                id=uuid4(),
+                presentation_id=presentation_id,
+                student_id=student
+            ))
+        students_resp = write.insert("presenting_students", [item.model_dump() for item in students])
+
+        return {
+            "status": "inserted",
+            "presentation_id": presentation_id,
+            "class_id": payload.class_id,
+            "records_inserted": {
+                "presentations": 1,
+                "presenting_students": len(students)
+            }
+        }
+
     except HTTPException:
         raise
     except ValueError as exc:

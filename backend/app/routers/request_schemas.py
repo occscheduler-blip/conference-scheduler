@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 # NOTE: This is possibly not necessary and for now is just an arbitrary value, we can determine what the real max is later.
 MAX_ROOMS = 100
+MAX_TIME = 60
+MAX_PRESENTING_STUDENTS = 10
 
 class TimeframeWindow(BaseModel):
     start_time: datetime
@@ -197,6 +199,49 @@ class AddStudentsRequest(BaseModel):
                         "name": "George Washington",
                         "email": "gwashing@hamilton.edu",
                     }
+                ]
+            }
+        }
+    )
+
+
+class AddPresentationRequest(BaseModel):
+    title: str
+    class_id: UUID
+    minutes: int
+    presenting_students: list[UUID]
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, title: str):
+        title = title.strip()
+        if not title:
+            raise ValueError("Title cannot be empty")
+        return title
+    
+    @field_validator("minutes")
+    @classmethod
+    def validate_minutes(cls, minutes: int):
+        if minutes > MAX_TIME or minutes < 1:
+            raise ValueError(f"Presentations must be between 1 and {MAX_TIME}")
+        return minutes
+    
+    @field_validator("presenting_students")
+    @classmethod
+    def validate_presenting_students(cls, presenting_students: list[UUID]):
+        if len(presenting_students) > MAX_PRESENTING_STUDENTS:
+            raise ValueError(f"No more than {MAX_PRESENTING_STUDENTS} can present one presentation")
+        return presenting_students
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "title": "Bio Thesis Presentation",
+                "class_id": "a2d9911c-977b-457f-81dc-672490e4f2ab",
+                "minutes": 20,
+                "presenting_students": [
+                    "6015d279-a271-4d9d-9c8e-435731caac04",
+                    "a4b08f01-9cea-4e35-9d9e-0e664f35d4ef",
                 ]
             }
         }
