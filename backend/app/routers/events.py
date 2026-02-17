@@ -4,21 +4,80 @@ from typing import Any
 from uuid import uuid4
 
 import pandas as pd
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
-from supabase_io import delete, write
+from fastapi import APIRouter, HTTPException
+from app.supabase_io import delete, write
 
-from app.config import get_settings
-from app.supabase_client import get_supabase_client
 import app.routers.request_schemas as request_schemas
+import app.supabase_io.supabase_schemas as supabase_schemas
 
 router = APIRouter(prefix="/events", tags=["events"])
 SYMPOSIUM_DATAFRAMES: dict[int, dict[str, pd.DataFrame]] = {}
 
+@router.post("/add_class")
+def add_class(payload: request_schemas.AddClassRequest):
+    try:
+        class_id = uuid4()
+        class_def = supabase_schemas.Class(
+            id=class_id,
+            name=payload.name,
+            department_id=payload.department_id
+        )
+        class_resp = write.insert("classes", [class_def.model_dump()])
+        professors = [
+            supabase_schemas.Professor(
+                id=uuid4(),
+                name=professor.name,
+                email=professor.email,
+                class_id=class_id
+            )
+            for professor in payload.professors
+        ]
+        professors_payload = [professor.model_dump() for professor in professors]
+        prof_resp = write.insert("professors", professors_payload)
+        return {
+            "status": "Inserted",
+            "class_id": class_def.id,
+            "department_id": class_def.department_id,
+            "records_inserted": {
+                "classes": 1,
+                "professors": len(professors_payload)
+            }
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc
+
 @router.post("/add_department")
 def add_department(payload: request_schemas.AddDepartmentRequest):
-    return {
-        "status": "Incomplete endpoint, no effect"
-    }
+    try:
+        department = supabase_schemas.Department(
+            id=uuid4(),
+            department_name=payload.department_name,
+            department_head_name=payload.department_head_name,
+            email=payload.email,
+            symposium_id=payload.symposium_id
+        )
+
+        resp = write.insert("departments", [department.model_dump()])
+        print(resp)
+
+        return {
+            "status": "Inserted",
+            "department_id": department.id,
+            "symposium_id": department.symposium_id,
+            "records_inserted": {
+                "departments": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc
 
 @router.post("/add_symposium")
 def add_symposium(payload: request_schemas.AddSymposiumRequest):
@@ -31,72 +90,39 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         dict[str, Any]: status payload with inserted record counts.
     """
     try:
-        cleaned_name = payload.symposium_name.strip()
-        if not cleaned_name:
-            raise ValueError("Symposium name cannot be empty.")
-        if not payload.timeframes:
-            raise ValueError("At least one timeframe is required.")
-
-        symposium_table = "symposiums"
-        timeframes_table = "timeframes"
-        schema = "public"
-        symposium_table = write._validate_identifier(symposium_table, "table name")
-        timeframes_table = write._validate_identifier(timeframes_table, "table name")
-        schema = write._validate_identifier(schema, "schema")
-
         symposium_id = uuid4()
-        created_at = datetime.now(timezone.utc)
-        timeframe_models = [
-            request_schemas.Timeframes(
+        timeframes = [
+            supabase_schemas.Timeframe(
                 id=uuid4(),
+                linked_id=symposium_id,
                 start_time=timeframe.start_time,
                 end_time=timeframe.end_time,
-                symposium_id=symposium_id,
             )
             for timeframe in payload.timeframes
         ]
 
-        symposium_records = [
-            {
-                "id": symposium_id,
-                "created_at": created_at,
-                "name": cleaned_name,
-                "rooms_available": payload.rooms_available,
-            }
-        ]
-        timeframe_records = [
-            {
-                "id": timeframe.id,
-                "start_time": timeframe.start_time,
-                "end_time": timeframe.end_time,
-                "symposium_id": timeframe.symposium_id,
-            }
-            for timeframe in timeframe_models
-        ]
+        timeframe_payloads = [item.model_dump() for item in timeframes]
+        timeframe_response = write.insert("timeframes", timeframe_payloads)
+        print(timeframe_response)
 
-        db_url = write._resolve_db_url()
-        with write._connection(db_url) as conn:
-            write.insert_records(
-                table_name=symposium_table,
-                records=symposium_records,
-                schema=schema,
-                conn=conn,
-            )
-            write.insert_records(
-                table_name=timeframes_table,
-                records=timeframe_records,
-                schema=schema,
-                conn=conn,
-            )
+        symposium = supabase_schemas.Symposium(
+            id=symposium_id,
+            name=payload.symposium_name,
+            created_at = datetime.now(timezone.utc),
+            rooms_available=payload.rooms_available,
+        )
+
+        symposium_payload = [symposium.model_dump()]
+        response = write.insert("symposiums", symposium_payload)
+        print(response)
 
         return {
             "status": "inserted",
             "symposium_id": str(symposium_id),
-            "name": cleaned_name,
-            "rooms_available": payload.rooms_available,
+            "name": symposium.name,
             "records_inserted": {
                 "symposiums": 1,
-                "timeframes": len(timeframe_models),
+                "timeframes": len(timeframes),
             },
         }
     except HTTPException:

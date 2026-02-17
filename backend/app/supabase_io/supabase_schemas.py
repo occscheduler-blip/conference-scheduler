@@ -7,16 +7,19 @@ class Symposium(BaseModel):
     id: UUID
     created_at: datetime
     name: str
+    rooms_available: int
 
-class DepartmentHead(BaseModel):
+class Department(BaseModel):
     id: UUID
-    name: str
+    department_name: str
+    department_head_name: str
     email: str
-    dept_name: str
+    symposium_id: UUID
 
 class Class(BaseModel):
     id: UUID
     name: str
+    department_id: UUID
 
 class Professor(BaseModel):
     id: UUID
@@ -41,6 +44,7 @@ class Presentation(BaseModel):
 
 class Timeframe(BaseModel):
     id: UUID
+    linked_id: UUID
     start_time: datetime
     end_time: datetime
 

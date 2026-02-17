@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from supabase_io import write as _write
+from app.supabase_io import write as _write
 
 
 def drop_table(
