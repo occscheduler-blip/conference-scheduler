@@ -7,6 +7,7 @@ from app.supabase_io import delete, read, write
 
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
+from app.supabase_io.client import supabase
 
 router = APIRouter(prefix="/events", tags=["events"])
 SYMPOSIUM_DATAFRAMES: dict[int, dict[str, pd.DataFrame]] = {}
@@ -237,6 +238,37 @@ def add_prof_request(payload: request_schemas.AddProfReqRequest):
         ) from exc
 
 
+@router.post("/update_timeframse")
+def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
+    if (
+        payload.linked_id
+        not in supabase.table("timeframes").select("linked_id", distinct=True).execute()
+    ):
+        raise ValueError("linked_id not in timeframes table.")
+
+    deleted_timeframes = delete.delete_timeframes(payload.linked_id)
+
+    timeframes = [
+        supabase_schemas.Timeframe(
+            id=uuid4(),
+            linked_id=payload.linked_id,
+            start_time=timeframe.start_time,
+            end_time=timeframe.end_time,
+        )
+        for timeframe in payload.timeframes
+    ]
+    timeframe_payload = [item.model_dump() for item in timeframes]
+
+    timeframe_resp = write.insert("timeframes", timeframe_payload)
+
+    return {
+        "status": "updated",
+        "linked_id": payload.linked_id,
+        "records_deleted": {"timeframes": deleted_timeframes},
+        "records_inserted": {"timeframes": len(timeframe_payload)},
+    }
+
+
 @router.get("/get_symposiums")
 def get_symposiums():
     try:
@@ -337,17 +369,12 @@ def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None 
 def delete_symposium(symposium_id: UUID):
     try:
         delete.delete_symposium(symposium_id)
-        return {
-            "status": "deleted",
-            "records deleted": {
-                "symposiums": 1
-            }
-        }
+        return {"status": "deleted", "records deleted": {"symposiums": 1}}
     except HTTPException:
         raise
     except Exception as exc:
         raise ValueError(f"Failed to delete symposium: {exc}")
-    
+
 
 # @router.delete("/delete_department")
 # def delete_department(department_id: UUID):
