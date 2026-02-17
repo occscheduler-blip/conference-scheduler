@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-from app.supabase_io import delete, write
+from app.supabase_io import delete, read, write
 
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
@@ -223,3 +223,21 @@ def add_prof_request(payload: request_schemas.AddProfReqRequest):
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc
+    
+@router.get("/get_symposiums")
+def get_symposiums():
+    try:
+        return read.get_symposiums()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to get symposiums: {exc}") from exc
+    
+@router.get("/get_departments")
+def get_departments(symposium_id: UUID | None = None):
+    try:
+        return read.get_departments(symposium_id=symposium_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to get symposiums: {exc}") from exc
