@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+<<<<<<< HEAD
 type AdminTab = "create" | "edit";
 type SymposiumOption = { id: string; label: string; roomsAvailable?: number };
 type DepartmentContact = { department: string; headName: string; email: string };
+=======
+type AdminTab = "create" | "edit" | "department";
+>>>>>>> 0bb4476 (Added admin add-department page and aligned frontend with backend request wiring)
 
 const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
+const TEST_SYMPOSIUM_UUID = "9e1fd0da-ea43-48f2-85df-5281a495f054";
 
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
 const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -112,6 +117,7 @@ export default function AdminPage() {
   const [dragValue, setDragValue] = useState<boolean | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+<<<<<<< HEAD
   const [deployMessage, setDeployMessage] = useState<string | null>(null);
   const [symposiumOptions, setSymposiumOptions] = useState<SymposiumOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
@@ -122,8 +128,19 @@ export default function AdminPage() {
   const [departmentToAdd, setDepartmentToAdd] = useState("");
   const [customDepartmentName, setCustomDepartmentName] = useState("");
   const [departmentContacts, setDepartmentContacts] = useState<DepartmentContact[]>([]);
+=======
+  const [departmentName, setDepartmentName] = useState("");
+  const [departmentHeadName, setDepartmentHeadName] = useState("");
+  const [departmentHeadEmail, setDepartmentHeadEmail] = useState("");
+  const [symposiumId, setSymposiumId] = useState(TEST_SYMPOSIUM_UUID);
+  const [isSavingDepartment, setIsSavingDepartment] = useState(false);
+  const [departmentSaveMessage, setDepartmentSaveMessage] = useState<string | null>(null);
+  const [departmentMessageKind, setDepartmentMessageKind] = useState<"success" | "error" | "info" | null>(null);
+  const [canAddDepartment, setCanAddDepartment] = useState(true);
+>>>>>>> 0bb4476 (Added admin add-department page and aligned frontend with backend request wiring)
 
   const isCreateTab = activeTab === "create";
+  const isEditTab = activeTab === "edit";
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
   const authHeaders = useMemo(
@@ -312,7 +329,10 @@ export default function AdminPage() {
     }
     setIsSaving(true);
     try {
+<<<<<<< HEAD
       const symposiumIdForSave = isCreateTab ? undefined : selectedSymposiumId;
+=======
+>>>>>>> 0bb4476 (Added admin add-department page and aligned frontend with backend request wiring)
       const response = await fetch(`${backendUrl}/api/events/add_symposium`, {
         method: "POST",
         headers: {
@@ -329,8 +349,16 @@ export default function AdminPage() {
 
       const payload = (await response.json()) as {
         detail?: string;
+<<<<<<< HEAD
         symposium_id?: string;
         rows_written?: number;
+=======
+        status?: string;
+        records_inserted?: {
+          symposiums?: number;
+          timeframes?: number;
+        };
+>>>>>>> 0bb4476 (Added admin add-department page and aligned frontend with backend request wiring)
       };
 
       if (!response.ok) {
@@ -338,10 +366,20 @@ export default function AdminPage() {
         return;
       }
 
+<<<<<<< HEAD
       setSaveMessage(`Saved symposium ${payload.symposium_id ?? "successfully"} with ${timeframes.length} timeframes.`);
       if (isCreateTab) {
         await refreshSymposiumOptions();
       }
+=======
+      setSaveMessage(
+        payload.status
+          ? `Saved symposium with ${timeframes.length} timeframes (${payload.status}).`
+          : `Saved symposium with ${timeframes.length} timeframes.`
+      );
+      setCanAddDepartment(true);
+      setActiveTab("department");
+>>>>>>> 0bb4476 (Added admin add-department page and aligned frontend with backend request wiring)
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
@@ -354,6 +392,7 @@ export default function AdminPage() {
     }
   };
 
+<<<<<<< HEAD
   const handleLoadEvent = async () => {
     if (!selectedSymposiumId) {
       setSymposiumsError("Select an event before loading.");
@@ -882,6 +921,88 @@ export default function AdminPage() {
     </form>
   );
 
+=======
+  const departmentPayloadPreview = useMemo(
+    () => ({
+      department_head_name: departmentHeadName.trim(),
+      department_name: departmentName.trim(),
+      email: departmentHeadEmail.trim().toLowerCase(),
+      symposium: symposiumId.trim() || TEST_SYMPOSIUM_UUID,
+    }),
+    [departmentHeadEmail, departmentHeadName, departmentName, symposiumId]
+  );
+
+  const isHamiltonEmail = (value: string) => /^[^\s@]+@hamilton\.edu$/i.test(value.trim());
+
+  const handleAddDepartmentSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setDepartmentSaveMessage(null);
+    setDepartmentMessageKind(null);
+
+    if (!departmentPayloadPreview.department_name) {
+      setDepartmentSaveMessage("Enter a department name.");
+      setDepartmentMessageKind("error");
+      return;
+    }
+    if (!departmentPayloadPreview.department_head_name) {
+      setDepartmentSaveMessage("Enter a department head name.");
+      setDepartmentMessageKind("error");
+      return;
+    }
+    if (!departmentPayloadPreview.email) {
+      setDepartmentSaveMessage("Enter a department head email.");
+      setDepartmentMessageKind("error");
+      return;
+    }
+    if (!isHamiltonEmail(departmentPayloadPreview.email)) {
+      setDepartmentSaveMessage("Email must be a valid @hamilton.edu address.");
+      setDepartmentMessageKind("error");
+      return;
+    }
+
+    setIsSavingDepartment(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/events/add_department`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(departmentPayloadPreview),
+      });
+
+      const payload = (await response.json()) as {
+        detail?: string;
+        status?: string;
+      };
+
+      if (!response.ok) {
+        setDepartmentSaveMessage(payload.detail ?? "Failed to submit department request.");
+        setDepartmentMessageKind("error");
+        return;
+      }
+
+      const normalizedStatus = (payload.status ?? "").toLowerCase();
+      if (normalizedStatus.includes("incomplete") || normalizedStatus.includes("no effect")) {
+        setDepartmentSaveMessage(
+          "Connected to backend. Request format is valid, but this endpoint is currently a placeholder and does not write to the database yet."
+        );
+        setDepartmentMessageKind("info");
+      } else {
+        setDepartmentSaveMessage(payload.status ?? "Department saved successfully.");
+        setDepartmentMessageKind("success");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
+        setDepartmentSaveMessage("Save failed: backend is unreachable at http://localhost:8000.");
+      } else {
+        setDepartmentSaveMessage(`Save failed: ${message}`);
+      }
+      setDepartmentMessageKind("error");
+    } finally {
+      setIsSavingDepartment(false);
+    }
+  };
+
+>>>>>>> 0bb4476 (Added admin add-department page and aligned frontend with backend request wiring)
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
@@ -899,7 +1020,7 @@ export default function AdminPage() {
           </h1>
         </header>
 
-        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           <button
             type="button"
             onClick={() => handleTabSwitch("create")}
@@ -922,6 +1043,22 @@ export default function AdminPage() {
           >
             Edit Existing Event
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (canAddDepartment) setActiveTab("department");
+            }}
+            disabled={!canAddDepartment}
+            className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
+              activeTab === "department"
+                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                : canAddDepartment
+                  ? "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
+                  : "cursor-not-allowed border-[#d7def8] bg-[#f5f7ff] text-[#7a84aa]"
+            }`}
+          >
+            Add Department
+          </button>
         </nav>
 
         {isCreateTab ? (
@@ -929,7 +1066,7 @@ export default function AdminPage() {
             <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Create New Event</h2>
             {renderEventForm({ showDepartments: false, submitLabel: "Save Event", stackDateFields: true })}
           </section>
-        ) : (
+        ) : isEditTab ? (
           <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
             <h2 className="mb-4 text-xl font-bold text-[#111] md:text-2xl">Edit Existing Event</h2>
             <div className="w-full space-y-3 rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-4 md:p-5">
@@ -1032,6 +1169,92 @@ export default function AdminPage() {
                 </div>
               ) : null}
             </div>
+          </section>
+        ) : (
+          <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+            <h2 className="mb-4 text-xl font-bold text-[#111] md:text-2xl">Add Department</h2>
+            <form onSubmit={handleAddDepartmentSubmit} className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
+              <div className="space-y-4 rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-4 md:p-5">
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
+                    Symposium UUID
+                  </span>
+                  <input
+                    className={fieldClass}
+                    value={symposiumId}
+                    onChange={(event) => setSymposiumId(event.target.value)}
+                    placeholder={TEST_SYMPOSIUM_UUID}
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
+                    Department Name
+                  </span>
+                  <input
+                    className={fieldClass}
+                    value={departmentName}
+                    onChange={(event) => setDepartmentName(event.target.value)}
+                    placeholder="Ex. Biology"
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
+                    Department Head Name
+                  </span>
+                  <input
+                    className={fieldClass}
+                    value={departmentHeadName}
+                    onChange={(event) => setDepartmentHeadName(event.target.value)}
+                    placeholder="Ex. John Smith"
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
+                    Department Head Email
+                  </span>
+                  <input
+                    className={fieldClass}
+                    type="email"
+                    value={departmentHeadEmail}
+                    onChange={(event) => setDepartmentHeadEmail(event.target.value)}
+                    placeholder="jsmith@hamilton.edu"
+                  />
+                </label>
+                <p className="text-xs font-semibold text-[#4b5d99]">
+                  Email must be a valid <code>@hamilton.edu</code> address.
+                </p>
+                <button
+                  type="submit"
+                  disabled={isSavingDepartment}
+                  className="rounded-lg bg-[#0f33a8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60 md:text-base"
+                >
+                  {isSavingDepartment ? "Saving..." : "Submit Department"}
+                </button>
+                {departmentSaveMessage ? (
+                  <p
+                    className={`text-sm font-semibold ${
+                      departmentMessageKind === "error"
+                        ? "text-[#b00020]"
+                        : departmentMessageKind === "info"
+                          ? "text-[#8a5a00]"
+                          : "text-[#167a2f]"
+                    }`}
+                  >
+                    {departmentSaveMessage}
+                  </p>
+                ) : null}
+              </div>
+
+              <aside className="rounded-xl border border-[#d7bf92] bg-[#fffdf8] p-4 md:p-5">
+                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-[#2d3d7a]">Request Preview</h3>
+                <pre className="overflow-x-auto rounded-lg border border-[#d2d2d2] bg-white p-3 text-xs text-[#222]">
+                  {JSON.stringify(departmentPayloadPreview, null, 2)}
+                </pre>
+                <p className="mt-3 text-xs text-[#555]">
+                  Endpoint: <code>{backendUrl}/api/events/add_department</code>
+                </p>
+              </aside>
+            </form>
           </section>
         )}
       </div>
