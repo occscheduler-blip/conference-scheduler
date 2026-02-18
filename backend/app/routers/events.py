@@ -1,330 +1,86 @@
-from io import StringIO
-from typing import Any
-from uuid import uuid4
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4, UUID
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
-from supabase_io import delete, write
+from app.supabase_io import delete, read, write
+from app.supabase_io.client import supabase
 
-from app.config import get_settings
-from app.supabase_client import get_supabase_client
-import app.routers.schemas as schemas
+import app.routers.request_schemas as request_schemas
+import app.supabase_io.supabase_schemas as supabase_schemas
+from app.supabase_io.client import supabase
 
 router = APIRouter(prefix="/events", tags=["events"])
 SYMPOSIUM_DATAFRAMES: dict[int, dict[str, pd.DataFrame]] = {}
 
 
-def _to_dataframe(raw: Any, table_name: str) -> pd.DataFrame:
-    if isinstance(raw, pd.DataFrame):
-        return raw.copy()
-    if isinstance(raw, list):
-        return pd.DataFrame(raw)
-    if isinstance(raw, dict):
-        if "columns" in raw and "data" in raw:
-            return pd.DataFrame(
-                data=raw["data"],
-                columns=raw["columns"],
-                index=raw.get("index"),
-            )
-        return pd.DataFrame([raw])
-    raise ValueError(f"Table '{table_name}' must be a list, dict, or DataFrame-like payload.")
-
-
-def _require_columns(df: pd.DataFrame, columns: set[str], table_name: str) -> None:
-    missing = columns.difference(df.columns)
-    if missing:
-        missing_csv = ", ".join(sorted(missing))
-        raise ValueError(f"Table '{table_name}' is missing required columns: {missing_csv}.")
-
-
-def _coerce_optional_availability(records: list[dict[str, Any]]) -> list[tuple[Any, Any]] | None:
-    if not records:
-        return None
-    return [(row["start"], row["end"]) for row in records]
-
-
-def _build_symposium_from_tables(dataframes: dict[str, pd.DataFrame]) -> dict[str, Any]:
-    symposiums_df = dataframes["symposiums"]
-    departments_df = dataframes["departments"]
-    chairs_df = dataframes["chairs"]
-    classes_df = dataframes["classes"]
-    professors_df = dataframes["professors"]
-    students_df = dataframes["students"]
-    presentations_df = dataframes["presentations"]
-    availability_df = dataframes["availability"]
-
-    _require_columns(symposiums_df, {"symposium_id", "name"}, "symposiums")
-    _require_columns(departments_df, {"department_id", "department_name", "chair_id"}, "departments")
-    _require_columns(chairs_df, {"chair_id", "name", "email"}, "chairs")
-    _require_columns(classes_df, {"department_id", "class_id", "class_name"}, "classes")
-    _require_columns(professors_df, {"class_id", "professor_id", "name", "email"}, "professors")
-    _require_columns(
-        students_df, {"class_id", "student_id", "name", "email", "prof_request_ids"}, "students"
-    )
-    _require_columns(
-        presentations_df,
-        {"class_id", "presentation_id", "title", "minutes", "student_ids", "professor_ids"},
-        "presentations",
-    )
-    _require_columns(availability_df, {"entity_type", "entity_id", "start", "end"}, "availability")
-
-    symposium_rows = symposiums_df.to_dict(orient="records")
-    if len(symposium_rows) != 1:
-        raise ValueError("Table 'symposiums' must contain exactly one row.")
-    symposium_id = symposium_rows[0]["symposium_id"]
-    symposium_name = symposium_rows[0]["name"]
-
-    availability_rows = availability_df.to_dict(orient="records")
-    prof_availability: dict[int, list[dict[str, Any]]] = {}
-    student_availability: dict[int, list[dict[str, Any]]] = {}
-    for row in availability_rows:
-        entity_type = row["entity_type"]
-        entity_id = row["entity_id"]
-        if entity_type == "professor":
-            prof_availability.setdefault(entity_id, []).append(row)
-        elif entity_type == "student":
-            student_availability.setdefault(entity_id, []).append(row)
-
-    chairs_by_id = {
-        row["chair_id"]: {"id": row["chair_id"], "name": row["name"], "email": row["email"]}
-        for row in chairs_df.to_dict(orient="records")
-    }
-
-    professors_by_id: dict[int, dict[str, Any]] = {}
-    for row in professors_df.to_dict(orient="records"):
-        professors_by_id[row["professor_id"]] = {
-            "id": row["professor_id"],
-            "name": row["name"],
-            "email": row["email"],
-            "availability": _coerce_optional_availability(
-                prof_availability.get(row["professor_id"], [])
-            ),
-        }
-
-    students_by_id: dict[int, dict[str, Any]] = {}
-    for row in students_df.to_dict(orient="records"):
-        students_by_id[row["student_id"]] = {
-            "id": row["student_id"],
-            "name": row["name"],
-            "email": row["email"],
-            "prof_requests": [
-                professors_by_id[professor_id] for professor_id in row.get("prof_request_ids", [])
-            ],
-            "availability": _coerce_optional_availability(
-                student_availability.get(row["student_id"], [])
-            ),
-        }
-
-    classes_by_department: dict[int, list[dict[str, Any]]] = {}
-    for class_row in classes_df.to_dict(orient="records"):
-        class_id = class_row["class_id"]
-        class_professors = [
-            professors_by_id[row["professor_id"]]
-            for row in professors_df.to_dict(orient="records")
-            if row["class_id"] == class_id
-        ]
-        class_students = [
-            students_by_id[row["student_id"]]
-            for row in students_df.to_dict(orient="records")
-            if row["class_id"] == class_id
-        ]
-        class_presentations = []
-        for row in presentations_df.to_dict(orient="records"):
-            if row["class_id"] != class_id:
-                continue
-            class_presentations.append(
-                {
-                    "id": row["presentation_id"],
-                    "title": row["title"],
-                    "students": [students_by_id[student_id] for student_id in row["student_ids"]],
-                    "professors": [
-                        professors_by_id[professor_id] for professor_id in row["professor_ids"]
-                    ],
-                    "minutes": row["minutes"],
-                }
-            )
-        classes_by_department.setdefault(class_row["department_id"], []).append(
-            {
-                "id": class_id,
-                "name": class_row["class_name"],
-                "professors": class_professors,
-                "students": class_students,
-                "presentations": class_presentations,
-            }
-        )
-
-    departments = []
-    for row in departments_df.to_dict(orient="records"):
-        departments.append(
-            {
-                "id": row["department_id"],
-                "name": row["department_name"],
-                "chair": chairs_by_id[row["chair_id"]],
-                "classes": classes_by_department.get(row["department_id"], []),
-            }
-        )
-
-    return {"id": symposium_id, "name": symposium_name, "departments": departments}
-
-@router.get("")
-def list_events(limit: int = 10):
-    settings = get_settings()
-
+@router.post("/add_class")
+def add_class(payload: request_schemas.AddClassRequest):
     try:
-        supabase = get_supabase_client()
-        response = (
-            supabase.table(settings.supabase_events_table)
-            .select("*")
-            .limit(limit)
-            .execute()
+        class_id = uuid4()
+        class_def = supabase_schemas.Class(
+            id=class_id, name=payload.name, department_id=payload.department_id
         )
-        return {"data": response.data, "count": len(response.data or [])}
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    except Exception as exc:  # pragma: no cover - defensive catch for provider errors
-        raise HTTPException(status_code=502, detail=f"Supabase request failed: {exc}") from exc
-
-
-@router.post("")
-def create_event(payload: schemas.SymposiumCreatePayload = Body(...)):
-    settings = get_settings()
-    supabase = get_supabase_client()
-
-    symposium_id = str(uuid4())
-    symposium_row = {
-        "id": symposium_id,
-        "symposium_name": payload.symposium_name,
-        "rooms": payload.rooms,
-    }
-    timeframe_rows = [
-        {
-            "symposium_id": symposium_id,
-            "start_time": start.isoformat(),
-            "end_time": end.isoformat(),
+        class_resp = write.insert("classes", [class_def.model_dump()])
+        professors = [
+            supabase_schemas.Professor(
+                id=uuid4(),
+                name=professor.name,
+                email=professor.email,
+                class_id=class_id,
+            )
+            for professor in payload.professors
+        ]
+        professors_payload = [professor.model_dump() for professor in professors]
+        prof_resp = write.insert("professors", professors_payload)
+        return {
+            "status": "Inserted",
+            "class_id": class_def.id,
+            "department_id": class_def.department_id,
+            "records_inserted": {"classes": 1, "professors": len(professors_payload)},
         }
-        for start, end in payload.timeframes
-    ]
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
 
+
+@router.post("/add_department")
+def add_department(payload: request_schemas.AddDepartmentRequest):
     try:
-        symposium_response = supabase.table(settings.supabase_symposiums_table).insert(symposium_row).execute()
-        timeframe_response = supabase.table(settings.supabase_timeframes_table).insert(timeframe_rows).execute()
+        department = supabase_schemas.Department(
+            id=uuid4(),
+            department_name=payload.department_name,
+            department_head_name=payload.department_head_name,
+            email=payload.email,
+            symposium_id=payload.symposium_id,
+        )
+
+        resp = write.insert("departments", [department.model_dump()])
+        print(resp)
 
         return {
-            "status": "accepted",
-            "symposium_id": symposium_id,
-            "symposiums_table": settings.supabase_symposiums_table,
-            "timeframes_table": settings.supabase_timeframes_table,
-            "symposium_rows_written": len(symposium_response.data or []),
-            "timeframe_rows_written": len(timeframe_response.data or []),
+            "status": "Inserted",
+            "department_id": department.id,
+            "symposium_id": department.symposium_id,
+            "records_inserted": {"departments": 1},
         }
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
-        try:
-            supabase.table(settings.supabase_symposiums_table).delete().eq("id", symposium_id).execute()
-        except Exception:
-            pass
-        raise HTTPException(status_code=502, detail=f"Supabase insert failed: {exc}") from exc
-
-
-@router.post("/upload-students-csv")
-async def upload_students_csv(file: UploadFile = File(...)):
-    """Upload a CSV file and insert rows into the configured students table."""
-    required_columns = {"name", "student_id", "class_level", "email"}
-    preferred_headers = "Student Name, Student ID, Class Level, Preferred Email"
-    column_aliases = {
-        "name": "name",
-        "student_name": "name",
-        "student_id": "student_id",
-        "class_level": "class_level",
-        "email": "email",
-        "preferred_email": "email",
-    }
-
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Please upload a file with a .csv extension.")
-
-    try:
-        content = await file.read()
-        text = content.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="CSV must be UTF-8 encoded.") from exc
-
-    try:
-        df = pd.read_csv(StringIO(text))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {exc}") from exc
-
-    if df.empty:
-        raise HTTPException(status_code=422, detail="CSV contains no rows.")
-
-    rename_map: dict[str, str] = {}
-    unknown_columns: list[str] = []
-    seen_targets: set[str] = set()
-    for original_column in df.columns.astype(str):
-        normalized_key = original_column.strip().lower().replace(" ", "_")
-        target_column = column_aliases.get(normalized_key)
-        if not target_column:
-            unknown_columns.append(original_column)
-            continue
-        if target_column in seen_targets:
-            raise HTTPException(
-                status_code=422,
-                detail=f"CSV contains duplicate data for '{target_column}'.",
-            )
-        seen_targets.add(target_column)
-        rename_map[original_column] = target_column
-
-    if unknown_columns:
         raise HTTPException(
-            status_code=422,
-            detail=f"CSV has unexpected columns: {', '.join(sorted(unknown_columns))}.",
-        )
-
-    df = df.rename(columns=rename_map)
-    csv_columns = set(df.columns.astype(str))
-    missing_columns = sorted(required_columns.difference(csv_columns))
-    if missing_columns:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"CSV is missing required columns: {', '.join(missing_columns)}. "
-                f"Use headers: {preferred_headers}."
-            ),
-        )
-
-    # Keep a stable insert shape regardless of CSV column order.
-    df = df[["name", "student_id", "class_level", "email"]]
-
-    records = df.where(pd.notnull(df), None).to_dict(orient="records")
-    if not records:
-        raise HTTPException(status_code=422, detail="CSV contains no insertable rows.")
-
-    settings = get_settings()
-    supabase = get_supabase_client()
-    chunk_size = 500
-    total_inserted = 0
-
-    try:
-        for start in range(0, len(records), chunk_size):
-            chunk = records[start : start + chunk_size]
-            response = supabase.table(settings.supabase_students_table).insert(chunk).execute()
-            total_inserted += len(response.data or [])
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Supabase insert failed: {exc}") from exc
-
-    return {
-        "status": "accepted",
-        "table": settings.supabase_students_table,
-        "rows_received": len(records),
-        "rows_inserted": total_inserted,
-    }
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
 
 
 @router.post("/add_symposium")
-def add_symposium(payload: schemas.AddSymposiumRequest):
+def add_symposium(payload: request_schemas.AddSymposiumRequest):
     """Validate symposium + timeframe data and insert into Supabase tables.
 
     Args:
@@ -334,72 +90,48 @@ def add_symposium(payload: schemas.AddSymposiumRequest):
         dict[str, Any]: status payload with inserted record counts.
     """
     try:
-        cleaned_name = payload.symposium_name.strip()
-        if not cleaned_name:
-            raise ValueError("Symposium name cannot be empty.")
-        if not payload.timeframes:
-            raise ValueError("At least one timeframe is required.")
+        symposium_id = payload.symposium_id or uuid4()
+        symposium = supabase_schemas.Symposium(
+            id=symposium_id,
+            name=payload.symposium_name,
+            created_at=datetime.now(timezone.utc),
+            rooms_available=payload.rooms_available,
+        )
+        symposium_payload = symposium.model_dump()
 
-        symposium_table = "symposiums"
-        timeframes_table = "timeframes"
-        schema = "public"
-        symposium_table = write._validate_identifier(symposium_table, "table name")
-        timeframes_table = write._validate_identifier(timeframes_table, "table name")
-        schema = write._validate_identifier(schema, "schema")
+        # If the symposium already exists (fixed UUID edit flow), update it instead of failing.
+        existing = supabase.table("symposiums").select("id").eq("id", str(symposium_id)).limit(1).execute()
+        if existing.data:
+            supabase.table("symposiums").update(
+                {
+                    "name": symposium_payload["name"],
+                    "rooms_available": symposium_payload["rooms_available"],
+                }
+            ).eq("id", str(symposium_id)).execute()
+        else:
+            write.insert("symposiums", [symposium_payload])
 
-        symposium_id = uuid4()
-        created_at = datetime.now(timezone.utc)
-        timeframe_models = [
-            schemas.Timeframes(
+        # Replace all existing timeframes for this symposium with the newly submitted set.
+        delete.delete_timeframes(symposium_id)
+        timeframes = [
+            supabase_schemas.Timeframe(
                 id=uuid4(),
+                linked_id=symposium_id,
                 start_time=timeframe.start_time,
                 end_time=timeframe.end_time,
-                symposium_id=symposium_id,
             )
             for timeframe in payload.timeframes
         ]
-
-        symposium_records = [
-            {
-                "id": symposium_id,
-                "created_at": created_at,
-                "name": cleaned_name,
-                "rooms_available": payload.rooms_available,
-            }
-        ]
-        timeframe_records = [
-            {
-                "id": timeframe.id,
-                "start_time": timeframe.start_time,
-                "end_time": timeframe.end_time,
-                "symposium_id": timeframe.symposium_id,
-            }
-            for timeframe in timeframe_models
-        ]
-
-        db_url = write._resolve_db_url()
-        with write._connection(db_url) as conn:
-            write.insert_records(
-                table_name=symposium_table,
-                records=symposium_records,
-                schema=schema,
-                conn=conn,
-            )
-            write.insert_records(
-                table_name=timeframes_table,
-                records=timeframe_records,
-                schema=schema,
-                conn=conn,
-            )
+        timeframe_payloads = [item.model_dump() for item in timeframes]
+        timeframe_response = write.insert("timeframes", timeframe_payloads)
 
         return {
-            "status": "inserted",
+            "status": "saved",
             "symposium_id": str(symposium_id),
-            "name": cleaned_name,
-            "rooms_available": payload.rooms_available,
+            "name": payload.symposium_name,
             "records_inserted": {
                 "symposiums": 1,
-                "timeframes": len(timeframe_models),
+                "timeframes": len(timeframes),
             },
         }
     except HTTPException:
@@ -407,28 +139,251 @@ def add_symposium(payload: schemas.AddSymposiumRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to validate symposium payload: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
 
 
-@router.delete("/remove_symposium/{symposium_id}")
-def remove_symposium(symposium_id: int, symposium_name: str | None = None):
-    """Endpoint for removing a symposium table by id.
-
-    Args:
-        symposium_id (int): the symposium id used to derive the table name.
-        symposium_name (str | None): explicit table name override.
-
-    Returns:
-        dict[str, Any]: status and dropped table name.
-    """
+@router.post("/add_students")
+def add_students(payload: request_schemas.AddStudentsRequest):
+    """Adds a list of students to the students table in the database."""
     try:
-        table_name = symposium_name or f"symposium_{symposium_id}"
-        delete.drop_table(
-            table_name=table_name,
-            schema="public",
+        students: list[supabase_schemas.Student] = []
+        for student in payload.students:
+            students.append(
+                supabase_schemas.Student(
+                    id=uuid4(),
+                    name=student.name,
+                    email=student.email,
+                    class_id=payload.class_id,
+                    presentation_id=None,
+                )
+            )
+
+        students_payload = [item.model_dump() for item in students]
+        response = write.insert("students", students_payload)
+        return {
+            "status": "inserted",
+            "class_id": str(payload.class_id),
+            "records_inserted": {
+                "students": len(students),
+            },
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
+
+
+@router.post("/add_presentation")
+def add_presentation(payload: request_schemas.AddPresentationRequest):
+    try:
+        presentation_id = uuid4()
+        presentation = supabase_schemas.Presentation(
+            id=presentation_id,
+            title=payload.title,
+            class_id=payload.class_id,
+            minutes=payload.minutes,
+            start_time=None,
+            end_time=None,
         )
-        return {"status": "deleted", "symposium_id": symposium_id, "table_dropped": table_name}
+        pres_resp = write.insert("presentations", [presentation.model_dump()])
+
+        students: list[supabase_schemas.PresentingStudents] = []
+        for student in payload.presenting_students:
+            students.append(
+                supabase_schemas.PresentingStudents(
+                    id=uuid4(), presentation_id=presentation_id, student_id=student
+                )
+            )
+        students_resp = write.insert(
+            "presenting_students", [item.model_dump() for item in students]
+        )
+
+        return {
+            "status": "inserted",
+            "presentation_id": presentation_id,
+            "class_id": payload.class_id,
+            "records_inserted": {
+                "presentations": 1,
+                "presenting_students": len(students),
+            },
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
+
+
+@router.post("/add_prof_req")
+def add_prof_request(payload: request_schemas.AddProfReqRequest):
+    try:
+        request = supabase_schemas.ProfRequest(
+            id=uuid4(),
+            student_id=payload.student_id,
+            professor_id=payload.professor_id,
+        )
+
+        response = write.insert("prof_requests", [request.model_dump()])
+
+        return {
+            "status": "inserted",
+            "student_id": payload.student_id,
+            "professor_id": payload.professor_id,
+            "records_inserted": {"prof_requests": 1},
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
+
+
+@router.put("/update_timeframes")
+def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
+    if (
+        payload.linked_id
+        not in supabase.table("timeframes").select("linked_id", distinct=True).execute()
+    ):
+        raise ValueError("linked_id not in timeframes table.")
+
+    deleted_timeframes = delete.delete_timeframes(payload.linked_id)
+
+    timeframes = [
+        supabase_schemas.Timeframe(
+            id=uuid4(),
+            linked_id=payload.linked_id,
+            start_time=timeframe.start_time,
+            end_time=timeframe.end_time,
+        )
+        for timeframe in payload.timeframes
+    ]
+    timeframe_payload = [item.model_dump() for item in timeframes]
+
+    timeframe_resp = write.insert("timeframes", timeframe_payload)
+
+    return {
+        "status": "updated",
+        "linked_id": payload.linked_id,
+        "records_deleted": {"timeframes": deleted_timeframes},
+        "records_inserted": {"timeframes": len(timeframe_payload)},
+    }
+
+
+@router.get("/symposiums")
+def get_symposiums():
+    try:
+        return read.get_symposiums()
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to delete symposium: {exc}") from exc
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get symposiums: {exc}"
+        ) from exc
+
+
+@router.get("/departments")
+def get_departments(symposium_id: UUID | None = None):
+    try:
+        return read.get_departments(symposium_id=symposium_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get symposiums: {exc}"
+        ) from exc
+
+
+@router.get("/classes")
+def get_classes(department_id: UUID | None = None):
+    try:
+        return read.get_classes(department_id=department_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get classes: {exc}"
+        ) from exc
+
+
+@router.get("/students")
+def get_students(class_id: UUID | None = None):
+    try:
+        return read.get_students(class_id=class_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get students: {exc}"
+        ) from exc
+
+
+@router.get("/presentations")
+def get_presentations(class_id: UUID | None = None):
+    try:
+        return read.get_presentations(class_id=class_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get presentations: {exc}"
+        ) from exc
+
+
+@router.get("/professors")
+def get_professors(class_id: UUID | None = None):
+    try:
+        return read.get_professors(class_id=class_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get professors: {exc}"
+        ) from exc
+
+
+@router.get("/timeframes")
+def get_timeframes(linked_id: UUID | None = None):
+    try:
+        return read.get_timeframes(linked_id=linked_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get timeframes: {exc}"
+        ) from exc
+
+
+@router.get("/prof_requests")
+def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None = None):
+    try:
+        return read.get_prof_requests(student_id=student_id, professor_id=professor_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get professor requests: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_symposium")
+def delete_symposium(symposium_id: UUID):
+    try:
+        delete.delete_symposium(symposium_id)
+        return {"status": "deleted", "records deleted": {"symposiums": 1}}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Failed to delete symposium: {exc}")

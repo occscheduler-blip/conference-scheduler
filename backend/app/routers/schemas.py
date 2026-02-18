@@ -42,16 +42,9 @@ class Timeframes(BaseModel):
     id: UUID
     start_time: datetime
     end_time: datetime
-    @model_validator(mode="after")
-    def _validate_owner_link(self) -> "Timeframes":
-        owner_ids = [self.symposium_id, self.prof_id, self.student_id]
-        if sum(owner_id is not None for owner_id in owner_ids) != 1:
-            raise ValueError(
-                "Timeframe must be linked to exactly one of symposium_id, prof_id, or student_id."
-            )
-        if self.start_time >= self.end_time:
-            raise ValueError("start_time must be earlier than end_time.")
-        return self
+    symposium_id: UUID | None = None
+    prof_id: UUID | None = None
+    student_id: UUID | None = None
 
 class PresentingStudents(BaseModel):
     presentation_id: UUID
