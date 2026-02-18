@@ -4,6 +4,7 @@ from uuid import uuid4, UUID
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from app.supabase_io import delete, read, write
+from app.supabase_io.client import supabase
 
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
@@ -90,6 +91,28 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
     """
     try:
         symposium_id = payload.symposium_id or uuid4()
+        symposium = supabase_schemas.Symposium(
+            id=symposium_id,
+            name=payload.symposium_name,
+            created_at=datetime.now(timezone.utc),
+            rooms_available=payload.rooms_available,
+        )
+        symposium_payload = symposium.model_dump()
+
+        # If the symposium already exists (fixed UUID edit flow), update it instead of failing.
+        existing = supabase.table("symposiums").select("id").eq("id", str(symposium_id)).limit(1).execute()
+        if existing.data:
+            supabase.table("symposiums").update(
+                {
+                    "name": symposium_payload["name"],
+                    "rooms_available": symposium_payload["rooms_available"],
+                }
+            ).eq("id", str(symposium_id)).execute()
+        else:
+            write.insert("symposiums", [symposium_payload])
+
+        # Replace all existing timeframes for this symposium with the newly submitted set.
+        delete.delete_timeframes(symposium_id)
         timeframes = [
             supabase_schemas.Timeframe(
                 id=uuid4(),
@@ -99,23 +122,13 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
             )
             for timeframe in payload.timeframes
         ]
-
         timeframe_payloads = [item.model_dump() for item in timeframes]
         timeframe_response = write.insert("timeframes", timeframe_payloads)
 
-        symposium = supabase_schemas.Symposium(
-            id=symposium_id,
-            name=payload.symposium_name,
-            created_at=datetime.now(timezone(timedelta(hours=-5), name="EST")),
-            rooms_available=payload.rooms_available,
-        )
-
-        response = write.insert("symposiums", [symposium.model_dump()])
-
         return {
-            "status": "inserted",
+            "status": "saved",
             "symposium_id": str(symposium_id),
-            "name": symposium.name,
+            "name": payload.symposium_name,
             "records_inserted": {
                 "symposiums": 1,
                 "timeframes": len(timeframes),
@@ -374,9 +387,3 @@ def delete_symposium(symposium_id: UUID):
         raise
     except Exception as exc:
         raise ValueError(f"Failed to delete symposium: {exc}")
-
-
-# @router.delete("/delete_department")
-# def delete_department(department_id: UUID):
-#     try:
-#         delete.delete_department()
