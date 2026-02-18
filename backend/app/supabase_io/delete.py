@@ -94,15 +94,16 @@ def delete_multiple_classes(class_ids: list[UUID]):
 def delete_class(class_id: UUID | list[UUID]):
     if isinstance(class_id, list):
         delete_multiple_classes(class_id)
+        return
 
-    student_list = read.get_students(class_id=UUID(class_id)).data
+    student_list = read.get_students(class_id=class_id).data
     for student in student_list:
         delete_student(student_id=UUID(student["id"]))
 
-    prof_list = read.get_professors(class_id=UUID(class_id)).data
+    prof_list = read.get_professors(class_id=class_id).data
     for professor in prof_list:
         delete_professor(UUID(professor["id"]))
-    pres_list = read.get_presentations(class_id=UUID(class_id)).data
+    pres_list = read.get_presentations(class_id=class_id).data
     for presentation in pres_list:
         delete_presentation(presentation_id=UUID(presentation["id"]))
 
@@ -117,6 +118,7 @@ def delete_multiple_departments(department_ids: list[UUID]):
 def delete_department(department_id: UUID | list[UUID]):
     if isinstance(department_id, list):
         delete_multiple_departments(department_id)
+        return
 
     classes = read.get_classes(department_id).data
     for class_ in classes:

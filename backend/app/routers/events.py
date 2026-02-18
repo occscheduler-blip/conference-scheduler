@@ -238,7 +238,7 @@ def add_prof_request(payload: request_schemas.AddProfReqRequest):
         ) from exc
 
 
-@router.post("/update_timeframse")
+@router.put("/update_timeframes")
 def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
     if (
         payload.linked_id
@@ -269,7 +269,7 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
     }
 
 
-@router.get("/get_symposiums")
+@router.get("/symposiums")
 def get_symposiums():
     try:
         return read.get_symposiums()
@@ -281,7 +281,7 @@ def get_symposiums():
         ) from exc
 
 
-@router.get("/get_departments")
+@router.get("/departments")
 def get_departments(symposium_id: UUID | None = None):
     try:
         return read.get_departments(symposium_id=symposium_id)
@@ -293,7 +293,7 @@ def get_departments(symposium_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/get_classes")
+@router.get("/classes")
 def get_classes(department_id: UUID | None = None):
     try:
         return read.get_classes(department_id=department_id)
@@ -305,7 +305,7 @@ def get_classes(department_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/get_students")
+@router.get("/students")
 def get_students(class_id: UUID | None = None):
     try:
         return read.get_students(class_id=class_id)
@@ -317,7 +317,7 @@ def get_students(class_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/get_presentations")
+@router.get("/presentations")
 def get_presentations(class_id: UUID | None = None):
     try:
         return read.get_presentations(class_id=class_id)
@@ -329,7 +329,7 @@ def get_presentations(class_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/get_professors")
+@router.get("/professors")
 def get_professors(class_id: UUID | None = None):
     try:
         return read.get_professors(class_id=class_id)
@@ -341,7 +341,7 @@ def get_professors(class_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/get_timeframes")
+@router.get("/timeframes")
 def get_timeframes(linked_id: UUID | None = None):
     try:
         return read.get_timeframes(linked_id=linked_id)
@@ -353,7 +353,7 @@ def get_timeframes(linked_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/get_prof_requests")
+@router.get("/prof_requests")
 def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None = None):
     try:
         return read.get_prof_requests(student_id=student_id, professor_id=professor_id)
