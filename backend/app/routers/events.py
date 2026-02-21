@@ -425,3 +425,56 @@ def delete_class(class_id: UUID):
         raise HTTPException(
                 status_code=400, detail=f"Failed to delete class: {exc}"
             ) from exc
+    
+@router.delete("/delete_student")
+def delete_student(student_id: UUID):
+    try:
+        delete.delete_student(student_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "students": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete student: {exc}"
+            ) from exc
+
+
+@router.delete("/delete_professor")
+def delete_professor(professor_id: UUID):
+    try:
+        delete.delete_professor(professor_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "professors": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete professor: {exc}"
+            ) from exc
+
+
+@router.delete("/delete_presentation")
+def delete_presentation(presentation_id: UUID):
+    try:
+        delete.delete_presentation(presentation_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "presentations": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete presentation: {exc}"
+            ) from exc

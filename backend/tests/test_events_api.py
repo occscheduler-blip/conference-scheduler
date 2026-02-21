@@ -33,10 +33,32 @@ def test_add_symposium_inserts_timeframes_and_symposium(client, monkeypatch):
     symposium_id = str(uuid4())
     write_calls = []
 
+    class SymposiumQueryStub:
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def eq(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def update(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+
+    class SupabaseStub:
+        def table(self, _name):
+            return SymposiumQueryStub()
+
     def fake_insert(table_name, payload):
         write_calls.append((table_name, payload))
         return SimpleNamespace(data=payload)
 
+    monkeypatch.setattr(events, "supabase", SupabaseStub())
+    monkeypatch.setattr(events.delete, "delete_timeframes", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(events.write, "insert", fake_insert)
     response = client.post(
         "/api/events/add_symposium",
@@ -55,13 +77,35 @@ def test_add_symposium_inserts_timeframes_and_symposium(client, monkeypatch):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "inserted"
+    assert body["status"] == "saved"
     assert body["symposium_id"] == symposium_id
     assert body["records_inserted"] == {"symposiums": 1, "timeframes": 1}
-    assert [name for name, _payload in write_calls] == ["timeframes", "symposiums"]
+    assert [name for name, _payload in write_calls] == ["symposiums", "timeframes"]
 
 
 def test_add_symposium_returns_500_on_unexpected_write_error(client, monkeypatch):
+    class SymposiumQueryStub:
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def eq(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def update(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+
+    class SupabaseStub:
+        def table(self, _name):
+            return SymposiumQueryStub()
+
+    monkeypatch.setattr(events, "supabase", SupabaseStub())
+    monkeypatch.setattr(events.delete, "delete_timeframes", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         events.write,
         "insert",
@@ -214,6 +258,98 @@ def test_delete_class_returns_400_when_delete_layer_fails(client, monkeypatch):
 
     assert response.status_code == 400
     assert "Failed to delete class" in response.json()["detail"]
+
+
+def test_delete_student_calls_delete_layer(client, monkeypatch):
+    student_id = uuid4()
+    called = {"value": None}
+
+    def fake_delete_student(value):
+        called["value"] = value
+
+    monkeypatch.setattr(events.delete, "delete_student", fake_delete_student)
+
+    response = client.delete(f"/api/events/delete_student?student_id={student_id}")
+
+    assert response.status_code == 200
+    assert called["value"] == student_id
+    assert response.json() == {"status": "deleted", "records_deleted": {"students": 1}}
+
+
+def test_delete_student_returns_400_when_delete_layer_fails(client, monkeypatch):
+    monkeypatch.setattr(
+        events.delete,
+        "delete_student",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    response = client.delete(f"/api/events/delete_student?student_id={uuid4()}")
+
+    assert response.status_code == 400
+    assert "Failed to delete student" in response.json()["detail"]
+
+
+def test_delete_professor_calls_delete_layer(client, monkeypatch):
+    professor_id = uuid4()
+    called = {"value": None}
+
+    def fake_delete_professor(value):
+        called["value"] = value
+
+    monkeypatch.setattr(events.delete, "delete_professor", fake_delete_professor)
+
+    response = client.delete(f"/api/events/delete_professor?professor_id={professor_id}")
+
+    assert response.status_code == 200
+    assert called["value"] == professor_id
+    assert response.json() == {"status": "deleted", "records_deleted": {"professors": 1}}
+
+
+def test_delete_professor_returns_400_when_delete_layer_fails(client, monkeypatch):
+    monkeypatch.setattr(
+        events.delete,
+        "delete_professor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    response = client.delete(f"/api/events/delete_professor?professor_id={uuid4()}")
+
+    assert response.status_code == 400
+    assert "Failed to delete professor" in response.json()["detail"]
+
+
+def test_delete_presentation_calls_delete_layer(client, monkeypatch):
+    presentation_id = uuid4()
+    called = {"value": None}
+
+    def fake_delete_presentation(value):
+        called["value"] = value
+
+    monkeypatch.setattr(events.delete, "delete_presentation", fake_delete_presentation)
+
+    response = client.delete(
+        f"/api/events/delete_presentation?presentation_id={presentation_id}"
+    )
+
+    assert response.status_code == 200
+    assert called["value"] == presentation_id
+    assert response.json() == {
+        "status": "deleted",
+        "records_deleted": {"presentations": 1},
+    }
+
+
+def test_delete_presentation_returns_400_when_delete_layer_fails(client, monkeypatch):
+    monkeypatch.setattr(
+        events.delete,
+        "delete_presentation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    response = client.delete(f"/api/events/delete_presentation?presentation_id={uuid4()}")
+
+    assert response.status_code == 400
+    assert "Failed to delete presentation" in response.json()["detail"]
 
 
 def test_protected_route_rejects_missing_api_key():
