@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # Ensure app imports can build a Supabase client during test module imports.
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_KEY", "test-key")
+os.environ.setdefault("BACKEND_API_KEY", "test-api-key")
 
 
 @dataclass

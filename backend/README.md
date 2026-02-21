@@ -21,6 +21,7 @@ Set these in `.env`:
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
 - `SUPABASE_DB_URL`
+- `BACKEND_API_KEY`
 
 Optional:
 - `SUPABASE_EVENTS_TABLE` (default: `events`)
@@ -35,6 +36,12 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Open docs at `http://127.0.0.1:8000/docs`.
+
+For protected endpoints under `/api/events/*`, include the header:
+
+```http
+X-API-Key: <your BACKEND_API_KEY value>
+```
 
 ## Testing
 
@@ -75,7 +82,7 @@ Base URL: `http://127.0.0.1:8000`
 - `POST /api/events/add_students`
 - `POST /api/events/add_presentation`
 - `POST /api/events/add_prof_req`
-- `POST /api/events/update_timeframes`
+- `PUT /api/events/update_timeframes`
 - `GET /api/events/get_symposiums`
 - `GET /api/events/get_departments`
 - `GET /api/events/get_classes`

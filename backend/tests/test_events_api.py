@@ -4,13 +4,21 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import app
 from app.routers import events
 
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    return TestClient(app, headers={"X-API-Key": "test-api-key"})
+
+
+@pytest.fixture(autouse=True)
+def clear_settings_cache():
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def test_health_endpoint_returns_environment(client):
@@ -146,3 +154,33 @@ def test_delete_symposium_calls_delete_layer(client, monkeypatch):
     assert response.status_code == 200
     assert called["value"] == symposium_id
     assert response.json()["status"] == "deleted"
+
+
+def test_protected_route_rejects_missing_api_key():
+    no_key_client = TestClient(app)
+    response = no_key_client.get("/api/events/symposiums")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid API key."
+
+
+def test_protected_route_rejects_wrong_api_key():
+    wrong_key_client = TestClient(app, headers={"X-API-Key": "wrong-key"})
+    response = wrong_key_client.get("/api/events/symposiums")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid API key."
+
+
+def test_protected_route_returns_500_if_backend_key_not_configured(monkeypatch):
+    monkeypatch.setenv("BACKEND_API_KEY", "")
+    get_settings.cache_clear()
+
+    client = TestClient(app, headers={"X-API-Key": "anything"})
+    response = client.get("/api/events/symposiums")
+
+    assert response.status_code == 500
+    assert (
+        response.json()["detail"]
+        == "API key auth is enabled but BACKEND_API_KEY is not configured."
+    )
