@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.routers.events import router as events_router
+from app.security import require_api_key
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
@@ -21,4 +22,8 @@ def health_check():
     return {"status": "ok", "environment": settings.app_env}
 
 
-app.include_router(events_router, prefix="/api")
+app.include_router(
+    events_router,
+    prefix="/api",
+    dependencies=[Depends(require_api_key)],
+)
