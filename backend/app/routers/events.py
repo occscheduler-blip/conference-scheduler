@@ -369,14 +369,46 @@ def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None 
 def delete_symposium(symposium_id: UUID):
     try:
         delete.delete_symposium(symposium_id)
-        return {"status": "deleted", "records deleted": {"symposiums": 1}}
+        return {"status": "deleted", "records_deleted": {"symposiums": 1}}
     except HTTPException:
         raise
     except Exception as exc:
-        raise ValueError(f"Failed to delete symposium: {exc}")
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete symposium: {exc}"
+            ) from exc
 
 
-# @router.delete("/delete_department")
-# def delete_department(department_id: UUID):
-#     try:
-#         delete.delete_department()
+@router.delete("/delete_department")
+def delete_department(department_id: UUID):
+    try:
+        delete.delete_department(department_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "departments": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete department: {exc}"
+            ) from exc
+    
+
+@router.delete("/delete_class")
+def delete_class(class_id: UUID):
+    try:
+        delete.delete_class(class_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "classes": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete class: {exc}"
+            ) from exc

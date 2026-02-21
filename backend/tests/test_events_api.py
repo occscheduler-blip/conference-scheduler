@@ -156,6 +156,66 @@ def test_delete_symposium_calls_delete_layer(client, monkeypatch):
     assert response.json()["status"] == "deleted"
 
 
+def test_delete_department_calls_delete_layer(client, monkeypatch):
+    department_id = uuid4()
+    called = {"value": None}
+
+    def fake_delete_department(value):
+        called["value"] = value
+
+    monkeypatch.setattr(events.delete, "delete_department", fake_delete_department)
+
+    response = client.delete(
+        f"/api/events/delete_department?department_id={department_id}"
+    )
+
+    assert response.status_code == 200
+    assert called["value"] == department_id
+    assert response.json() == {"status": "deleted", "records_deleted": {"departments": 1}}
+
+
+def test_delete_department_returns_400_when_delete_layer_fails(client, monkeypatch):
+    monkeypatch.setattr(
+        events.delete,
+        "delete_department",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    response = client.delete(f"/api/events/delete_department?department_id={uuid4()}")
+
+    assert response.status_code == 400
+    assert "Failed to delete department" in response.json()["detail"]
+
+
+def test_delete_class_calls_delete_layer(client, monkeypatch):
+    class_id = uuid4()
+    called = {"value": None}
+
+    def fake_delete_class(value):
+        called["value"] = value
+
+    monkeypatch.setattr(events.delete, "delete_class", fake_delete_class)
+
+    response = client.delete(f"/api/events/delete_class?class_id={class_id}")
+
+    assert response.status_code == 200
+    assert called["value"] == class_id
+    assert response.json() == {"status": "deleted", "records_deleted": {"classes": 1}}
+
+
+def test_delete_class_returns_400_when_delete_layer_fails(client, monkeypatch):
+    monkeypatch.setattr(
+        events.delete,
+        "delete_class",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    response = client.delete(f"/api/events/delete_class?class_id={uuid4()}")
+
+    assert response.status_code == 400
+    assert "Failed to delete class" in response.json()["detail"]
+
+
 def test_protected_route_rejects_missing_api_key():
     no_key_client = TestClient(app)
     response = no_key_client.get("/api/events/symposiums")
