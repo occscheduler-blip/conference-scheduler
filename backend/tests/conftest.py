@@ -11,9 +11,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Ensure app imports can build a Supabase client during test module imports.
-os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
-os.environ.setdefault("SUPABASE_KEY", "test-key")
-os.environ.setdefault("BACKEND_API_KEY", "test-api-key")
+# Some CI environments may expose these vars as empty strings; treat empty as unset.
+if not os.environ.get("SUPABASE_URL"):
+    os.environ["SUPABASE_URL"] = "https://example.supabase.co"
+if not os.environ.get("SUPABASE_KEY"):
+    os.environ["SUPABASE_KEY"] = "test-key"
+if not os.environ.get("BACKEND_API_KEY"):
+    os.environ["BACKEND_API_KEY"] = "test-api-key"
 
 
 @dataclass
