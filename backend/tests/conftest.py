@@ -9,15 +9,23 @@ import pytest
 
 # Make backend/app importable as top-level package "app".
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.config import get_settings
 
 # Ensure app imports can build a Supabase client during test module imports.
-# Some CI environments may expose these vars as empty strings; treat empty as unset.
-if not os.environ.get("SUPABASE_URL"):
-    os.environ["SUPABASE_URL"] = "https://example.supabase.co"
-if not os.environ.get("SUPABASE_KEY"):
-    os.environ["SUPABASE_KEY"] = "test-key"
-if not os.environ.get("BACKEND_API_KEY"):
-    os.environ["BACKEND_API_KEY"] = "test-api-key"
+# Force deterministic defaults so CI host env does not leak into tests.
+os.environ["SUPABASE_URL"] = "https://example.supabase.co"
+os.environ["SUPABASE_KEY"] = "test-key"
+os.environ["BACKEND_API_KEY"] = "test-api-key"
+
+
+@pytest.fixture(autouse=True)
+def stable_test_environment(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "test-key")
+    monkeypatch.setenv("BACKEND_API_KEY", "test-api-key")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @dataclass
