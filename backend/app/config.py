@@ -14,12 +14,17 @@ class Settings(BaseSettings):
 
     backend_cors_origins: str = "http://localhost:3000"
     backend_api_key: str = ""
+<<<<<<< HEAD
 
+=======
+    
+>>>>>>> fb51a0f (pulled from main and now fixed and finished the edit symposium page)
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_db_url: str = ""
     supabase_events_table: str = "events"
     supabase_symposiums_table: str = "symposiums"
+    supabase_departments_table: str = "departments"
     supabase_timeframes_table: str = "timeframes"
     supabase_students_table: str = "students"
 
