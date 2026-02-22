@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type AdminTab = "create" | "edit";
@@ -94,6 +95,12 @@ function toDateInputValue(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function parseBackendDateTime(value: string) {
+  const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
+  // Backend values without timezone should be treated as UTC to avoid local offset drift on reload.
+  return new Date(hasExplicitTimezone ? value : `${value}Z`);
+}
+
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
   const [symposiumName, setSymposiumName] = useState("");
@@ -118,6 +125,11 @@ export default function AdminPage() {
 
   const isCreateTab = activeTab === "create";
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
+  const authHeaders = useMemo(
+    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
+    [backendApiKey]
+  );
 
   const calendarDates = useMemo(() => {
     if (!startDate || !endDate) return [];
@@ -162,7 +174,9 @@ export default function AdminPage() {
     setSymposiumsLoading(true);
     setSymposiumsError(null);
     try {
-      const response = await fetch(`${backendUrl}/api/events/symposiums`);
+      const response = await fetch(`${backendUrl}/api/events/symposiums`, {
+        headers: authHeaders,
+      });
       const payload = (await response.json()) as
         | {
             data?: Array<{
@@ -205,7 +219,7 @@ export default function AdminPage() {
     } finally {
       setSymposiumsLoading(false);
     }
-  }, [backendUrl]);
+  }, [authHeaders, backendUrl]);
 
   useEffect(() => {
     void refreshSymposiumOptions();
@@ -301,7 +315,10 @@ export default function AdminPage() {
       const symposiumIdForSave = isCreateTab ? undefined : selectedSymposiumId;
       const response = await fetch(`${backendUrl}/api/events/add_symposium`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeaders ?? {}),
+        },
         body: JSON.stringify({
           symposium_id: symposiumIdForSave,
           symposium_name: trimmedName,
@@ -352,7 +369,10 @@ export default function AdminPage() {
 
     try {
       const response = await fetch(
-        `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(selectedSymposiumId)}`
+        `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(selectedSymposiumId)}`,
+        {
+          headers: authHeaders,
+        }
       );
       const payload = (await response.json()) as
         | { data?: Array<{ start_time?: string; end_time?: string }> }
@@ -366,7 +386,7 @@ export default function AdminPage() {
       const starts = timeframeRows
         .map((row) => row.start_time)
         .filter((value): value is string => Boolean(value))
-        .map((value) => new Date(value))
+        .map((value) => parseBackendDateTime(value))
         .filter((value) => !Number.isNaN(value.getTime()));
 
       if (starts.length > 0) {
@@ -495,7 +515,10 @@ export default function AdminPage() {
       for (const department of departmentContacts) {
         const response = await fetch(`${backendUrl}/api/events/add_department`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(authHeaders ?? {}),
+          },
           body: JSON.stringify({
             symposium_id: selectedSymposiumId,
             department_name: department.department.trim(),
@@ -862,6 +885,14 @@ export default function AdminPage() {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
+        <div className="mb-3 flex justify-end">
+          <Link
+            href="/"
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          >
+            Home
+          </Link>
+        </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
             OCC THESIS SYMPOSIUM - ADMIN

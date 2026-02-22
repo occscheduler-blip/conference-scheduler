@@ -2,15 +2,25 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4, UUID
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from app.supabase_io import delete, read, write
 from app.supabase_io.client import supabase
 
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
 from app.supabase_io.client import supabase
+from app.config import get_settings
 
-router = APIRouter(prefix="/events", tags=["events"])
+
+def require_backend_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    settings = get_settings()
+    required_key = settings.backend_api_key.strip()
+    if not required_key:
+        return
+    if x_api_key != required_key:
+        raise HTTPException(status_code=401, detail="Invalid API key.")
+
+router = APIRouter(prefix="/events", tags=["events"], dependencies=[Depends(require_backend_api_key)])
 SYMPOSIUM_DATAFRAMES: dict[int, dict[str, pd.DataFrame]] = {}
 
 
@@ -45,8 +55,9 @@ def add_class(payload: request_schemas.AddClassRequest):
         prof_resp = write.insert("professors", professors_payload)
         return {
             "status": "Inserted",
-            "class_id": class_def.id,
-            "department_id": class_def.department_id,
+            "class_id": str(class_def.id),
+            "department_id": str(class_def.department_id),
+            "professor_ids": [str(professor.id) for professor in professors],
             "records_inserted": {"classes": 1, "professors": len(professors_payload)},
         }
     except HTTPException:

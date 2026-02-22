@@ -51,7 +51,7 @@ def delete_student(student_id: UUID | list[UUID]):
 
 def delete_professor(prof_id: UUID | list[UUID]):
     # TODO: What to do when the last professor in a class/presentation is removed?
-    del_prof_query = supabase.table("students").delete()
+    del_prof_query = supabase.table("professors").delete()
     del_prof_request_query = supabase.table("prof_requests").delete()
 
     if isinstance(prof_id, UUID):
