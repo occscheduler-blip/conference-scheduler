@@ -156,6 +156,34 @@ def test_add_students_inserts_all_students(client, monkeypatch):
     assert len(inserted["payload"]) == 2
 
 
+def test_add_presentation_returns_lines_edited_from_insert_responses(client, monkeypatch):
+    class_id = str(uuid4())
+    student_ids = [str(uuid4()), str(uuid4())]
+
+    def fake_insert(table_name, payload):
+        if table_name == "presentations":
+            return SimpleNamespace(data=[{"id": payload[0]["id"]}])
+        if table_name == "presenting_students":
+            return SimpleNamespace(data=payload[:1])
+        return SimpleNamespace(data=payload)
+
+    monkeypatch.setattr(events.write, "insert", fake_insert)
+    response = client.post(
+        "/api/events/add_presentation",
+        json={
+            "title": "My Talk",
+            "class_id": class_id,
+            "minutes": 15,
+            "presenting_students": student_ids,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["records_inserted"] == {"presentations": 1, "presenting_students": 1}
+    assert body["lines_edited"] == 2
+
+
 def test_update_student_updates_requested_fields(client, monkeypatch):
     calls = []
 
@@ -300,6 +328,11 @@ def test_update_presentation_replaces_presenting_students(client, monkeypatch):
     assert ("presenting_students", "delete") in calls
     assert inserts and inserts[0][0] == "presenting_students"
     assert len(inserts[0][1]) == 2
+    body = response.json()
+    assert body["records_inserted"]["presenting_students"] == 2
+    assert body["records_deleted"]["presenting_students"] == 0
+    assert body["records_updated"]["presentations"] == 0
+    assert body["lines_edited"] == 2
 
 
 def test_get_departments_forwards_query_param(client, monkeypatch):
@@ -361,7 +394,11 @@ def test_delete_department_calls_delete_layer(client, monkeypatch):
 
     assert response.status_code == 200
     assert called["value"] == department_id
-    assert response.json() == {"status": "deleted", "records_deleted": {"departments": 1}}
+    assert response.json() == {
+        "status": "deleted",
+        "records_deleted": {"departments": 1},
+        "lines_edited": 1,
+    }
 
 
 def test_delete_department_returns_400_when_delete_layer_fails(client, monkeypatch):
@@ -390,7 +427,11 @@ def test_delete_class_calls_delete_layer(client, monkeypatch):
 
     assert response.status_code == 200
     assert called["value"] == class_id
-    assert response.json() == {"status": "deleted", "records_deleted": {"classes": 1}}
+    assert response.json() == {
+        "status": "deleted",
+        "records_deleted": {"classes": 1},
+        "lines_edited": 1,
+    }
 
 
 def test_delete_class_returns_400_when_delete_layer_fails(client, monkeypatch):
@@ -419,7 +460,11 @@ def test_delete_student_calls_delete_layer(client, monkeypatch):
 
     assert response.status_code == 200
     assert called["value"] == student_id
-    assert response.json() == {"status": "deleted", "records_deleted": {"students": 1}}
+    assert response.json() == {
+        "status": "deleted",
+        "records_deleted": {"students": 1},
+        "lines_edited": 1,
+    }
 
 
 def test_delete_student_returns_400_when_delete_layer_fails(client, monkeypatch):
@@ -448,7 +493,11 @@ def test_delete_professor_calls_delete_layer(client, monkeypatch):
 
     assert response.status_code == 200
     assert called["value"] == professor_id
-    assert response.json() == {"status": "deleted", "records_deleted": {"professors": 1}}
+    assert response.json() == {
+        "status": "deleted",
+        "records_deleted": {"professors": 1},
+        "lines_edited": 1,
+    }
 
 
 def test_delete_professor_returns_400_when_delete_layer_fails(client, monkeypatch):
@@ -482,6 +531,7 @@ def test_delete_presentation_calls_delete_layer(client, monkeypatch):
     assert response.json() == {
         "status": "deleted",
         "records_deleted": {"presentations": 1},
+        "lines_edited": 1,
     }
 
 

@@ -34,6 +34,58 @@ def _serialize_update_fields(fields: dict):
     return serialized
 
 
+def _rows_affected(response, fallback: int = 0) -> int:
+    """Return rows affected from a Supabase response object."""
+    if isinstance(response, dict):
+        count = response.get("count")
+        if isinstance(count, int) and count >= 0:
+            return count
+
+        data = response.get("data")
+        if isinstance(data, list):
+            return len(data)
+        if isinstance(data, dict):
+            return 1
+
+        return fallback
+
+    count = getattr(response, "count", None)
+    if isinstance(count, int) and count >= 0:
+        return count
+
+    data = getattr(response, "data", None)
+    if isinstance(data, list):
+        return len(data)
+    if isinstance(data, dict):
+        return 1
+
+    return fallback
+
+
+def _normalize_counts(counts: dict[str, int] | None, fallback: dict[str, int]) -> dict[str, int]:
+    if not isinstance(counts, dict):
+        return dict(fallback)
+
+    normalized: dict[str, int] = {}
+    for key, value in counts.items():
+        if isinstance(value, int) and value >= 0:
+            normalized[key] = value
+
+    if not normalized:
+        return dict(fallback)
+
+    return normalized
+
+
+def _sum_counts(*groups: dict[str, int]) -> int:
+    total = 0
+    for group in groups:
+        for value in group.values():
+            if isinstance(value, int) and value >= 0:
+                total += value
+    return total
+
+
 @router.post("/add_class")
 def add_class(payload: request_schemas.AddClassRequest):
     try:
@@ -53,12 +105,20 @@ def add_class(payload: request_schemas.AddClassRequest):
         ]
         professors_payload = [professor.model_dump() for professor in professors]
         prof_resp = write.insert("professors", professors_payload)
+        class_inserted = _rows_affected(class_resp, fallback=1)
+        professors_inserted = _rows_affected(
+            prof_resp, fallback=len(professors_payload)
+        )
+        records_inserted = {
+            "classes": class_inserted,
+            "professors": professors_inserted,
+        }
         return {
             "status": "Inserted",
-            "class_id": str(class_def.id),
-            "department_id": str(class_def.department_id),
-            "professor_ids": [str(professor.id) for professor in professors],
-            "records_inserted": {"classes": 1, "professors": len(professors_payload)},
+            "class_id": class_def.id,
+            "department_id": class_def.department_id,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
         }
     except HTTPException:
         raise
@@ -82,13 +142,15 @@ def add_department(payload: request_schemas.AddDepartmentRequest):
         )
 
         resp = write.insert("departments", [department.model_dump()])
-        print(resp)
+        departments_inserted = _rows_affected(resp, fallback=1)
+        records_inserted = {"departments": departments_inserted}
 
         return {
             "status": "Inserted",
             "department_id": department.id,
             "symposium_id": department.symposium_id,
-            "records_inserted": {"departments": 1},
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
         }
     except HTTPException:
         raise
@@ -122,18 +184,22 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
 
         # If the symposium already exists (fixed UUID edit flow), update it instead of failing.
         existing = supabase.table("symposiums").select("id").eq("id", str(symposium_id)).limit(1).execute()
+        symposiums_inserted = 0
+        symposiums_updated = 0
         if existing.data:
-            supabase.table("symposiums").update(
+            symposium_update_resp = supabase.table("symposiums").update(
                 {
                     "name": symposium_payload["name"],
                     "rooms_available": symposium_payload["rooms_available"],
                 }
             ).eq("id", str(symposium_id)).execute()
+            symposiums_updated = _rows_affected(symposium_update_resp, fallback=1)
         else:
-            write.insert("symposiums", [symposium_payload])
+            symposium_insert_resp = write.insert("symposiums", [symposium_payload])
+            symposiums_inserted = _rows_affected(symposium_insert_resp, fallback=1)
 
         # Replace all existing timeframes for this symposium with the newly submitted set.
-        delete.delete_timeframes(symposium_id)
+        deleted_timeframes = delete.delete_timeframes(symposium_id)
         timeframes = [
             supabase_schemas.Timeframe(
                 id=uuid4(),
@@ -145,15 +211,24 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         ]
         timeframe_payloads = [item.model_dump() for item in timeframes]
         timeframe_response = write.insert("timeframes", timeframe_payloads)
+        timeframes_inserted = _rows_affected(timeframe_response, fallback=len(timeframes))
+        records_inserted = {
+            "symposiums": symposiums_inserted,
+            "timeframes": timeframes_inserted,
+        }
+        records_updated = {"symposiums": symposiums_updated}
+        records_deleted = {"timeframes": deleted_timeframes}
 
         return {
             "status": "saved",
             "symposium_id": str(symposium_id),
             "name": payload.symposium_name,
-            "records_inserted": {
-                "symposiums": 1,
-                "timeframes": len(timeframes),
-            },
+            "records_inserted": records_inserted,
+            "records_updated": records_updated,
+            "records_deleted": records_deleted,
+            "lines_edited": _sum_counts(
+                records_inserted, records_updated, records_deleted
+            ),
         }
     except HTTPException:
         raise
@@ -183,12 +258,13 @@ def add_students(payload: request_schemas.AddStudentsRequest):
 
         students_payload = [item.model_dump() for item in students]
         response = write.insert("students", students_payload)
+        students_inserted = _rows_affected(response, fallback=len(students_payload))
+        records_inserted = {"students": students_inserted}
         return {
             "status": "inserted",
             "class_id": str(payload.class_id),
-            "records_inserted": {
-                "students": len(students),
-            },
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
         }
     except HTTPException:
         raise
@@ -225,14 +301,22 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
             "presenting_students", [item.model_dump() for item in students]
         )
 
+        presentations_inserted = _rows_affected(pres_resp, fallback=1)
+        presenting_students_inserted = _rows_affected(
+            students_resp, fallback=len(students)
+        )
+
+        records_inserted = {
+            "presentations": presentations_inserted,
+            "presenting_students": presenting_students_inserted,
+        }
+
         return {
             "status": "inserted",
             "presentation_id": presentation_id,
             "class_id": payload.class_id,
-            "records_inserted": {
-                "presentations": 1,
-                "presenting_students": len(students),
-            },
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
         }
 
     except HTTPException:
@@ -255,12 +339,15 @@ def add_prof_request(payload: request_schemas.AddProfReqRequest):
         )
 
         response = write.insert("prof_requests", [request.model_dump()])
+        prof_requests_inserted = _rows_affected(response, fallback=1)
+        records_inserted = {"prof_requests": prof_requests_inserted}
 
         return {
             "status": "inserted",
             "student_id": payload.student_id,
             "professor_id": payload.professor_id,
-            "records_inserted": {"prof_requests": 1},
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
         }
     except HTTPException:
         raise
@@ -294,12 +381,16 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
     timeframe_payload = [item.model_dump() for item in timeframes]
 
     timeframe_resp = write.insert("timeframes", timeframe_payload)
+    timeframes_inserted = _rows_affected(timeframe_resp, fallback=len(timeframe_payload))
+    records_deleted = {"timeframes": deleted_timeframes}
+    records_inserted = {"timeframes": timeframes_inserted}
 
     return {
         "status": "updated",
         "linked_id": payload.linked_id,
-        "records_deleted": {"timeframes": deleted_timeframes},
-        "records_inserted": {"timeframes": len(timeframe_payload)},
+        "records_deleted": records_deleted,
+        "records_inserted": records_inserted,
+        "lines_edited": _sum_counts(records_deleted, records_inserted),
     }
 
 
@@ -311,14 +402,19 @@ def update_student(payload: request_schemas.UpdateStudentRequest):
             exclude={"student_id"},
         )
         update_payload = _serialize_update_fields(updates)
-        supabase.table("students").update(update_payload).eq(
+        update_resp = supabase.table("students").update(update_payload).eq(
             "id", str(payload.student_id)
         ).execute()
+        records_updated = {
+            "students": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
 
         return {
             "status": "updated",
             "student_id": str(payload.student_id),
             "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
         }
     except HTTPException:
         raise
@@ -338,14 +434,19 @@ def update_class(payload: request_schemas.UpdateClassRequest):
             exclude={"class_id"},
         )
         update_payload = _serialize_update_fields(updates)
-        supabase.table("classes").update(update_payload).eq(
+        update_resp = supabase.table("classes").update(update_payload).eq(
             "id", str(payload.class_id)
         ).execute()
+        records_updated = {
+            "classes": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
 
         return {
             "status": "updated",
             "class_id": str(payload.class_id),
             "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
         }
     except HTTPException:
         raise
@@ -365,14 +466,19 @@ def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
         if "symposium_name" in updates:
             updates["name"] = updates.pop("symposium_name")
         update_payload = _serialize_update_fields(updates)
-        supabase.table("symposiums").update(update_payload).eq(
+        update_resp = supabase.table("symposiums").update(update_payload).eq(
             "id", str(payload.symposium_id)
         ).execute()
+        records_updated = {
+            "symposiums": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
 
         return {
             "status": "updated",
             "symposium_id": str(payload.symposium_id),
             "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
         }
     except HTTPException:
         raise
@@ -392,15 +498,25 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest):
             exclude={"presentation_id", "presenting_students"},
         )
         update_payload = _serialize_update_fields(updates)
+        presentations_updated = 0
+        presenting_students_deleted = 0
+        presenting_students_inserted = 0
+
         if update_payload:
-            supabase.table("presentations").update(update_payload).eq(
+            presentation_update_resp = supabase.table("presentations").update(
+                update_payload
+            ).eq(
                 "id", str(payload.presentation_id)
             ).execute()
+            presentations_updated = _rows_affected(presentation_update_resp)
 
         if payload.presenting_students is not None:
-            supabase.table("presenting_students").delete().eq(
+            presenting_students_delete_resp = supabase.table("presenting_students").delete().eq(
                 "presentation_id", str(payload.presentation_id)
             ).execute()
+            presenting_students_deleted = _rows_affected(
+                presenting_students_delete_resp
+            )
             presenting_students_payload = [
                 supabase_schemas.PresentingStudents(
                     id=uuid4(),
@@ -410,20 +526,29 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest):
                 for student_id in payload.presenting_students
             ]
             if presenting_students_payload:
-                write.insert("presenting_students", presenting_students_payload)
+                presenting_students_insert_resp = write.insert(
+                    "presenting_students", presenting_students_payload
+                )
+                presenting_students_inserted = _rows_affected(
+                    presenting_students_insert_resp,
+                    fallback=len(presenting_students_payload),
+                )
+
+        records_inserted = {"presenting_students": presenting_students_inserted}
+        records_deleted = {"presenting_students": presenting_students_deleted}
+        records_updated = {"presentations": presentations_updated}
 
         return {
             "status": "updated",
             "presentation_id": str(payload.presentation_id),
             "fields_updated": sorted(update_payload.keys()),
             "presenting_students_updated": payload.presenting_students is not None,
-            "records_inserted": {
-                "presenting_students": (
-                    len(payload.presenting_students)
-                    if payload.presenting_students is not None
-                    else 0
-                )
-            },
+            "records_inserted": records_inserted,
+            "records_deleted": records_deleted,
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(
+                records_inserted, records_deleted, records_updated
+            ),
         }
     except HTTPException:
         raise
@@ -534,8 +659,14 @@ def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None 
 @router.delete("/delete_symposium")
 def delete_symposium(symposium_id: UUID):
     try:
-        delete.delete_symposium(symposium_id)
-        return {"status": "deleted", "records_deleted": {"symposiums": 1}}
+        counts = _normalize_counts(
+            delete.delete_symposium(symposium_id), {"symposiums": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
     except HTTPException:
         raise
     except Exception as exc:
@@ -547,12 +678,13 @@ def delete_symposium(symposium_id: UUID):
 @router.delete("/delete_department")
 def delete_department(department_id: UUID):
     try:
-        delete.delete_department(department_id)
+        counts = _normalize_counts(
+            delete.delete_department(department_id), {"departments": 1}
+        )
         return {
             "status": "deleted",
-            "records_deleted": {
-                "departments": 1
-            }
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
         }
     except HTTPException:
         raise
@@ -565,12 +697,11 @@ def delete_department(department_id: UUID):
 @router.delete("/delete_class")
 def delete_class(class_id: UUID):
     try:
-        delete.delete_class(class_id)
+        counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
         return {
             "status": "deleted",
-            "records_deleted": {
-                "classes": 1
-            }
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
         }
     except HTTPException:
         raise
@@ -582,12 +713,11 @@ def delete_class(class_id: UUID):
 @router.delete("/delete_student")
 def delete_student(student_id: UUID):
     try:
-        delete.delete_student(student_id)
+        counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
         return {
             "status": "deleted",
-            "records_deleted": {
-                "students": 1
-            }
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
         }
     except HTTPException:
         raise
@@ -600,12 +730,13 @@ def delete_student(student_id: UUID):
 @router.delete("/delete_professor")
 def delete_professor(professor_id: UUID):
     try:
-        delete.delete_professor(professor_id)
+        counts = _normalize_counts(
+            delete.delete_professor(professor_id), {"professors": 1}
+        )
         return {
             "status": "deleted",
-            "records_deleted": {
-                "professors": 1
-            }
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
         }
     except HTTPException:
         raise
@@ -618,12 +749,13 @@ def delete_professor(professor_id: UUID):
 @router.delete("/delete_presentation")
 def delete_presentation(presentation_id: UUID):
     try:
-        delete.delete_presentation(presentation_id)
+        counts = _normalize_counts(
+            delete.delete_presentation(presentation_id), {"presentations": 1}
+        )
         return {
             "status": "deleted",
-            "records_deleted": {
-                "presentations": 1
-            }
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
         }
     except HTTPException:
         raise
