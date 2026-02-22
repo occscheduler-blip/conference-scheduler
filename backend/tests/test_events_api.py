@@ -156,6 +156,152 @@ def test_add_students_inserts_all_students(client, monkeypatch):
     assert len(inserted["payload"]) == 2
 
 
+def test_update_student_updates_requested_fields(client, monkeypatch):
+    calls = []
+
+    class QueryStub:
+        def __init__(self, table_name):
+            self.table_name = table_name
+
+        def update(self, payload):
+            calls.append((self.table_name, "update", payload))
+            return self
+
+        def eq(self, field, value):
+            calls.append((self.table_name, "eq", field, value))
+            return self
+
+        def execute(self):
+            return {"data": []}
+
+    class SupabaseStub:
+        def table(self, table_name):
+            return QueryStub(table_name)
+
+    student_id = uuid4()
+    monkeypatch.setattr(events, "supabase", SupabaseStub())
+    response = client.put(
+        "/api/events/update_student",
+        json={
+            "student_id": str(student_id),
+            "name": "Updated Student",
+            "email": "updated@hamilton.edu",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "updated"
+    assert ("students", "update", {"name": "Updated Student", "email": "updated@hamilton.edu"}) in calls
+
+
+def test_update_symposium_maps_symposium_name_to_name(client, monkeypatch):
+    calls = []
+
+    class QueryStub:
+        def __init__(self, table_name):
+            self.table_name = table_name
+
+        def update(self, payload):
+            calls.append((self.table_name, "update", payload))
+            return self
+
+        def eq(self, field, value):
+            calls.append((self.table_name, "eq", field, value))
+            return self
+
+        def execute(self):
+            return {"data": []}
+
+    class SupabaseStub:
+        def table(self, table_name):
+            return QueryStub(table_name)
+
+    symposium_id = uuid4()
+    monkeypatch.setattr(events, "supabase", SupabaseStub())
+    response = client.put(
+        "/api/events/update_symposium",
+        json={"symposium_id": str(symposium_id), "symposium_name": "Renamed"},
+    )
+
+    assert response.status_code == 200
+    assert ("symposiums", "update", {"name": "Renamed"}) in calls
+
+
+def test_update_class_returns_400_when_update_fails(client, monkeypatch):
+    class QueryStub:
+        def update(self, _payload):
+            return self
+
+        def eq(self, _field, _value):
+            return self
+
+        def execute(self):
+            raise RuntimeError("boom")
+
+    class SupabaseStub:
+        def table(self, _table_name):
+            return QueryStub()
+
+    monkeypatch.setattr(events, "supabase", SupabaseStub())
+    response = client.put(
+        "/api/events/update_class",
+        json={"class_id": str(uuid4()), "name": "Updated class"},
+    )
+
+    assert response.status_code == 400
+    assert "Failed to update class" in response.json()["detail"]
+
+
+def test_update_presentation_replaces_presenting_students(client, monkeypatch):
+    calls = []
+    inserts = []
+
+    class QueryStub:
+        def __init__(self, table_name):
+            self.table_name = table_name
+
+        def update(self, payload):
+            calls.append((self.table_name, "update", payload))
+            return self
+
+        def delete(self):
+            calls.append((self.table_name, "delete"))
+            return self
+
+        def eq(self, field, value):
+            calls.append((self.table_name, "eq", field, value))
+            return self
+
+        def execute(self):
+            return {"data": []}
+
+    class SupabaseStub:
+        def table(self, table_name):
+            return QueryStub(table_name)
+
+    def fake_insert(table_name, payload):
+        inserts.append((table_name, payload))
+        return SimpleNamespace(data=payload)
+
+    presentation_id = uuid4()
+    monkeypatch.setattr(events, "supabase", SupabaseStub())
+    monkeypatch.setattr(events.write, "insert", fake_insert)
+    response = client.put(
+        "/api/events/update_presentation",
+        json={
+            "presentation_id": str(presentation_id),
+            "title": "Updated Title",
+            "presenting_students": [str(uuid4()), str(uuid4())],
+        },
+    )
+
+    assert response.status_code == 200
+    assert ("presentations", "update", {"title": "Updated Title"}) in calls
+    assert ("presenting_students", "delete") in calls
+    assert inserts and inserts[0][0] == "presenting_students"
+    assert len(inserts[0][1]) == 2
+
+
 def test_get_departments_forwards_query_param(client, monkeypatch):
     symposium_id = uuid4()
     captured = {"value": None}
