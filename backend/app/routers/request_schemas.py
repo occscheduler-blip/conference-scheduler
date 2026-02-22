@@ -272,3 +272,150 @@ class AddProfReqRequest(BaseModel):
 class UpdateTimeframesRequest(BaseModel):
     linked_id: UUID
     timeframes: list[TimeframeWindow]
+
+
+class UpdateStudentRequest(BaseModel):
+    student_id: UUID
+    name: str | None = None
+    email: str | None = None
+    class_id: UUID | None = None
+    presentation_id: UUID | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str | None):
+        if name is None:
+            return name
+        name = name.strip()
+        if not name:
+            raise ValueError("Student name cannot be empty")
+        return name
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, email: str | None):
+        if email is None:
+            return email
+        email = email.strip().lower()
+        if not email:
+            raise ValueError("Email cannot be blank.")
+        if not email.endswith("@hamilton.edu"):
+            raise ValueError("Email must be a @hamilton.edu address.")
+        return email
+
+    @model_validator(mode="after")
+    def validate_has_updates(self):
+        if (
+            self.name is None
+            and self.email is None
+            and self.class_id is None
+            and self.presentation_id is None
+        ):
+            raise ValueError("At least one student field must be provided for update.")
+        return self
+
+
+class UpdateClassRequest(BaseModel):
+    class_id: UUID
+    name: str | None = None
+    department_id: UUID | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str | None):
+        if name is None:
+            return name
+        name = name.strip()
+        if not name:
+            raise ValueError("Class name cannot be empty")
+        return name
+
+    @model_validator(mode="after")
+    def validate_has_updates(self):
+        if self.name is None and self.department_id is None:
+            raise ValueError("At least one class field must be provided for update.")
+        return self
+
+
+class UpdateSymposiumRequest(BaseModel):
+    symposium_id: UUID
+    symposium_name: str | None = None
+    rooms_available: int | None = None
+
+    @field_validator("symposium_name")
+    @classmethod
+    def validate_symposium_name(cls, symposium_name: str | None):
+        if symposium_name is None:
+            return symposium_name
+        symposium_name = symposium_name.strip()
+        if not symposium_name:
+            raise ValueError("Symposium name cannot be empty.")
+        return symposium_name
+
+    @field_validator("rooms_available")
+    @classmethod
+    def validate_rooms_available(cls, rooms_available: int | None):
+        if rooms_available is None:
+            return rooms_available
+        if rooms_available > MAX_ROOMS:
+            raise ValueError(f"You may not choose more than {MAX_ROOMS} rooms.")
+        return rooms_available
+
+    @model_validator(mode="after")
+    def validate_has_updates(self):
+        if self.symposium_name is None and self.rooms_available is None:
+            raise ValueError(
+                "At least one symposium field must be provided for update."
+            )
+        return self
+
+
+class UpdatePresentationRequest(BaseModel):
+    presentation_id: UUID
+    title: str | None = None
+    class_id: UUID | None = None
+    minutes: int | None = None
+    presenting_students: list[UUID] | None = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, title: str | None):
+        if title is None:
+            return title
+        title = title.strip()
+        if not title:
+            raise ValueError("Title cannot be empty")
+        return title
+
+    @field_validator("minutes")
+    @classmethod
+    def validate_minutes(cls, minutes: int | None):
+        if minutes is None:
+            return minutes
+        if minutes > MAX_TIME or minutes < 1:
+            raise ValueError(f"Presentations must be between 1 and {MAX_TIME}")
+        return minutes
+
+    @field_validator("presenting_students")
+    @classmethod
+    def validate_presenting_students(cls, presenting_students: list[UUID] | None):
+        if presenting_students is None:
+            return presenting_students
+        if len(presenting_students) > MAX_PRESENTING_STUDENTS:
+            raise ValueError(
+                f"No more than {MAX_PRESENTING_STUDENTS} can present one presentation"
+            )
+        return presenting_students
+
+    @model_validator(mode="after")
+    def validate_has_updates(self):
+        if (
+            self.title is None
+            and self.class_id is None
+            and self.minutes is None
+            and self.presenting_students is None
+        ):
+            raise ValueError(
+                "At least one presentation field must be provided for update."
+            )
+        return self
