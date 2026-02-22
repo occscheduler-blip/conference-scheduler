@@ -2,16 +2,36 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4, UUID
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from app.supabase_io import delete, read, write
 from app.supabase_io.client import supabase
 
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
 from app.supabase_io.client import supabase
+from app.config import get_settings
 
-router = APIRouter(prefix="/events", tags=["events"])
+
+def require_backend_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    settings = get_settings()
+    required_key = settings.backend_api_key.strip()
+    if not required_key:
+        return
+    if x_api_key != required_key:
+        raise HTTPException(status_code=401, detail="Invalid API key.")
+
+router = APIRouter(prefix="/events", tags=["events"], dependencies=[Depends(require_backend_api_key)])
 SYMPOSIUM_DATAFRAMES: dict[int, dict[str, pd.DataFrame]] = {}
+
+
+def _serialize_update_fields(fields: dict):
+    serialized: dict = {}
+    for key, value in fields.items():
+        if isinstance(value, UUID):
+            serialized[key] = str(value)
+        else:
+            serialized[key] = value
+    return serialized
 
 
 @router.post("/add_class")
@@ -35,8 +55,9 @@ def add_class(payload: request_schemas.AddClassRequest):
         prof_resp = write.insert("professors", professors_payload)
         return {
             "status": "Inserted",
-            "class_id": class_def.id,
-            "department_id": class_def.department_id,
+            "class_id": str(class_def.id),
+            "department_id": str(class_def.department_id),
+            "professor_ids": [str(professor.id) for professor in professors],
             "records_inserted": {"classes": 1, "professors": len(professors_payload)},
         }
     except HTTPException:
@@ -282,6 +303,138 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
     }
 
 
+@router.put("/update_student")
+def update_student(payload: request_schemas.UpdateStudentRequest):
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"student_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        supabase.table("students").update(update_payload).eq(
+            "id", str(payload.student_id)
+        ).execute()
+
+        return {
+            "status": "updated",
+            "student_id": str(payload.student_id),
+            "fields_updated": sorted(update_payload.keys()),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update student: {exc}"
+        ) from exc
+
+
+@router.put("/update_class")
+def update_class(payload: request_schemas.UpdateClassRequest):
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"class_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        supabase.table("classes").update(update_payload).eq(
+            "id", str(payload.class_id)
+        ).execute()
+
+        return {
+            "status": "updated",
+            "class_id": str(payload.class_id),
+            "fields_updated": sorted(update_payload.keys()),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to update class: {exc}") from exc
+
+
+@router.put("/update_symposium")
+def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"symposium_id"},
+        )
+        if "symposium_name" in updates:
+            updates["name"] = updates.pop("symposium_name")
+        update_payload = _serialize_update_fields(updates)
+        supabase.table("symposiums").update(update_payload).eq(
+            "id", str(payload.symposium_id)
+        ).execute()
+
+        return {
+            "status": "updated",
+            "symposium_id": str(payload.symposium_id),
+            "fields_updated": sorted(update_payload.keys()),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update symposium: {exc}"
+        ) from exc
+
+
+@router.put("/update_presentation")
+def update_presentation(payload: request_schemas.UpdatePresentationRequest):
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"presentation_id", "presenting_students"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        if update_payload:
+            supabase.table("presentations").update(update_payload).eq(
+                "id", str(payload.presentation_id)
+            ).execute()
+
+        if payload.presenting_students is not None:
+            supabase.table("presenting_students").delete().eq(
+                "presentation_id", str(payload.presentation_id)
+            ).execute()
+            presenting_students_payload = [
+                supabase_schemas.PresentingStudents(
+                    id=uuid4(),
+                    presentation_id=payload.presentation_id,
+                    student_id=student_id,
+                ).model_dump()
+                for student_id in payload.presenting_students
+            ]
+            if presenting_students_payload:
+                write.insert("presenting_students", presenting_students_payload)
+
+        return {
+            "status": "updated",
+            "presentation_id": str(payload.presentation_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "presenting_students_updated": payload.presenting_students is not None,
+            "records_inserted": {
+                "presenting_students": (
+                    len(payload.presenting_students)
+                    if payload.presenting_students is not None
+                    else 0
+                )
+            },
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update presentation: {exc}"
+        ) from exc
+
+
 @router.get("/symposiums")
 def get_symposiums():
     try:
@@ -382,8 +535,99 @@ def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None 
 def delete_symposium(symposium_id: UUID):
     try:
         delete.delete_symposium(symposium_id)
-        return {"status": "deleted", "records deleted": {"symposiums": 1}}
+        return {"status": "deleted", "records_deleted": {"symposiums": 1}}
     except HTTPException:
         raise
     except Exception as exc:
-        raise ValueError(f"Failed to delete symposium: {exc}")
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete symposium: {exc}"
+            ) from exc
+
+
+@router.delete("/delete_department")
+def delete_department(department_id: UUID):
+    try:
+        delete.delete_department(department_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "departments": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete department: {exc}"
+            ) from exc
+    
+
+@router.delete("/delete_class")
+def delete_class(class_id: UUID):
+    try:
+        delete.delete_class(class_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "classes": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete class: {exc}"
+            ) from exc
+    
+@router.delete("/delete_student")
+def delete_student(student_id: UUID):
+    try:
+        delete.delete_student(student_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "students": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete student: {exc}"
+            ) from exc
+
+
+@router.delete("/delete_professor")
+def delete_professor(professor_id: UUID):
+    try:
+        delete.delete_professor(professor_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "professors": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete professor: {exc}"
+            ) from exc
+
+
+@router.delete("/delete_presentation")
+def delete_presentation(presentation_id: UUID):
+    try:
+        delete.delete_presentation(presentation_id)
+        return {
+            "status": "deleted",
+            "records_deleted": {
+                "presentations": 1
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+                status_code=400, detail=f"Failed to delete presentation: {exc}"
+            ) from exc

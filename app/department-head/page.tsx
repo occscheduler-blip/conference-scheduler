@@ -1,0 +1,424 @@
+"use client";
+
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+
+type DepartmentOption = { id: string; name: string };
+type ProfessorRow = { name: string; email: string };
+type SavedClass = {
+  localId: string;
+  classId: string;
+  professorIds: string[];
+  departmentId: string;
+  departmentName: string;
+  className: string;
+  professors: ProfessorRow[];
+};
+
+function toMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const joined = detail
+      .map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg))
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .join("; ");
+    if (joined) return joined;
+  }
+  if (detail && typeof detail === "object") {
+    const msg = (detail as { msg?: unknown }).msg;
+    if (typeof msg === "string" && msg.trim()) return msg;
+  }
+  return fallback;
+}
+
+export default function DepartmentHeadPage() {
+  const searchParams = useSearchParams();
+  const symposiumId = searchParams.get("symposium_id") ?? "";
+  const departmentIdFromLink = searchParams.get("department_id") ?? "";
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
+  const authHeaders = useMemo(
+    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
+    [backendApiKey]
+  );
+
+  const [symposiumName, setSymposiumName] = useState<string>("");
+  const [departments, setDepartments] = useState<DepartmentOption[]>([]);
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>("");
+  const [className, setClassName] = useState("");
+  const [professors, setProfessors] = useState<ProfessorRow[]>([{ name: "", email: "" }]);
+  const [savedClasses, setSavedClasses] = useState<SavedClass[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deletingLocalId, setDeletingLocalId] = useState<string>("");
+  const [message, setMessage] = useState<string>("");
+
+  useEffect(() => {
+    if (!symposiumId) return;
+    let ignore = false;
+
+    const load = async () => {
+      setLoading(true);
+      setMessage("");
+      try {
+        const [symposiumsRes, departmentsRes] = await Promise.all([
+          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
+          fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`, {
+            headers: authHeaders,
+          }),
+        ]);
+
+        const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
+          | { data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
+          | Array<{ id?: string; name?: string; symposium_name?: string }>;
+        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
+          | { data?: Array<{ id?: string; department_name?: string }> }
+          | Array<{ id?: string; department_name?: string }>;
+
+        if (!symposiumsRes.ok) {
+          throw new Error(toMessage((symposiumsPayload as { detail?: unknown }).detail, "Failed to load symposium."));
+        }
+        if (!departmentsRes.ok) {
+          throw new Error(toMessage((departmentsPayload as { detail?: unknown }).detail, "Failed to load departments."));
+        }
+
+        const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
+        const match = symposiumRows.find((row) => row.id === symposiumId);
+        const resolvedName = match?.name ?? match?.symposium_name ?? symposiumId;
+
+        const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
+        const nextDepartments = departmentRows
+          .filter((row) => row.id)
+          .map((row) => ({ id: row.id as string, name: row.department_name ?? (row.id as string) }));
+
+        if (ignore) return;
+        setSymposiumName(resolvedName);
+        setDepartments(nextDepartments);
+
+        if (departmentIdFromLink && nextDepartments.some((department) => department.id === departmentIdFromLink)) {
+          setSelectedDepartmentId(departmentIdFromLink);
+        } else if (nextDepartments.length === 1) {
+          setSelectedDepartmentId(nextDepartments[0].id);
+        }
+      } catch (error) {
+        if (ignore) return;
+        const text = error instanceof Error ? error.message : "Unknown error";
+        setMessage(`Failed to load page data: ${text}`);
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    };
+
+    void load();
+    return () => {
+      ignore = true;
+    };
+  }, [authHeaders, backendUrl, departmentIdFromLink, symposiumId]);
+
+  const canSubmit = useMemo(() => {
+    if (!selectedDepartmentId || !className.trim()) return false;
+    return professors.some((prof) => prof.name.trim() && prof.email.trim());
+  }, [className, professors, selectedDepartmentId]);
+
+  const setProfessorField = (index: number, field: keyof ProfessorRow, value: string) => {
+    setProfessors((current) => current.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  };
+
+  const addProfessorRow = () => {
+    setProfessors((current) => [...current, { name: "", email: "" }]);
+  };
+
+  const removeProfessorRow = (index: number) => {
+    setProfessors((current) => (current.length === 1 ? current : current.filter((_row, i) => i !== index)));
+  };
+
+  const removeSavedClass = async (savedClass: SavedClass) => {
+    setMessage("");
+    setDeletingLocalId(savedClass.localId);
+    try {
+      if (savedClass.professorIds.length > 0) {
+        const professorDeletes = await Promise.all(
+          savedClass.professorIds.map(async (professorId) => {
+            const response = await fetch(
+              `${backendUrl}/api/events/delete_professor?professor_id=${encodeURIComponent(professorId)}`,
+              {
+                method: "DELETE",
+                headers: authHeaders,
+              }
+            );
+            const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+            if (!response.ok) {
+              throw new Error(toMessage(payload.detail, `Unable to delete professor ${professorId}.`));
+            }
+            return true;
+          })
+        );
+        if (professorDeletes.length !== savedClass.professorIds.length) {
+          throw new Error("Not all professors were deleted.");
+        }
+      }
+
+      const classResponse = await fetch(
+        `${backendUrl}/api/events/delete_class?class_id=${encodeURIComponent(savedClass.classId)}`,
+        {
+          method: "DELETE",
+          headers: authHeaders,
+        }
+      );
+      const classPayload = (await classResponse.json().catch(() => ({}))) as { detail?: unknown };
+      if (!classResponse.ok) {
+        throw new Error(toMessage(classPayload.detail, "Unable to delete class."));
+      }
+
+      setSavedClasses((current) => current.filter((item) => item.localId !== savedClass.localId));
+      setMessage(`Deleted class "${savedClass.className}".`);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "Unknown error";
+      setMessage(`Delete failed: ${text}`);
+    } finally {
+      setDeletingLocalId("");
+    }
+  };
+
+  const handleDeployClasses = () => {
+    setMessage(
+      "Deploy Class is not connected yet. It will send each professor an email link with their professor_id in the URL."
+    );
+  };
+
+  const submitProfessors = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage("");
+
+    const cleanProfessors = professors
+      .map((professor) => ({
+        name: professor.name.trim(),
+        email: professor.email.trim().toLowerCase(),
+      }))
+      .filter((professor) => professor.name && professor.email);
+
+    if (!selectedDepartmentId) {
+      setMessage("Select a department.");
+      return;
+    }
+    if (!className.trim()) {
+      setMessage("Enter a class name.");
+      return;
+    }
+    if (cleanProfessors.length === 0) {
+      setMessage("Add at least one professor with name and email.");
+      return;
+    }
+
+    const departmentName =
+      departments.find((department) => department.id === selectedDepartmentId)?.name ?? selectedDepartmentId;
+
+    setSaving(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/events/add_class`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeaders ?? {}),
+        },
+        body: JSON.stringify({
+          name: className.trim(),
+          department_id: selectedDepartmentId,
+          professors: cleanProfessors,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
+        setMessage(`Save failed: ${toMessage(payload.detail, "Unable to save class.")}`);
+        return;
+      }
+      const addClassPayload = payload as {
+        class_id?: string;
+        professor_ids?: string[];
+      };
+      const classId = addClassPayload.class_id;
+      const professorIds = addClassPayload.professor_ids ?? [];
+      if (!classId || !Array.isArray(professorIds)) {
+        setMessage("Save failed: backend did not return class/professor IDs.");
+        return;
+      }
+
+      const newClass: SavedClass = {
+        localId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        classId,
+        professorIds,
+        departmentId: selectedDepartmentId,
+        departmentName,
+        className: className.trim(),
+        professors: cleanProfessors,
+      };
+      setSavedClasses((current) => [...current, newClass]);
+      setClassName("");
+      setProfessors([{ name: "", email: "" }]);
+      setMessage(`Saved class "${newClass.className}" for ${departmentName}.`);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "Unknown error";
+      if (text.toLowerCase().includes("load failed") || text.toLowerCase().includes("failed to fetch")) {
+        setMessage(`Save failed: backend is unreachable at ${backendUrl}.`);
+      } else {
+        setMessage(`Save failed: ${text}`);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
+      <div className="mx-auto w-full max-w-6xl">
+        <div className="mb-3 flex justify-end">
+          <Link
+            href="/"
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          >
+            Home
+          </Link>
+        </div>
+        <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
+          <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
+            OCC THESIS SYMPOSIUM - DEPARTMENT HEAD
+          </h1>
+        </header>
+
+        <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+          <h2 className="text-xl font-bold text-[#111] md:text-2xl">Add Classes</h2>
+          <p className="mt-2 text-sm font-semibold text-[#2d3d7a]">
+            Symposium: {symposiumName || (symposiumId ? symposiumId : "Missing symposium_id")}
+          </p>
+
+          {!symposiumId ? (
+            <p className="mt-4 text-sm font-semibold text-[#9a1f1f]">
+              Open this page with `?symposium_id=&lt;uuid&gt;` in the URL.
+            </p>
+          ) : null}
+
+          <form onSubmit={submitProfessors} className="mt-4 space-y-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Department</span>
+              <select
+                value={selectedDepartmentId}
+                onChange={(event) => setSelectedDepartmentId(event.target.value)}
+                disabled={loading || departments.length === 0}
+                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">Select department</option>
+                {departments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Class Name</span>
+              <input
+                value={className}
+                onChange={(event) => setClassName(event.target.value)}
+                placeholder="e.g. BIO-500 Thesis Seminar"
+                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+              />
+            </label>
+
+            <div className="space-y-3">
+              {professors.map((professor, index) => (
+                <div key={index} className="rounded-lg border border-[#d7e0ff] bg-[#fdfdff] p-3">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
+                    <input
+                      value={professor.name}
+                      onChange={(event) => setProfessorField(index, "name", event.target.value)}
+                      placeholder="Professor name"
+                      className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                    />
+                    <input
+                      type="email"
+                      value={professor.email}
+                      onChange={(event) => setProfessorField(index, "email", event.target.value)}
+                      placeholder="name@hamilton.edu"
+                      className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeProfessorRow(index)}
+                      className="rounded-lg border border-[#b7b7b7] bg-white px-3 py-2 text-sm font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={addProfessorRow}
+                className="rounded-lg border border-[#0f33a8] bg-white px-4 py-2 text-sm font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+              >
+                Add Another Professor
+              </button>
+              <button
+                type="submit"
+                disabled={!canSubmit || saving}
+                className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? "Saving..." : "Save Class"}
+              </button>
+            </div>
+
+            {message ? <p className="text-sm font-semibold text-[#222]">{message}</p> : null}
+          </form>
+
+          {savedClasses.length > 0 ? (
+            <div className="mt-6 rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-4">
+              <h3 className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a] md:text-base">
+                Saved Classes
+              </h3>
+              <div className="mt-3 space-y-3">
+                {savedClasses.map((savedClass) => (
+                  <div key={savedClass.localId} className="rounded-lg border border-[#d7e0ff] bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-[#111]">
+                        {savedClass.departmentName}: {savedClass.className}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void removeSavedClass(savedClass)}
+                        disabled={deletingLocalId === savedClass.localId}
+                        className="rounded-lg border border-[#b7b7b7] bg-white px-2.5 py-1 text-xs font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
+                      >
+                        {deletingLocalId === savedClass.localId ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
+                    <ul className="mt-2 space-y-1 text-sm text-[#333]">
+                      {savedClass.professors.map((professor, index) => (
+                        <li key={`${savedClass.localId}-${index}`}>
+                          {professor.name} ({professor.email})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={handleDeployClasses}
+                  className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(27,110,43,0.25)] transition hover:bg-[#155622]"
+                >
+                  Deploy
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      </div>
+    </main>
+  );
+}

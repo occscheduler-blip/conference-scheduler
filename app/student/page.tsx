@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 type StudentTab = "availability" | "preferences";
@@ -60,6 +61,14 @@ export default function StudentPage() {
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
+        <div className="mb-3 flex justify-end">
+          <Link
+            href="/"
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          >
+            Home
+          </Link>
+        </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
             OCC THESIS SYMPOSIUM - STUDENT
