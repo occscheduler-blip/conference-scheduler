@@ -164,6 +164,37 @@ def _get_table_columns(*, schema: str, table_name: str) -> set[str]:
     return {row[0] for row in rows}
 
 
+def _table_exists(*, schema: str, table_name: str) -> bool:
+    db_url = write._resolve_db_url()
+    query = """
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = %s AND table_name = %s
+    LIMIT 1
+    """
+    with write._connection(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (schema, table_name))
+            return cur.fetchone() is not None
+
+
+def _pick_existing_table(*, schema: str, candidates: list[str]) -> str | None:
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            table_name = write._validate_identifier(candidate, "table name")
+        except ValueError:
+            continue
+        if table_name in seen:
+            continue
+        seen.add(table_name)
+        if _table_exists(schema=schema, table_name=table_name):
+            return table_name
+    return None
+
+
 def _get_table_columns_with_types(*, schema: str, table_name: str) -> list[tuple[str, str]]:
     db_url = write._resolve_db_url()
     query = """
@@ -222,9 +253,28 @@ def _department_table_info() -> tuple[str, str, dict[str, str]]:
 
 def _symposium_table_info() -> tuple[str, str, str]:
     settings = get_settings()
-    symposium_table = write._validate_identifier(settings.supabase_symposiums_table, "table name")
-    timeframes_table = write._validate_identifier(settings.supabase_timeframes_table, "table name")
     schema = write._validate_identifier("public", "schema")
+
+    symposium_table = _pick_existing_table(
+        schema=schema,
+        candidates=[
+            settings.supabase_symposiums_table,
+            settings.supabase_events_table,
+            "symposiums",
+            "symposium",
+            "events",
+        ],
+    ) or write._validate_identifier(settings.supabase_symposiums_table, "table name")
+
+    timeframes_table = _pick_existing_table(
+        schema=schema,
+        candidates=[
+            settings.supabase_timeframes_table,
+            "timeframes",
+            "timeframe",
+        ],
+    ) or write._validate_identifier(settings.supabase_timeframes_table, "table name")
+
     return schema, symposium_table, timeframes_table
 
 

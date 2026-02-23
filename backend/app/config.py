@@ -1,11 +1,16 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False
+        env_file=(_ENV_PATH, ".env"),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
     )
 
     app_name: str = "Conference Scheduler API"
@@ -14,11 +19,6 @@ class Settings(BaseSettings):
 
     backend_cors_origins: str = "http://localhost:3000"
     backend_api_key: str = ""
-<<<<<<< HEAD
-
-=======
-    
->>>>>>> fb51a0f (pulled from main and now fixed and finished the edit symposium page)
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_db_url: str = ""
