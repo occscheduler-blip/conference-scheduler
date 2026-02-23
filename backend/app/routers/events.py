@@ -363,19 +363,26 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
             for timeframe in payload.timeframes
         ]
         timeframe_payload = [item.model_dump() for item in timeframes]
+        timeframe_resp = write.insert("timeframes", timeframe_payload)
+        timeframes_inserted = _rows_affected(timeframe_resp, fallback=len(timeframe_payload))
+        records_deleted = {"timeframes": deleted_timeframes}
+        records_inserted = {"timeframes": timeframes_inserted}
 
-    timeframe_resp = write.insert("timeframes", timeframe_payload)
-    timeframes_inserted = _rows_affected(timeframe_resp, fallback=len(timeframe_payload))
-    records_deleted = {"timeframes": deleted_timeframes}
-    records_inserted = {"timeframes": timeframes_inserted}
-
-    return {
-        "status": "updated",
-        "linked_id": payload.linked_id,
-        "records_deleted": records_deleted,
-        "records_inserted": records_inserted,
-        "lines_edited": _sum_counts(records_deleted, records_inserted),
-    }
+        return {
+            "status": "updated",
+            "linked_id": payload.linked_id,
+            "records_deleted": records_deleted,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_deleted, records_inserted),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update timeframes: {exc}"
+        ) from exc
 
 
 @router.put("/update_student")
