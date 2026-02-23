@@ -11,7 +11,6 @@ const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
 
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
-const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const departmentOptions = [
   "Africana Studies",
   "American Indian and Indigenous Studies",
@@ -93,6 +92,14 @@ function toDateInputValue(date: Date) {
   const month = `${date.getMonth() + 1}`.padStart(2, "0");
   const day = `${date.getDate()}`.padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function formatCalendarDate(date: Date) {
+  return date.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function parseBackendDateTime(value: string) {
@@ -693,7 +700,7 @@ export default function AdminPage() {
                   <div />
                   {calendarDates.map((date) => (
                     <div key={date.toISOString()} className="border-b border-[#777] pb-1">
-                      {weekDays[date.getDay()]}
+                      {formatCalendarDate(date)}
                     </div>
                   ))}
                 </div>
@@ -716,7 +723,7 @@ export default function AdminPage() {
                             className={`h-4 border-r border-l border-b border-[#333] ${
                               showHourLine ? "border-t border-t-[#333]" : ""
                             } ${available ? "bg-[#38a000]" : "bg-[#f0d7d9]"}`}
-                            aria-label={`${weekDays[date.getDay()]} ${formatTimeLabel(slotIndex)}`}
+                            aria-label={`${formatCalendarDate(date)} ${formatTimeLabel(slotIndex)}`}
                           />
                         );
                       })}
@@ -825,7 +832,7 @@ export default function AdminPage() {
                 <div />
                 {calendarDates.map((date) => (
                   <div key={date.toISOString()} className="border-b border-[#777] pb-1">
-                    {weekDays[date.getDay()]}
+                    {formatCalendarDate(date)}
                   </div>
                 ))}
               </div>
@@ -853,7 +860,7 @@ export default function AdminPage() {
                           className={`h-4 border-r border-l border-b border-[#333] ${
                             showHourLine ? "border-t border-t-[#333]" : ""
                           } ${available ? "bg-[#38a000]" : "bg-[#f0d7d9]"}`}
-                          aria-label={`${weekDays[date.getDay()]} ${formatTimeLabel(slotIndex)}`}
+                          aria-label={`${formatCalendarDate(date)} ${formatTimeLabel(slotIndex)}`}
                         />
                       );
                     })}

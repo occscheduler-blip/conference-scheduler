@@ -274,33 +274,37 @@ def add_prof_request(payload: request_schemas.AddProfReqRequest):
 
 @router.put("/update_timeframes")
 def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
-    if (
-        payload.linked_id
-        not in supabase.table("timeframes").select("linked_id", distinct=True).execute()
-    ):
-        raise ValueError("linked_id not in timeframes table.")
+    try:
+        deleted_timeframes = delete.delete_timeframes(payload.linked_id)
 
-    deleted_timeframes = delete.delete_timeframes(payload.linked_id)
+        timeframes = [
+            supabase_schemas.Timeframe(
+                id=uuid4(),
+                linked_id=payload.linked_id,
+                start_time=timeframe.start_time,
+                end_time=timeframe.end_time,
+            )
+            for timeframe in payload.timeframes
+        ]
+        timeframe_payload = [item.model_dump() for item in timeframes]
 
-    timeframes = [
-        supabase_schemas.Timeframe(
-            id=uuid4(),
-            linked_id=payload.linked_id,
-            start_time=timeframe.start_time,
-            end_time=timeframe.end_time,
-        )
-        for timeframe in payload.timeframes
-    ]
-    timeframe_payload = [item.model_dump() for item in timeframes]
+        if timeframe_payload:
+            write.insert("timeframes", timeframe_payload)
 
-    timeframe_resp = write.insert("timeframes", timeframe_payload)
-
-    return {
-        "status": "updated",
-        "linked_id": payload.linked_id,
-        "records_deleted": {"timeframes": deleted_timeframes},
-        "records_inserted": {"timeframes": len(timeframe_payload)},
-    }
+        return {
+            "status": "updated",
+            "linked_id": str(payload.linked_id),
+            "records_deleted": {"timeframes": deleted_timeframes},
+            "records_inserted": {"timeframes": len(timeframe_payload)},
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update timeframes: {exc}"
+        ) from exc
 
 
 @router.put("/update_student")
