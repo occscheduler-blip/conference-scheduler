@@ -2,12 +2,19 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type FacultyTab = "availability" | "students";
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
 type CalendarDay = { key: string; label: string };
-type PresentationGroup = { id: string; studentNames: string[]; presentationName: string };
+type UploadedStudent = { id: string; name: string };
+type PresentationGroup = {
+  id: string;
+  studentIds: string[];
+  studentNames: string[];
+  presentationName: string;
+  durationMinutes: string;
+};
 
 function formatTimeLabel(slotIndex: number) {
   const totalMinutes = 9 * 60 + slotIndex * 15;
@@ -90,6 +97,16 @@ function buildCandidateUrls(baseUrl: string, path: string): string[] {
   return [direct];
 }
 
+function normalizeId(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value.trim()
+  );
+}
+
 export default function FacultyPage() {
   const searchParams = useSearchParams();
   const professorId = searchParams.get("professor_id") ?? "";
@@ -105,11 +122,23 @@ export default function FacultyPage() {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvUploading, setCsvUploading] = useState(false);
   const [csvMessage, setCsvMessage] = useState<string | null>(null);
-  const [uploadedStudentNames, setUploadedStudentNames] = useState<string[]>([]);
+  const [deletingStudentIds, setDeletingStudentIds] = useState<string[]>([]);
+  const [showManualStudentEntry, setShowManualStudentEntry] = useState(false);
+  const [manualStudentName, setManualStudentName] = useState("");
+  const [manualStudentEmail, setManualStudentEmail] = useState("");
+  const [manualStudentSubmitting, setManualStudentSubmitting] = useState(false);
+  const [manualStudentMessage, setManualStudentMessage] = useState<string | null>(null);
+  const csvInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadedStudents, setUploadedStudents] = useState<UploadedStudent[]>([]);
   const [selectedUploadedStudentKeys, setSelectedUploadedStudentKeys] = useState<string[]>([]);
   const [presentationGroups, setPresentationGroups] = useState<PresentationGroup[]>([]);
+  const [deployedPresentationGroups, setDeployedPresentationGroups] = useState<PresentationGroup[]>([]);
   const [groupMessage, setGroupMessage] = useState<string>("");
   const [deployMessage, setDeployMessage] = useState<string>("");
+  const [deployingPresentations, setDeployingPresentations] = useState<boolean>(false);
+  const [deletingPresentationGroupIds, setDeletingPresentationGroupIds] = useState<string[]>([]);
+  const [defaultPresentationDuration, setDefaultPresentationDuration] = useState<string>("");
+  const [usePerPresentationDuration, setUsePerPresentationDuration] = useState<boolean>(false);
   const [professorName, setProfessorName] = useState<string>("");
   const [classId, setClassId] = useState<string>("");
   const [className, setClassName] = useState<string>("");
@@ -126,6 +155,37 @@ export default function FacultyPage() {
   const authHeaders = useMemo(
     () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
     [backendApiKey]
+  );
+
+  const fetchClassStudentNames = useCallback(
+    async (targetClassId: string) => {
+      if (!targetClassId) return [] as UploadedStudent[];
+      let response: Response | null = null;
+      let payload:
+        | { detail?: unknown; data?: Array<{ id?: string; name?: string }> }
+        | Array<{ id?: string; name?: string }> = {};
+      for (const url of buildCandidateUrls(
+        backendUrl,
+        `/api/events/students?class_id=${encodeURIComponent(targetClassId)}`
+      )) {
+        response = await fetch(url, { headers: authHeaders, cache: "no-store" });
+        payload = (await response.json().catch(() => ({}))) as
+          | { detail?: unknown; data?: Array<{ name?: string }> }
+          | Array<{ name?: string }>;
+        if (response.status !== 404) break;
+      }
+      if (!response || !response.ok) {
+        throw new Error(toMessage((payload as { detail?: unknown }).detail, "Failed to load students."));
+      }
+      const rows = Array.isArray(payload) ? payload : (payload.data ?? []);
+      return rows
+        .map((row, index) => ({
+          id: row.id ?? `row-${index}`,
+          name: (row.name ?? "").trim(),
+        }))
+        .filter((row) => row.name.length > 0);
+    },
+    [authHeaders, backendUrl]
   );
 
   useEffect(() => {
@@ -194,6 +254,82 @@ export default function FacultyPage() {
         const matchedDepartment = departmentRows.find((row) => row.id === matchedClass?.department_id);
         const symposiumId = matchedDepartment?.symposium_id ?? "";
         const matchedSymposium = symposiumRows.find((row) => row.id === symposiumId);
+        const existingStudents = resolvedClassId ? await fetchClassStudentNames(resolvedClassId) : [];
+        const studentById = new Map(existingStudents.map((student) => [normalizeId(student.id), student]));
+
+        let existingGroups: PresentationGroup[] = [];
+        if (resolvedClassId) {
+          let presentationsRes: Response | null = null;
+          let presentationsPayload:
+            | { detail?: unknown; data?: Array<{ id?: string; title?: string; minutes?: number }> }
+            | Array<{ id?: string; title?: string; minutes?: number }> = {};
+          for (const url of buildCandidateUrls(
+            backendUrl,
+            `/api/events/presentations?class_id=${encodeURIComponent(resolvedClassId)}`
+          )) {
+            presentationsRes = await fetch(url, { headers: authHeaders });
+            presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
+              | { detail?: unknown; data?: Array<{ id?: string; title?: string; minutes?: number }> }
+              | Array<{ id?: string; title?: string; minutes?: number }>;
+            if (presentationsRes.status !== 404) break;
+          }
+          if (!presentationsRes || !presentationsRes.ok) {
+            throw new Error(
+              toMessage((presentationsPayload as { detail?: unknown }).detail, "Failed to load presentations.")
+            );
+          }
+
+          const presentationRows = Array.isArray(presentationsPayload)
+            ? presentationsPayload
+            : (presentationsPayload.data ?? []);
+          const groups: PresentationGroup[] = [];
+
+          for (const presentation of presentationRows) {
+            const presentationId = presentation.id ?? "";
+            if (!presentationId) continue;
+
+            let presentingRes: Response | null = null;
+            let presentingPayload:
+              | { detail?: unknown; data?: Array<{ student_id?: string; studentId?: string }> }
+              | Array<{ student_id?: string; studentId?: string }> = {};
+            for (const url of buildCandidateUrls(
+              backendUrl,
+              `/api/events/presenting_students?presentation_id=${encodeURIComponent(presentationId)}`
+            )) {
+              presentingRes = await fetch(url, { headers: authHeaders });
+              presentingPayload = (await presentingRes.json().catch(() => ({}))) as
+                | { detail?: unknown; data?: Array<{ student_id?: string; studentId?: string }> }
+                | Array<{ student_id?: string; studentId?: string }>;
+              if (presentingRes.status !== 404) break;
+            }
+            if (!presentingRes || !presentingRes.ok) {
+              throw new Error(
+                toMessage((presentingPayload as { detail?: unknown }).detail, "Failed to load presentation members.")
+              );
+            }
+
+            const presentingRows = Array.isArray(presentingPayload)
+              ? presentingPayload
+              : (presentingPayload.data ?? []);
+            const studentIds = presentingRows
+              .map((row) => row.student_id ?? row.studentId ?? "")
+              .map((id) => normalizeId(id))
+              .filter((id) => id.length > 0);
+            const studentNames = studentIds
+              .map((studentId) => studentById.get(studentId)?.name)
+              .filter((name): name is string => Boolean(name && name.trim().length > 0));
+
+            groups.push({
+              id: presentationId,
+              studentIds,
+              studentNames,
+              presentationName: presentation.title ?? "",
+              durationMinutes:
+                typeof presentation.minutes === "number" ? String(presentation.minutes) : "",
+            });
+          }
+          existingGroups = groups;
+        }
 
         let nextCalendarDays: CalendarDay[] = [];
         let nextEditableSlots: boolean[][] = [];
@@ -322,6 +458,29 @@ export default function FacultyPage() {
         setClassId(resolvedClassId);
         setClassName(matchedClass?.name ?? "");
         setSymposiumName(matchedSymposium?.name ?? matchedSymposium?.symposium_name ?? "");
+        const groupedStudentIds = new Set(existingGroups.flatMap((group) => group.studentIds));
+        setUploadedStudents(existingStudents.filter((student) => !groupedStudentIds.has(normalizeId(student.id))));
+        setSelectedUploadedStudentKeys([]);
+        setPresentationGroups([]);
+        setDeployedPresentationGroups(existingGroups);
+        const uniqueDurations = Array.from(
+          new Set(
+            existingGroups
+              .map((group) => group.durationMinutes.trim())
+              .filter((value) => value.length > 0)
+          )
+        );
+        if (uniqueDurations.length === 1) {
+          setUsePerPresentationDuration(false);
+          setDefaultPresentationDuration(uniqueDurations[0]);
+        } else if (uniqueDurations.length > 1) {
+          setUsePerPresentationDuration(true);
+          setDefaultPresentationDuration("");
+        } else {
+          setUsePerPresentationDuration(false);
+          setDefaultPresentationDuration("");
+        }
+        setGroupMessage("");
         setCalendarDays(nextCalendarDays);
         setCalendarMessage(nextCalendarDays.length === 0 ? "No symposium dates are configured yet." : "");
       } catch (error) {
@@ -329,6 +488,13 @@ export default function FacultyPage() {
         const message = error instanceof Error ? error.message : "Unknown error";
         setIdentityMessage(message);
         setSymposiumName("");
+        setUploadedStudents([]);
+        setSelectedUploadedStudentKeys([]);
+        setPresentationGroups([]);
+        setDeployedPresentationGroups([]);
+        setUsePerPresentationDuration(false);
+        setDefaultPresentationDuration("");
+        setGroupMessage("");
         setEditableSlots([]);
         setCalendarDays([]);
         setAvailability([]);
@@ -341,7 +507,7 @@ export default function FacultyPage() {
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl, professorId]);
+  }, [authHeaders, backendUrl, fetchClassStudentNames, professorId]);
 
   useEffect(() => {
     const stopDragging = () => {
@@ -524,11 +690,23 @@ export default function FacultyPage() {
       const inserted = payload.records_inserted?.students ?? students.length;
       const skipped = Math.max(0, lines.length - 1 - students.length);
       setCsvMessage(`Upload successful: inserted ${inserted} student${inserted === 1 ? "" : "s"}${skipped > 0 ? `, skipped ${skipped}` : ""}.`);
-      setUploadedStudentNames(students.map((student) => student.name));
+      const refreshedStudents = await fetchClassStudentNames(classId);
+      const mergedStudents = [...refreshedStudents];
+      const seen = new Set(mergedStudents.map((student) => student.name.trim().toLowerCase()));
+      for (const student of students) {
+        const nameKey = student.name.trim().toLowerCase();
+        if (!nameKey || seen.has(nameKey)) continue;
+        seen.add(nameKey);
+        mergedStudents.push({
+          id: `temp-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          name: student.name.trim(),
+        });
+      }
+      setUploadedStudents(mergedStudents);
       setSelectedUploadedStudentKeys([]);
-      setPresentationGroups([]);
       setGroupMessage("");
       setCsvFile(null);
+      if (csvInputRef.current) csvInputRef.current.value = "";
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
@@ -541,19 +719,113 @@ export default function FacultyPage() {
     }
   }
 
+  const handleManualStudentAdd = async () => {
+    setManualStudentMessage(null);
+    if (!classId) {
+      setManualStudentMessage("Missing class_id for this professor link.");
+      return;
+    }
+
+    const name = manualStudentName.trim();
+    const email = manualStudentEmail.trim().toLowerCase();
+    if (!name) {
+      setManualStudentMessage("Enter a student name.");
+      return;
+    }
+    if (!email) {
+      setManualStudentMessage("Enter a student email.");
+      return;
+    }
+
+    setManualStudentSubmitting(true);
+    try {
+      let response: Response | null = null;
+      let payload: { detail?: unknown } = {};
+      for (const url of buildCandidateUrls(backendUrl, "/api/events/add_students")) {
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(authHeaders ?? {}),
+          },
+          body: JSON.stringify({
+            class_id: classId,
+            students: [{ name, email }],
+          }),
+        });
+        payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (response.status !== 404) break;
+      }
+
+      if (!response || !response.ok) {
+        setManualStudentMessage(`Add failed: ${toMessage(payload.detail, "Unable to add student.")}`);
+        return;
+      }
+
+      const refreshedStudents = await fetchClassStudentNames(classId);
+      setUploadedStudents(refreshedStudents);
+      setManualStudentName("");
+      setManualStudentEmail("");
+      setManualStudentMessage(`Added ${name}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
+        setManualStudentMessage(`Add failed: backend is unreachable at ${backendUrl}.`);
+      } else {
+        setManualStudentMessage(`Add failed: ${message}`);
+      }
+    } finally {
+      setManualStudentSubmitting(false);
+    }
+  };
+
   const toggleUploadedStudent = (studentKey: string) => {
     setSelectedUploadedStudentKeys((current) =>
       current.includes(studentKey) ? current.filter((key) => key !== studentKey) : [...current, studentKey]
     );
   };
 
+  const deleteUploadedStudent = async (studentId: string, studentName: string) => {
+    const confirmed = window.confirm(`Delete ${studentName}?`);
+    if (!confirmed) return;
+    setDeletingStudentIds((current) => [...current, studentId]);
+    try {
+      let response: Response | null = null;
+      let payload: { detail?: unknown } = {};
+      for (const url of buildCandidateUrls(
+        backendUrl,
+        `/api/events/delete_student?student_id=${encodeURIComponent(studentId)}`
+      )) {
+        response = await fetch(url, {
+          method: "DELETE",
+          headers: authHeaders,
+        });
+        payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (response.status !== 404) break;
+      }
+      if (!response || !response.ok) {
+        setCsvMessage(`Delete failed: ${toMessage(payload.detail, "Unable to delete student.")}`);
+        return;
+      }
+      setUploadedStudents((current) => current.filter((student) => student.id !== studentId));
+      setSelectedUploadedStudentKeys((current) => current.filter((key) => key !== studentId));
+      setCsvMessage(`Deleted ${studentName}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
+        setCsvMessage(`Delete failed: backend is unreachable at ${backendUrl}.`);
+      } else {
+        setCsvMessage(`Delete failed: ${message}`);
+      }
+    } finally {
+      setDeletingStudentIds((current) => current.filter((id) => id !== studentId));
+    }
+  };
+
   const handleMakePresentationGroup = () => {
-    const entries = uploadedStudentNames.map((name, index) => ({
-      name,
-      key: `${name}-${index}`,
-    }));
-    const selectedEntries = entries.filter((entry) => selectedUploadedStudentKeys.includes(entry.key));
+    const selectedEntries = uploadedStudents.filter((student) => selectedUploadedStudentKeys.includes(student.id));
     const selectedNames = selectedEntries.map((entry) => entry.name);
+    const selectedIds = selectedEntries.map((entry) => entry.id);
     if (selectedNames.length === 0) {
       setGroupMessage("Select at least one student to make a presentation group.");
       return;
@@ -562,11 +834,13 @@ export default function FacultyPage() {
       ...current,
       {
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        studentIds: selectedIds,
         studentNames: selectedNames,
         presentationName: "",
+        durationMinutes: "",
       },
     ]);
-    setUploadedStudentNames(entries.filter((entry) => !selectedUploadedStudentKeys.includes(entry.key)).map((entry) => entry.name));
+    setUploadedStudents((current) => current.filter((student) => !selectedUploadedStudentKeys.includes(student.id)));
     setSelectedUploadedStudentKeys([]);
     setGroupMessage("");
   };
@@ -575,6 +849,192 @@ export default function FacultyPage() {
     setPresentationGroups((current) =>
       current.map((group) => (group.id === groupId ? { ...group, presentationName: value } : group))
     );
+  };
+
+  const setPresentationGroupDuration = (groupId: string, value: string) => {
+    setPresentationGroups((current) =>
+      current.map((group) => (group.id === groupId ? { ...group, durationMinutes: value } : group))
+    );
+  };
+
+  const restoreStudentsFromGroup = (target: PresentationGroup) => {
+    setUploadedStudents((students) => {
+      const existing = new Set(students.map((student) => normalizeId(student.id)));
+      const additions: UploadedStudent[] = [];
+      target.studentIds.forEach((studentId, index) => {
+        const normalized = normalizeId(studentId);
+        if (existing.has(normalized)) return;
+        existing.add(normalized);
+        additions.push({
+          id: studentId,
+          name: target.studentNames[index] ?? "Student",
+        });
+      });
+      return [...students, ...additions];
+    });
+  };
+
+  const removePresentationGroupFromUi = (groupId: string, source: "draft" | "deployed" = "draft") => {
+    if (source === "deployed") {
+      setDeployedPresentationGroups((current) => {
+        const target = current.find((group) => group.id === groupId);
+        if (target) restoreStudentsFromGroup(target);
+        return current.filter((group) => group.id !== groupId);
+      });
+      return;
+    }
+    setPresentationGroups((current) => {
+      const target = current.find((group) => group.id === groupId);
+      if (target) restoreStudentsFromGroup(target);
+      return current.filter((group) => group.id !== groupId);
+    });
+  };
+
+  const handleDeletePresentationGroup = async (
+    group: PresentationGroup,
+    source: "draft" | "deployed" = "draft"
+  ) => {
+    const confirmed = window.confirm(`Delete presentation "${group.presentationName || "Untitled"}"?`);
+    if (!confirmed) return;
+
+    if (!isUuid(group.id)) {
+      removePresentationGroupFromUi(group.id, source);
+      setDeployMessage("Removed unsaved presentation group.");
+      return;
+    }
+
+    setDeletingPresentationGroupIds((current) => [...current, group.id]);
+    try {
+      let response: Response | null = null;
+      let payload: { detail?: unknown } = {};
+      for (const url of buildCandidateUrls(
+        backendUrl,
+        `/api/events/delete_presentation?presentation_id=${encodeURIComponent(group.id)}`
+      )) {
+        response = await fetch(url, {
+          method: "DELETE",
+          headers: authHeaders,
+        });
+        payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (response.status !== 404) break;
+      }
+
+      if (!response || !response.ok) {
+        setDeployMessage(`Delete failed: ${toMessage(payload.detail, "Unable to delete presentation.")}`);
+        return;
+      }
+
+      removePresentationGroupFromUi(group.id, source);
+      setDeployMessage("Deleted presentation group.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
+        setDeployMessage(`Delete failed: backend is unreachable at ${backendUrl}.`);
+      } else {
+        setDeployMessage(`Delete failed: ${message}`);
+      }
+    } finally {
+      setDeletingPresentationGroupIds((current) => current.filter((id) => id !== group.id));
+    }
+  };
+
+  const handleDeployPresentations = async () => {
+    setDeployMessage("");
+    if (!classId) {
+      setDeployMessage("Missing class_id for this professor link.");
+      return;
+    }
+    if (presentationGroups.length === 0) {
+      setDeployMessage("Create at least one presentation group before deploying.");
+      return;
+    }
+
+    for (let i = 0; i < presentationGroups.length; i += 1) {
+      const group = presentationGroups[i];
+      if (!group.presentationName.trim()) {
+        setDeployMessage(`Enter a presentation title for Group ${i + 1}.`);
+        return;
+      }
+      const durationValue = usePerPresentationDuration
+        ? group.durationMinutes.trim()
+        : defaultPresentationDuration.trim();
+      const parsedDuration = Number.parseInt(durationValue, 10);
+      if (!Number.isFinite(parsedDuration) || parsedDuration < 1) {
+        setDeployMessage(
+          usePerPresentationDuration
+            ? `Enter a valid duration for Group ${i + 1}.`
+            : "Enter a valid default presentation duration."
+        );
+        return;
+      }
+    }
+
+    setDeployingPresentations(true);
+    try {
+      let insertedCount = 0;
+      const nextGroups: PresentationGroup[] = [];
+      for (const group of presentationGroups) {
+        const durationValue = usePerPresentationDuration
+          ? group.durationMinutes.trim()
+          : defaultPresentationDuration.trim();
+        const minutes = Number.parseInt(durationValue, 10);
+
+        let response: Response | null = null;
+        let payload: { detail?: unknown; presentation_id?: string } = {};
+        for (const url of buildCandidateUrls(backendUrl, "/api/events/add_presentation")) {
+          response = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(authHeaders ?? {}),
+            },
+            body: JSON.stringify({
+              title: group.presentationName.trim(),
+              class_id: classId,
+              minutes,
+              presenting_students: group.studentIds,
+            }),
+          });
+          payload = (await response.json().catch(() => ({}))) as {
+            detail?: unknown;
+            presentation_id?: string;
+          };
+          if (response.status !== 404) break;
+        }
+
+        if (!response || !response.ok) {
+          setDeployMessage(`Deploy failed: ${toMessage(payload.detail, "Unable to save presentations.")}`);
+          return;
+        }
+        insertedCount += 1;
+        nextGroups.push({
+          ...group,
+          id: payload.presentation_id ?? group.id,
+        });
+      }
+
+      setPresentationGroups([]);
+      setDeployedPresentationGroups((current) => {
+        const merged = [...current];
+        const seen = new Set(current.map((group) => group.id));
+        for (const group of nextGroups) {
+          if (seen.has(group.id)) continue;
+          seen.add(group.id);
+          merged.push(group);
+        }
+        return merged;
+      });
+      setDeployMessage(`Saved ${insertedCount} presentation${insertedCount === 1 ? "" : "s"} to the database.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
+        setDeployMessage(`Deploy failed: backend is unreachable at ${backendUrl}.`);
+      } else {
+        setDeployMessage(`Deploy failed: ${message}`);
+      }
+    } finally {
+      setDeployingPresentations(false);
+    }
   };
 
   return (
@@ -741,6 +1201,7 @@ export default function FacultyPage() {
                 <span className="text-base font-semibold text-[#1d2d63]">Drop CSV file here or click to upload</span>
                 <span className="text-sm text-[#4b5d99]">Accepted format: .csv</span>
                 <input
+                  ref={csvInputRef}
                   type="file"
                   accept=".csv,text/csv"
                   className="hidden"
@@ -750,42 +1211,107 @@ export default function FacultyPage() {
                   }}
                 />
               </label>
-              <button
-                type="submit"
-                disabled={csvUploading}
-                className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60 md:text-base"
-              >
-                {csvUploading ? "Uploading..." : "Upload"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="submit"
+                  disabled={csvUploading}
+                  className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60 md:text-base"
+                >
+                  {csvUploading ? "Uploading..." : "Upload"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowManualStudentEntry((current) => !current);
+                    setManualStudentMessage(null);
+                  }}
+                  className="rounded-lg border border-[#0f33a8] bg-white px-4 py-2 text-sm font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+                >
+                  Enter Student Manually
+                </button>
+              </div>
+              {showManualStudentEntry ? (
+                <div className="rounded-lg border border-[#d7e0ff] bg-[#fdfdff] p-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Manual Student Entry</p>
+                  <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <input
+                      value={manualStudentName}
+                      onChange={(event) => setManualStudentName(event.target.value)}
+                      placeholder="Student name"
+                      className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                    />
+                    <input
+                      type="email"
+                      value={manualStudentEmail}
+                      onChange={(event) => setManualStudentEmail(event.target.value)}
+                      placeholder="student@hamilton.edu"
+                      className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                    />
+                  </div>
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleManualStudentAdd()}
+                      disabled={manualStudentSubmitting}
+                      className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {manualStudentSubmitting ? "Adding..." : "Add Student"}
+                    </button>
+                  </div>
+                  {manualStudentMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{manualStudentMessage}</p> : null}
+                </div>
+              ) : null}
               {csvFile ? <p className="text-sm text-[#333]">Selected file: {csvFile.name}</p> : null}
               {csvMessage ? <p className="text-sm text-[#222]">{csvMessage}</p> : null}
-              {uploadedStudentNames.length > 0 ? (
+              {uploadedStudents.length > 0 ||
+              presentationGroups.length > 0 ||
+              deployedPresentationGroups.length > 0 ? (
                 <div className="w-full rounded-lg border border-[#d7e0ff] bg-[#fdfdff] p-3">
                   <p className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a]">Uploaded Students</p>
-                  <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                    {uploadedStudentNames.map((name, index) => {
-                      const studentKey = `${name}-${index}`;
-                      const isSelected = selectedUploadedStudentKeys.includes(studentKey);
-                      return (
-                        <button
-                          key={studentKey}
-                          type="button"
-                          onClick={() => toggleUploadedStudent(studentKey)}
-                          className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold transition ${
-                            isSelected
-                              ? "border-[#0f33a8] bg-[#e9efff] text-[#0f33a8]"
-                              : "border-[#c7c7c7] bg-white text-[#222] hover:border-[#0f33a8]"
-                          }`}
-                        >
-                          {name}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {uploadedStudents.length > 0 ? (
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                      {uploadedStudents.map((student) => {
+                        const studentKey = student.id;
+                        const isSelected = selectedUploadedStudentKeys.includes(studentKey);
+                        const isDeleting = deletingStudentIds.includes(student.id);
+                        return (
+                          <div
+                            key={studentKey}
+                            className={`flex items-center rounded-lg border text-sm font-semibold transition ${
+                              isSelected
+                                ? "border-[#0f33a8] bg-[#e9efff] text-[#0f33a8]"
+                                : "border-[#c7c7c7] bg-white text-[#222]"
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => toggleUploadedStudent(studentKey)}
+                              disabled={isDeleting}
+                              className="flex-1 px-3 py-2 text-left"
+                            >
+                              {student.name}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void deleteUploadedStudent(student.id, student.name)}
+                              disabled={isDeleting}
+                              className="mr-2 rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f]"
+                              aria-label={`Delete ${student.name}`}
+                            >
+                              {isDeleting ? "..." : "X"}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm font-semibold text-[#555]">No ungrouped students remaining.</p>
+                  )}
                   <div className="mt-3">
                     <button
                       type="button"
                       onClick={handleMakePresentationGroup}
+                      disabled={uploadedStudents.length === 0}
                       className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d]"
                     >
                       Make Presentation Group
@@ -794,11 +1320,45 @@ export default function FacultyPage() {
                   </div>
                   {presentationGroups.length > 0 ? (
                     <div className="mt-4 space-y-3">
+                      <div className="rounded-lg border border-[#cfd8ff] bg-white p-3">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                            Presentation Duration (Minutes)
+                          </span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={defaultPresentationDuration}
+                            onChange={(event) => setDefaultPresentationDuration(event.target.value)}
+                            placeholder="e.g. 15"
+                            disabled={usePerPresentationDuration}
+                            className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:bg-[#f3f4f6]"
+                          />
+                        </label>
+                        <label className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-[#1f2937]">
+                          <input
+                            type="checkbox"
+                            checked={usePerPresentationDuration}
+                            onChange={(event) => setUsePerPresentationDuration(event.target.checked)}
+                          />
+                          Set duration per presentation
+                        </label>
+                      </div>
                       {presentationGroups.map((group, groupIndex) => (
                         <div key={group.id} className="rounded-lg border border-[#cfd8ff] bg-white p-3">
-                          <p className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                            Group {groupIndex + 1}
-                          </p>
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                              Group {groupIndex + 1}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeletePresentationGroup(group, "draft")}
+                              disabled={deletingPresentationGroupIds.includes(group.id)}
+                              className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deletingPresentationGroupIds.includes(group.id) ? "..." : "Delete"}
+                            </button>
+                          </div>
                           <p className="mt-1 text-sm text-[#222]">{group.studentNames.join(", ")}</p>
                           <label className="mt-2 flex flex-col gap-1">
                             <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
@@ -811,21 +1371,69 @@ export default function FacultyPage() {
                               className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
                             />
                           </label>
+                          {usePerPresentationDuration ? (
+                            <label className="mt-2 flex flex-col gap-1">
+                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                                Duration (Minutes)
+                              </span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={group.durationMinutes}
+                                onChange={(event) => setPresentationGroupDuration(group.id, event.target.value)}
+                                placeholder="e.g. 15"
+                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                              />
+                            </label>
+                          ) : (
+                            <p className="mt-2 text-sm font-semibold text-[#2d3d7a]">
+                              Duration: {defaultPresentationDuration.trim() ? `${defaultPresentationDuration} minutes` : "Not set"}
+                            </p>
+                          )}
                         </div>
                       ))}
                       <div className="pt-1">
                         <button
                           type="button"
-                          onClick={() =>
-                            setDeployMessage(
-                              "Deploy Presentation is not connected yet. It will eventually send an email to each student group."
-                            )
-                          }
+                          onClick={() => void handleDeployPresentations()}
+                          disabled={deployingPresentations}
                           className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(27,110,43,0.25)] transition hover:bg-[#155622]"
                         >
-                          Deploy Presentation
+                          {deployingPresentations ? "Deploying..." : "Deploy Presentation"}
                         </button>
                         {deployMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployMessage}</p> : null}
+                      </div>
+                    </div>
+                  ) : null}
+                  {deployedPresentationGroups.length > 0 ? (
+                    <div className="mt-4 rounded-lg border border-[#d7e0ff] bg-white p-3">
+                      <h4 className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a] md:text-base">
+                        Deployed Presentations
+                      </h4>
+                      <div className="mt-2 space-y-2">
+                        {deployedPresentationGroups.map((group, index) => (
+                          <div key={`deployed-${group.id}`} className="rounded border border-[#cfd8ff] bg-[#fdfdff] p-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-sm font-semibold text-[#111]">
+                                {group.presentationName.trim() || `Presentation ${index + 1}`}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeletePresentationGroup(group, "deployed")}
+                                disabled={deletingPresentationGroupIds.includes(group.id)}
+                                className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {deletingPresentationGroupIds.includes(group.id) ? "..." : "Delete"}
+                              </button>
+                            </div>
+                            <p className="text-xs text-[#444]">
+                              {group.durationMinutes.trim()
+                                ? `${group.durationMinutes.trim()} minutes`
+                                : "Duration not set"}
+                            </p>
+                            <p className="text-xs text-[#444]">{group.studentNames.join(", ")}</p>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ) : null}

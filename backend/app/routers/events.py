@@ -269,15 +269,13 @@ def add_students(payload: request_schemas.AddStudentsRequest):
 def add_presentation(payload: request_schemas.AddPresentationRequest):
     try:
         presentation_id = uuid4()
-        presentation = supabase_schemas.Presentation(
-            id=presentation_id,
-            title=payload.title,
-            class_id=payload.class_id,
-            minutes=payload.minutes,
-            start_time=None,
-            end_time=None,
-        )
-        pres_resp = write.insert("presentations", [presentation.model_dump()])
+        presentation_payload = {
+            "id": presentation_id,
+            "title": payload.title,
+            "class_id": payload.class_id,
+            "minutes": payload.minutes,
+        }
+        pres_resp = write.insert("presentations", [presentation_payload])
 
         students: list[supabase_schemas.PresentingStudents] = []
         for student in payload.presenting_students:
@@ -286,13 +284,16 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
                     id=uuid4(), presentation_id=presentation_id, student_id=student
                 )
             )
-        students_resp = write.insert(
-            "presenting_students", [item.model_dump() for item in students]
+        students_payload = [item.model_dump() for item in students]
+        students_resp = (
+            write.insert("presenting_students", students_payload)
+            if students_payload
+            else None
         )
 
         presentations_inserted = _rows_affected(pres_resp, fallback=1)
         presenting_students_inserted = _rows_affected(
-            students_resp, fallback=len(students)
+            students_resp, fallback=len(students_payload)
         )
 
         records_inserted = {
@@ -608,6 +609,18 @@ def get_presentations(class_id: UUID | None = None):
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Failed to get presentations: {exc}"
+        ) from exc
+
+
+@router.get("/presenting_students")
+def get_presenting_students(presentation_id: UUID | None = None):
+    try:
+        return read.get_presenting_students(presentation_id=presentation_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get presenting students: {exc}"
         ) from exc
 
 
