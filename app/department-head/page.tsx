@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 type DepartmentOption = { id: string; name: string };
 type ProfessorRow = { name: string; email: string };
@@ -32,7 +32,7 @@ function toMessage(detail: unknown, fallback: string): string {
   return fallback;
 }
 
-export default function DepartmentHeadPage() {
+function DepartmentHeadPageContent() {
   const searchParams = useSearchParams();
   const symposiumId = searchParams.get("symposium_id") ?? "";
   const departmentIdFromLink = searchParams.get("department_id") ?? "";
@@ -585,5 +585,13 @@ export default function DepartmentHeadPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function DepartmentHeadPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-[#f5f5f5] px-4 py-8">Loading...</main>}>
+      <DepartmentHeadPageContent />
+    </Suspense>
   );
 }
