@@ -16,6 +16,12 @@ export default function Home() {
             Admin Page
           </Link>
           <Link
+            href="/department-head"
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
+          >
+            Department Head Page
+          </Link>
+          <Link
             href="/faculty"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
           >
@@ -26,12 +32,6 @@ export default function Home() {
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
           >
             Student Page
-          </Link>
-          <Link
-            href="/department-head"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
-          >
-            Department Head Page
           </Link>
         </div>
       </div>

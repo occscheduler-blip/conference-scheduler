@@ -49,10 +49,15 @@ export default function DepartmentHeadPage() {
   const [className, setClassName] = useState("");
   const [professors, setProfessors] = useState<ProfessorRow[]>([{ name: "", email: "" }]);
   const [savedClasses, setSavedClasses] = useState<SavedClass[]>([]);
+  const [deployedClassIds, setDeployedClassIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingLocalId, setDeletingLocalId] = useState<string>("");
   const [message, setMessage] = useState<string>("");
+  const deployedStorageKey = useMemo(
+    () => (symposiumId ? `deployed_classes_${symposiumId}` : "deployed_classes"),
+    [symposiumId]
+  );
 
   useEffect(() => {
     if (!symposiumId) return;
@@ -92,9 +97,91 @@ export default function DepartmentHeadPage() {
           .filter((row) => row.id)
           .map((row) => ({ id: row.id as string, name: row.department_name ?? (row.id as string) }));
 
+        const classesByDepartment = await Promise.all(
+          nextDepartments.map(async (department) => {
+            const classesRes = await fetch(
+              `${backendUrl}/api/events/classes?department_id=${encodeURIComponent(department.id)}`,
+              { headers: authHeaders }
+            );
+            const classesPayload = (await classesRes.json().catch(() => ({}))) as
+              | { data?: Array<{ id?: string; name?: string }> }
+              | Array<{ id?: string; name?: string }>;
+
+            if (!classesRes.ok) {
+              throw new Error(toMessage((classesPayload as { detail?: unknown }).detail, "Failed to load classes."));
+            }
+
+            const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
+            const classes = classRows
+              .filter((row) => row.id)
+              .map((row) => ({
+                id: row.id as string,
+                name: row.name ?? (row.id as string),
+              }));
+
+            return { department, classes };
+          })
+        );
+
+        const savedClassResults = await Promise.all(
+          classesByDepartment.flatMap(({ department, classes }) =>
+            classes.map(async (classRow) => {
+              try {
+                const professorsRes = await fetch(
+                  `${backendUrl}/api/events/professors?class_id=${encodeURIComponent(classRow.id)}`,
+                  { headers: authHeaders }
+                );
+                const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
+                  | { data?: Array<{ id?: string; name?: string; email?: string }> }
+                  | Array<{ id?: string; name?: string; email?: string }>;
+
+                if (!professorsRes.ok) {
+                  throw new Error(
+                    toMessage((professorsPayload as { detail?: unknown }).detail, "Failed to load professors.")
+                  );
+                }
+
+                const professorRows = Array.isArray(professorsPayload)
+                  ? professorsPayload
+                  : (professorsPayload.data ?? []);
+                const professors = professorRows.map((professor) => ({
+                  name: professor.name ?? "",
+                  email: professor.email ?? "",
+                }));
+                const professorIds = professorRows
+                  .map((professor) => professor.id)
+                  .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+                const savedClass: SavedClass = {
+                  localId: classRow.id,
+                  classId: classRow.id,
+                  professorIds,
+                  departmentId: department.id,
+                  departmentName: department.name,
+                  className: classRow.name,
+                  professors,
+                };
+                return savedClass;
+              } catch {
+                const savedClass: SavedClass = {
+                  localId: classRow.id,
+                  classId: classRow.id,
+                  professorIds: [],
+                  departmentId: department.id,
+                  departmentName: department.name,
+                  className: classRow.name,
+                  professors: [],
+                };
+                return savedClass;
+              }
+            })
+          )
+        );
+
         if (ignore) return;
         setSymposiumName(resolvedName);
         setDepartments(nextDepartments);
+        setSavedClasses(savedClassResults);
 
         if (departmentIdFromLink && nextDepartments.some((department) => department.id === departmentIdFromLink)) {
           setSelectedDepartmentId(departmentIdFromLink);
@@ -116,10 +203,44 @@ export default function DepartmentHeadPage() {
     };
   }, [authHeaders, backendUrl, departmentIdFromLink, symposiumId]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const raw = window.localStorage.getItem(deployedStorageKey);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as string[];
+      if (Array.isArray(parsed)) {
+        setDeployedClassIds(parsed.filter((id) => typeof id === "string" && id.length > 0));
+      }
+    } catch {
+      setDeployedClassIds([]);
+    }
+  }, [deployedStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(deployedStorageKey, JSON.stringify(deployedClassIds));
+  }, [deployedClassIds, deployedStorageKey]);
+
+  useEffect(() => {
+    if (savedClasses.length === 0) return;
+    const savedIds = new Set(savedClasses.map((savedClass) => savedClass.classId));
+    setDeployedClassIds((current) => current.filter((classId) => savedIds.has(classId)));
+  }, [savedClasses]);
+
   const canSubmit = useMemo(() => {
     if (!selectedDepartmentId || !className.trim()) return false;
     return professors.some((prof) => prof.name.trim() && prof.email.trim());
   }, [className, professors, selectedDepartmentId]);
+
+  const pendingClasses = useMemo(
+    () => savedClasses.filter((savedClass) => !deployedClassIds.includes(savedClass.classId)),
+    [deployedClassIds, savedClasses]
+  );
+  const deployedClasses = useMemo(
+    () => savedClasses.filter((savedClass) => deployedClassIds.includes(savedClass.classId)),
+    [deployedClassIds, savedClasses]
+  );
 
   const setProfessorField = (index: number, field: keyof ProfessorRow, value: string) => {
     setProfessors((current) => current.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
@@ -134,6 +255,8 @@ export default function DepartmentHeadPage() {
   };
 
   const removeSavedClass = async (savedClass: SavedClass) => {
+    const confirmed = window.confirm(`Delete class "${savedClass.className}"?`);
+    if (!confirmed) return;
     setMessage("");
     setDeletingLocalId(savedClass.localId);
     try {
@@ -172,6 +295,7 @@ export default function DepartmentHeadPage() {
       }
 
       setSavedClasses((current) => current.filter((item) => item.localId !== savedClass.localId));
+      setDeployedClassIds((current) => current.filter((classId) => classId !== savedClass.classId));
       setMessage(`Deleted class "${savedClass.className}".`);
     } catch (error) {
       const text = error instanceof Error ? error.message : "Unknown error";
@@ -182,6 +306,10 @@ export default function DepartmentHeadPage() {
   };
 
   const handleDeployClasses = () => {
+    const toDeploy = pendingClasses.map((savedClass) => savedClass.classId);
+    if (toDeploy.length > 0) {
+      setDeployedClassIds((current) => Array.from(new Set([...current, ...toDeploy])));
+    }
     setMessage(
       "Deploy Class is not connected yet. It will send each professor an email link with their professor_id in the URL."
     );
@@ -381,7 +509,7 @@ export default function DepartmentHeadPage() {
                 Saved Classes
               </h3>
               <div className="mt-3 space-y-3">
-                {savedClasses.map((savedClass) => (
+                {pendingClasses.map((savedClass) => (
                   <div key={savedClass.localId} className="rounded-lg border border-[#d7e0ff] bg-white p-3">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-[#111]">
@@ -415,6 +543,43 @@ export default function DepartmentHeadPage() {
                   Deploy
                 </button>
               </div>
+              {deployedClasses.length > 0 ? (
+                <div className="mt-4 rounded-lg border border-[#d7e0ff] bg-white p-3">
+                  <h4 className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a] md:text-base">
+                    Deployed Classes
+                  </h4>
+                  <ul className="mt-2 space-y-2 text-sm text-[#222]">
+                    {deployedClasses.map((savedClass) => (
+                      <li key={`deployed-${savedClass.localId}`} className="rounded border border-[#cfd8ff] bg-[#fdfdff] p-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold text-[#111]">
+                            {savedClass.departmentName}: {savedClass.className}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void removeSavedClass(savedClass)}
+                            disabled={deletingLocalId === savedClass.localId}
+                            className="rounded-lg border border-[#b7b7b7] bg-white px-2.5 py-1 text-xs font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
+                          >
+                            {deletingLocalId === savedClass.localId ? "Deleting..." : "Delete"}
+                          </button>
+                        </div>
+                        {savedClass.professors.length > 0 ? (
+                          <ul className="mt-1 space-y-1 text-xs text-[#444]">
+                            {savedClass.professors.map((professor, index) => (
+                              <li key={`deployed-prof-${savedClass.classId}-${index}`}>
+                                {professor.name} ({professor.email})
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-1 text-xs text-[#666]">No professors listed.</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </section>
