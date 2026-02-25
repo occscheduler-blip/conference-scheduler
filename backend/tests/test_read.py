@@ -53,6 +53,38 @@ def test_get_classes_rejects_invalid_type(fake_supabase, monkeypatch):
         read.get_classes(department_id="not-a-uuid")
 
 
+def test_get_presentations_enriches_with_presenting_student_records(
+    fake_supabase, monkeypatch
+):
+    monkeypatch.setattr(read, "supabase", fake_supabase)
+    presentation_id = uuid4()
+    student_id = uuid4()
+    fake_supabase.queries["presentations"] = fake_supabase.table("presentations")
+    fake_supabase.queries["presentations"].response.data = [
+        {"id": presentation_id, "title": "Capstone Talk"}
+    ]
+    fake_supabase.queries["presenting_students"] = fake_supabase.table(
+        "presenting_students"
+    )
+    fake_supabase.queries["presenting_students"].response.data = [
+        {"presentation_id": presentation_id, "student_id": student_id}
+    ]
+    fake_supabase.queries["students"] = fake_supabase.table("students")
+    fake_supabase.queries["students"].response.data = [
+        {"id": student_id, "name": "Ada Lovelace"}
+    ]
+
+    response = read.get_presentations()
+
+    assert response.data == [
+        {
+            "id": presentation_id,
+            "title": "Capstone Talk",
+            "presenting_students": [{"id": student_id, "name": "Ada Lovelace"}],
+        }
+    ]
+
+
 def test_get_prof_requests_applies_both_filters(fake_supabase, monkeypatch):
     monkeypatch.setattr(read, "supabase", fake_supabase)
     student_id = uuid4()

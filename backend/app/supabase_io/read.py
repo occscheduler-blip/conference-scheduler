@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from app.supabase_io.client import supabase
 from uuid import UUID
 
@@ -67,7 +68,50 @@ def get_presentations(class_id: UUID | list[UUID] | None = None):
         else:
             raise ValueError("class_id must be a UUID or list of UUIDs.")
 
-    return query.execute()
+    presentations_resp = query.execute()
+    presentations = list(presentations_resp.data or [])
+
+    presentation_ids = [presentation["id"] for presentation in presentations if "id" in presentation]
+    if not presentation_ids:
+        return presentations_resp
+
+    presenting_students_resp = (
+        supabase.table("presenting_students")
+        .select("*")
+        .in_("presentation_id", presentation_ids)
+        .execute()
+    )
+    presenting_rows = list(presenting_students_resp.data or [])
+
+    student_ids = [row["student_id"] for row in presenting_rows if "student_id" in row]
+    students_by_id = {}
+    if student_ids:
+        students_resp = (
+            supabase.table("students").select("*").in_("id", student_ids).execute()
+        )
+        students_by_id = {
+            student["id"]: student for student in (students_resp.data or []) if "id" in student
+        }
+
+    presenting_by_presentation: dict[UUID, list[dict]] = {}
+    for row in presenting_rows:
+        presentation_id = row.get("presentation_id")
+        if presentation_id is None:
+            continue
+        student = students_by_id.get(row.get("student_id"))
+        if student is not None:
+            presenting_by_presentation.setdefault(presentation_id, []).append(student)
+
+    enriched_presentations = []
+    for presentation in presentations:
+        presentation_id = presentation.get("id")
+        enriched_presentation = dict(presentation)
+        enriched_presentation["presenting_students"] = presenting_by_presentation.get(
+            presentation_id, []
+        )
+        enriched_presentations.append(enriched_presentation)
+
+    return SimpleNamespace(data=enriched_presentations, count=len(enriched_presentations))
 
 
 def get_presenting_students(presentation_id: UUID | list[UUID] | None = None):
