@@ -1,11 +1,11 @@
-# Conference Scheduler Structural Diagram
+# Conference Scheduler Structural Aspirational Diagram
 
 ```mermaid
 flowchart LR
   User["User Browser"]
 
   subgraph FE["Next.js Frontend (/app)"]
-    Home["Home<br/>app/page.tsx"]
+    SignIn["Sign In (not yet implemented)<br/>idk.tsx"]
     Admin["Admin UI<br/>app/admin/page.tsx"]
     Faculty["Faculty UI<br/>app/faculty/page.tsx"]
     DeptHead["Department Head UI<br/>app/department-head/page.tsx"]
@@ -14,9 +14,9 @@ flowchart LR
   end
 
   subgraph API["FastAPI Backend (/backend/app)"]
-    Main["main.py<br/>FastAPI app + CORS + router mount"]
+    Main["main.py<br/>FastAPI router mount"]
     Security["security.py<br/>require_api_key()"]
-    Events["routers/events.py<br/>CRUD + orchestration"]
+    Events["routers/events.py<br/>API endpoints"]
     ReqSchemas["routers/request_schemas.py<br/>Pydantic request validation"]
     IORead["supabase_io/read.py"]
     IOWrite["supabase_io/write.py"]
@@ -24,7 +24,7 @@ flowchart LR
     SBClient["supabase_io/client.py<br/>create_client() from env"]
   end
 
-  subgraph DB["Supabase (Postgres tables)"]
+  subgraph DB["Supabase Tables (Postgres)"]
     Symposiums["symposiums"]
     Timeframes["timeframes"]
     Departments["departments"]
@@ -36,26 +36,48 @@ flowchart LR
     ProfRequests["prof_requests"]
   end
 
-  User --> Home
-  Home --> Admin
-  Home --> Faculty
-  Home --> DeptHead
-  Home --> Student
-  Home --> HealthWidget
+  User --> SignIn
+  SignIn --> Admin
+  SignIn --> Faculty
+  SignIn --> DeptHead
+  SignIn --> Student
+  SignIn --> HealthWidget
 
-  Admin -->|"GET /api/events/symposiums"| Main
-  Admin -->|"GET /api/events/timeframes?linked_id=..."| Main
+  Admin <-->|"GET /api/events/symposiums"| Main
+  Admin <-->|"GET /api/events/timeframes"| Main
   Admin -->|"POST /api/events/add_symposium"| Main
   Admin -->|"POST /api/events/add_department"| Main
-  Faculty -->|"GET /api/events/professors/classes/departments/symposiums"| Main
-  Faculty -->|"GET /api/events/timeframes?linked_id=..."| Main
-  Faculty -.->|"POST /api/events/upload-students-csv (not implemented in router)"| Main
-  DeptHead -->|"GET /api/events/symposiums"| Main
-  DeptHead -->|"GET /api/events/departments?symposium_id=..."| Main
+  Admin -->|"PUT /api/events/update_timeframes"| Main
+  Admin -->|"DELETE /api/events/delete_symposium"|Main
+  Admin -->|"DELETE /api/events/delete_department"|Main
+  Admin -->|"DELETE /api/events/delete_class"|Main
+  Admin -->|"DELETE /api/events/delete_timeframes"|Main
+  Admin -->|"DELETE /api/events/delete_professor"|Main
+  Admin -->|"DELETE /api/events/delete_student"|Main
+  Admin -->|"DELETE /api/events/delete_presentation"|Main
+  Admin -->|"DELETE /api/events/delete_prof_request"|Main
+  DeptHead <-->|"GET /api/events/symposiums"| Main
+  DeptHead <-->|"GET /api/events/departments"| Main
   DeptHead -->|"POST /api/events/add_class"| Main
+  DeptHead -->|"POST /api/events/add_professor"| Main
   DeptHead -->|"DELETE /api/events/delete_professor"| Main
   DeptHead -->|"DELETE /api/events/delete_class"| Main
-  HealthWidget -->|"GET /health"| Main
+  Faculty <-->|"GET /api/events/classes"| Main
+  Faculty <-->|"GET /api/events/students"| Main
+  Faculty <-->|"GET /api/events/timeframes"| Main
+  Faculty <-->|"GET /api/events/prof_requests"| Main
+  Faculty -->|"POST /api/events/add_students"| Main
+  Faculty -->|"POST /api/events/add_presentation"| Main
+  Faculty -->|"PUT /api/events/update_timeframes"| Main
+  Faculty -->|"DELETE /api/events/delete_student"| Main
+  Faculty -->|"DELETE /api/events/delete_presentation"| Main
+  Student -->|"GET /api/events/presentations"| Main
+  Student -->|"GET /api/events/presentations"| Main
+  Student -->|"POST /api/events/add_prof_request"| Main
+  Student -->|"PUT /api/events/update_timeframes"| Main
+  Student -->|"PUT /api/events/update_presentation"| Main
+  Student -->|"DELETE /api/events/delete_prof_request"|Main
+  HealthWidget <-->|"GET /health"| Main
 
   Main --> Security
   Main --> Events
@@ -66,7 +88,6 @@ flowchart LR
   IORead --> SBClient
   IOWrite --> SBClient
   IODelete --> SBClient
-  Events --> SBClient
 
   SBClient --> Symposiums
   SBClient --> Timeframes
