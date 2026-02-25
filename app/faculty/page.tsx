@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type FacultyTab = "availability" | "students";
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
@@ -107,7 +107,7 @@ function isUuid(value: string) {
   );
 }
 
-export default function FacultyPage() {
+function FacultyPageContent() {
   const searchParams = useSearchParams();
   const professorId = searchParams.get("professor_id") ?? "";
   const [activeTab, setActiveTab] = useState<FacultyTab>("availability");
@@ -1444,5 +1444,13 @@ export default function FacultyPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+export default function FacultyPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-[#f5f5f5] px-4 py-8">Loading...</main>}>
+      <FacultyPageContent />
+    </Suspense>
   );
 }
