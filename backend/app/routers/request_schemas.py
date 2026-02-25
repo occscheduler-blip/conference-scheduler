@@ -49,6 +49,7 @@ class AddSymposiumRequest(BaseModel):
         }
     )
 
+<<<<<<< HEAD
     @field_validator("symposium_name")
     @classmethod
     def validate_symposium_name(cls, symposium_name: str):
@@ -64,6 +65,11 @@ class AddSymposiumRequest(BaseModel):
             raise ValueError(f"You may not choose more than {MAX_ROOMS} rooms.")
         return rooms_available
 
+=======
+
+class UpdateSymposiumRequest(AddSymposiumRequest):
+    pass
+>>>>>>> fb51a0f (pulled from main and now fixed and finished the edit symposium page)
 
 class AddDepartmentRequest(BaseModel):
     symposium_id: UUID
@@ -109,6 +115,7 @@ class AddDepartmentRequest(BaseModel):
     )
 
 
+<<<<<<< HEAD
 class ProfessorInit(BaseModel):
     name: str
     email: str
@@ -121,10 +128,18 @@ class ProfessorInit(BaseModel):
             raise ValueError("Class name cannot be empty")
         return name
 
+=======
+class UpdateDepartmentRequest(BaseModel):
+    department_name: str
+    department_head_name: str
+    email: str
+
+>>>>>>> fb51a0f (pulled from main and now fixed and finished the edit symposium page)
     @field_validator("email")
     @classmethod
     def validate_email(cls, email: str):
         email = email.strip().lower()
+<<<<<<< HEAD
         if not email:
             raise ValueError("Email cannot be blank.")
         if not email.endswith("@hamilton.edu"):
@@ -419,3 +434,10 @@ class UpdatePresentationRequest(BaseModel):
                 "At least one presentation field must be provided for update."
             )
         return self
+=======
+        if "@" not in email:
+            raise ValueError("Invalid email")
+        if not email.endswith("@hamilton.edu"):
+            raise ValueError("Email must be a @hamilton.edu address.")
+        return email
+>>>>>>> fb51a0f (pulled from main and now fixed and finished the edit symposium page)

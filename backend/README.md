@@ -17,11 +17,20 @@ source .venv/bin/activate
 cp .env.example .env
 ```
 
+<<<<<<< HEAD
 Set these in `.env`:
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
 - `SUPABASE_DB_URL`
 - `BACKEND_API_KEY`
+=======
+Set `SUPABASE_URL`, `SUPABASE_KEY`, and `SUPABASE_DB_URL` in `.env`.
+Optionally set:
+- `SUPABASE_SYMPOSIUMS_TABLE` (defaults to `symposiums`)
+- `SUPABASE_DEPARTMENTS_TABLE` (defaults to `departments`)
+- `SUPABASE_TIMEFRAMES_TABLE` (defaults to `timeframes`)
+- `SUPABASE_STUDENTS_TABLE` (defaults to `students`)
+>>>>>>> fb51a0f (pulled from main and now fixed and finished the edit symposium page)
 
 Optional:
 - `SUPABASE_EVENTS_TABLE` (default: `events`)
