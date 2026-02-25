@@ -1,4 +1,4 @@
-# Conference Scheduler Structural Aspirational Diagram
+# Conference Scheduler Aspirational Structural Diagram
 
 ```mermaid
 flowchart LR
@@ -109,8 +109,3 @@ flowchart LR
    - `supabase_io/read.py` for queries
    - `supabase_io/delete.py` for recursive/cascading deletes
 4. Data is persisted in Supabase tables, with `symposiums -> departments -> classes -> (professors, students, presentations)` and join-like helper tables (`presenting_students`, `prof_requests`).
-
-## Notable Integration Gaps (Current Code)
-
-1. Frontend calls `POST /api/events/upload-students-csv`, but `backend/app/routers/events.py` does not define this route.
-2. Department Head page expects `professor_ids` from `POST /api/events/add_class`, but backend currently returns no `professor_ids`.
