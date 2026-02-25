@@ -51,7 +51,9 @@ def _rows_affected(response, fallback: int = 0) -> int:
     return fallback
 
 
-def _normalize_counts(counts: dict[str, int] | None, fallback: dict[str, int]) -> dict[str, int]:
+def _normalize_counts(
+    counts: dict[str, int] | None, fallback: dict[str, int]
+) -> dict[str, int]:
     if not isinstance(counts, dict):
         return dict(fallback)
 
@@ -172,16 +174,27 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         symposium_payload = symposium.model_dump()
 
         # If the symposium already exists (fixed UUID edit flow), update it instead of failing.
-        existing = supabase.table("symposiums").select("id").eq("id", str(symposium_id)).limit(1).execute()
+        existing = (
+            supabase.table("symposiums")
+            .select("id")
+            .eq("id", str(symposium_id))
+            .limit(1)
+            .execute()
+        )
         symposiums_inserted = 0
         symposiums_updated = 0
         if existing.data:
-            symposium_update_resp = supabase.table("symposiums").update(
-                {
-                    "name": symposium_payload["name"],
-                    "rooms_available": symposium_payload["rooms_available"],
-                }
-            ).eq("id", str(symposium_id)).execute()
+            symposium_update_resp = (
+                supabase.table("symposiums")
+                .update(
+                    {
+                        "name": symposium_payload["name"],
+                        "rooms_available": symposium_payload["rooms_available"],
+                    }
+                )
+                .eq("id", str(symposium_id))
+                .execute()
+            )
             symposiums_updated = _rows_affected(symposium_update_resp, fallback=1)
         else:
             symposium_insert_resp = write.insert("symposiums", [symposium_payload])
@@ -200,7 +213,9 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         ]
         timeframe_payloads = [item.model_dump() for item in timeframes]
         timeframe_response = write.insert("timeframes", timeframe_payloads)
-        timeframes_inserted = _rows_affected(timeframe_response, fallback=len(timeframes))
+        timeframes_inserted = _rows_affected(
+            timeframe_response, fallback=len(timeframes)
+        )
         records_inserted = {
             "symposiums": symposiums_inserted,
             "timeframes": timeframes_inserted,
@@ -365,7 +380,9 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
         ]
         timeframe_payload = [item.model_dump() for item in timeframes]
         timeframe_resp = write.insert("timeframes", timeframe_payload)
-        timeframes_inserted = _rows_affected(timeframe_resp, fallback=len(timeframe_payload))
+        timeframes_inserted = _rows_affected(
+            timeframe_resp, fallback=len(timeframe_payload)
+        )
         records_deleted = {"timeframes": deleted_timeframes}
         records_inserted = {"timeframes": timeframes_inserted}
 
@@ -394,9 +411,12 @@ def update_student(payload: request_schemas.UpdateStudentRequest):
             exclude={"student_id"},
         )
         update_payload = _serialize_update_fields(updates)
-        update_resp = supabase.table("students").update(update_payload).eq(
-            "id", str(payload.student_id)
-        ).execute()
+        update_resp = (
+            supabase.table("students")
+            .update(update_payload)
+            .eq("id", str(payload.student_id))
+            .execute()
+        )
         records_updated = {
             "students": _rows_affected(update_resp, fallback=1 if update_payload else 0)
         }
@@ -426,9 +446,12 @@ def update_class(payload: request_schemas.UpdateClassRequest):
             exclude={"class_id"},
         )
         update_payload = _serialize_update_fields(updates)
-        update_resp = supabase.table("classes").update(update_payload).eq(
-            "id", str(payload.class_id)
-        ).execute()
+        update_resp = (
+            supabase.table("classes")
+            .update(update_payload)
+            .eq("id", str(payload.class_id))
+            .execute()
+        )
         records_updated = {
             "classes": _rows_affected(update_resp, fallback=1 if update_payload else 0)
         }
@@ -445,7 +468,9 @@ def update_class(payload: request_schemas.UpdateClassRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to update class: {exc}") from exc
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update class: {exc}"
+        ) from exc
 
 
 @router.put("/update_symposium")
@@ -458,11 +483,16 @@ def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
         if "symposium_name" in updates:
             updates["name"] = updates.pop("symposium_name")
         update_payload = _serialize_update_fields(updates)
-        update_resp = supabase.table("symposiums").update(update_payload).eq(
-            "id", str(payload.symposium_id)
-        ).execute()
+        update_resp = (
+            supabase.table("symposiums")
+            .update(update_payload)
+            .eq("id", str(payload.symposium_id))
+            .execute()
+        )
         records_updated = {
-            "symposiums": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+            "symposiums": _rows_affected(
+                update_resp, fallback=1 if update_payload else 0
+            )
         }
 
         return {
@@ -495,17 +525,21 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest):
         presenting_students_inserted = 0
 
         if update_payload:
-            presentation_update_resp = supabase.table("presentations").update(
-                update_payload
-            ).eq(
-                "id", str(payload.presentation_id)
-            ).execute()
+            presentation_update_resp = (
+                supabase.table("presentations")
+                .update(update_payload)
+                .eq("id", str(payload.presentation_id))
+                .execute()
+            )
             presentations_updated = _rows_affected(presentation_update_resp)
 
         if payload.presenting_students is not None:
-            presenting_students_delete_resp = supabase.table("presenting_students").delete().eq(
-                "presentation_id", str(payload.presentation_id)
-            ).execute()
+            presenting_students_delete_resp = (
+                supabase.table("presenting_students")
+                .delete()
+                .eq("presentation_id", str(payload.presentation_id))
+                .execute()
+            )
             presenting_students_deleted = _rows_affected(
                 presenting_students_delete_resp
             )
@@ -612,18 +646,6 @@ def get_presentations(class_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/presenting_students")
-def get_presenting_students(presentation_id: UUID | None = None):
-    try:
-        return read.get_presenting_students(presentation_id=presentation_id)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to get presenting students: {exc}"
-        ) from exc
-
-
 @router.get("/professors")
 def get_professors(class_id: UUID | None = None):
     try:
@@ -675,8 +697,8 @@ def delete_symposium(symposium_id: UUID):
         raise
     except Exception as exc:
         raise HTTPException(
-                status_code=400, detail=f"Failed to delete symposium: {exc}"
-            ) from exc
+            status_code=400, detail=f"Failed to delete symposium: {exc}"
+        ) from exc
 
 
 @router.delete("/delete_department")
@@ -694,9 +716,9 @@ def delete_department(department_id: UUID):
         raise
     except Exception as exc:
         raise HTTPException(
-                status_code=400, detail=f"Failed to delete department: {exc}"
-            ) from exc
-    
+            status_code=400, detail=f"Failed to delete department: {exc}"
+        ) from exc
+
 
 @router.delete("/delete_class")
 def delete_class(class_id: UUID):
@@ -711,9 +733,10 @@ def delete_class(class_id: UUID):
         raise
     except Exception as exc:
         raise HTTPException(
-                status_code=400, detail=f"Failed to delete class: {exc}"
-            ) from exc
-    
+            status_code=400, detail=f"Failed to delete class: {exc}"
+        ) from exc
+
+
 @router.delete("/delete_student")
 def delete_student(student_id: UUID):
     try:
@@ -727,8 +750,8 @@ def delete_student(student_id: UUID):
         raise
     except Exception as exc:
         raise HTTPException(
-                status_code=400, detail=f"Failed to delete student: {exc}"
-            ) from exc
+            status_code=400, detail=f"Failed to delete student: {exc}"
+        ) from exc
 
 
 @router.delete("/delete_professor")
@@ -746,8 +769,8 @@ def delete_professor(professor_id: UUID):
         raise
     except Exception as exc:
         raise HTTPException(
-                status_code=400, detail=f"Failed to delete professor: {exc}"
-            ) from exc
+            status_code=400, detail=f"Failed to delete professor: {exc}"
+        ) from exc
 
 
 @router.delete("/delete_presentation")
@@ -765,5 +788,5 @@ def delete_presentation(presentation_id: UUID):
         raise
     except Exception as exc:
         raise HTTPException(
-                status_code=400, detail=f"Failed to delete presentation: {exc}"
-            ) from exc
+            status_code=400, detail=f"Failed to delete presentation: {exc}"
+        ) from exc
