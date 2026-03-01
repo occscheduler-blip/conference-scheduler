@@ -34,7 +34,7 @@ function toMessage(detail: unknown, fallback: string): string {
 
 function DepartmentHeadPageContent() {
   const searchParams = useSearchParams();
-  const symposiumId = searchParams.get("symposium_id") ?? "";
+  const symposiumIdFromLink = searchParams.get("symposium_id") ?? "";
   const departmentIdFromLink = searchParams.get("department_id") ?? "";
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
@@ -43,8 +43,8 @@ function DepartmentHeadPageContent() {
     [backendApiKey]
   );
 
-  const [symposiumName, setSymposiumName] = useState<string>("");
-  const [resolvedSymposiumId, setResolvedSymposiumId] = useState<string>("");
+  const [symposiumOptions, setSymposiumOptions] = useState<DepartmentOption[]>([]);
+  const [selectedSymposiumId, setSelectedSymposiumId] = useState<string>("");
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>("");
   const [className, setClassName] = useState("");
@@ -63,62 +63,111 @@ function DepartmentHeadPageContent() {
   const [updatingLocalId, setUpdatingLocalId] = useState<string>("");
   const [message, setMessage] = useState<string>("");
 
+  const selectedSymposiumName = useMemo(
+    () => symposiumOptions.find((symposium) => symposium.id === selectedSymposiumId)?.name ?? selectedSymposiumId,
+    [selectedSymposiumId, symposiumOptions]
+  );
+
   const deployedStorageKey = useMemo(
-    () =>
-      `deployed_classes_${resolvedSymposiumId || symposiumId || departmentIdFromLink || "global"}`,
-    [departmentIdFromLink, resolvedSymposiumId, symposiumId]
+    () => `deployed_classes_${selectedSymposiumId || departmentIdFromLink || "global"}`,
+    [departmentIdFromLink, selectedSymposiumId]
   );
 
   useEffect(() => {
-    if (!symposiumId && !departmentIdFromLink) return;
     let ignore = false;
 
-    const load = async () => {
+    const loadSymposiums = async () => {
       setLoading(true);
       setMessage("");
       try {
-        const departmentsUrl = symposiumId
-          ? `${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`
-          : `${backendUrl}/api/events/departments`;
-
-        const [symposiumsRes, departmentsRes] = await Promise.all([
+        const [symposiumsRes, allDepartmentsRes] = await Promise.all([
           fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
-          fetch(departmentsUrl, { headers: authHeaders }),
+          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
         ]);
 
         const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
           | Array<{ id?: string; name?: string; symposium_name?: string }>;
-        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
+        const allDepartmentsPayload = (await allDepartmentsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
           | Array<{ id?: string; department_name?: string; symposium_id?: string }>;
 
         if (!symposiumsRes.ok) {
           throw new Error(toMessage((symposiumsPayload as { detail?: unknown }).detail, "Failed to load symposium."));
         }
+        if (!allDepartmentsRes.ok) {
+          throw new Error(
+            toMessage((allDepartmentsPayload as { detail?: unknown }).detail, "Failed to load departments.")
+          );
+        }
+
+        const departmentRows = Array.isArray(allDepartmentsPayload)
+          ? allDepartmentsPayload
+          : (allDepartmentsPayload.data ?? []);
+        const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
+        const nextSymposiumOptions = symposiumRows
+          .filter((row) => row.id)
+          .map((row) => ({
+            id: row.id as string,
+            name: row.name ?? row.symposium_name ?? (row.id as string),
+          }));
+
+        let initialSymposiumId = symposiumIdFromLink;
+        if (!initialSymposiumId && departmentIdFromLink) {
+          const linkedDepartment = departmentRows.find((row) => row.id === departmentIdFromLink);
+          initialSymposiumId = linkedDepartment?.symposium_id ?? "";
+        }
+        if (!initialSymposiumId && nextSymposiumOptions.length > 0) {
+          initialSymposiumId = nextSymposiumOptions[0].id;
+        }
+
+        if (ignore) return;
+        setSymposiumOptions(nextSymposiumOptions);
+        setSelectedSymposiumId((current) => {
+          if (current && nextSymposiumOptions.some((symposium) => symposium.id === current)) return current;
+          return initialSymposiumId;
+        });
+      } catch (error) {
+        if (ignore) return;
+        const text = error instanceof Error ? error.message : "Unknown error";
+        setMessage(`Failed to load page data: ${text}`);
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    };
+
+    void loadSymposiums();
+    return () => {
+      ignore = true;
+    };
+  }, [authHeaders, backendUrl, departmentIdFromLink, symposiumIdFromLink]);
+
+  useEffect(() => {
+    if (!selectedSymposiumId) {
+      setDepartments([]);
+      setSelectedDepartmentId("");
+      setSavedClasses([]);
+      return;
+    }
+    let ignore = false;
+
+    const loadSymposiumData = async () => {
+      setLoading(true);
+      setMessage("");
+      try {
+        const departmentsRes = await fetch(
+          `${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
+          { headers: authHeaders }
+        );
+        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
+          | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
+          | Array<{ id?: string; department_name?: string; symposium_id?: string }>;
         if (!departmentsRes.ok) {
           throw new Error(toMessage((departmentsPayload as { detail?: unknown }).detail, "Failed to load departments."));
         }
 
         const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
-        const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
-
-        let effectiveSymposiumId = symposiumId;
-        if (!effectiveSymposiumId && departmentIdFromLink) {
-          const linkedDepartment = departmentRows.find((row) => row.id === departmentIdFromLink);
-          effectiveSymposiumId = linkedDepartment?.symposium_id ?? "";
-        }
-        if (!effectiveSymposiumId) {
-          throw new Error("Invalid department link. No symposium found for this department.");
-        }
-
-        const resolvedName =
-          symposiumRows.find((row) => row.id === effectiveSymposiumId)?.name ??
-          symposiumRows.find((row) => row.id === effectiveSymposiumId)?.symposium_name ??
-          effectiveSymposiumId;
-
         const nextDepartments = departmentRows
-          .filter((row) => row.symposium_id === effectiveSymposiumId)
           .filter((row) => row.id)
           .map((row) => ({ id: row.id as string, name: row.department_name ?? (row.id as string) }));
 
@@ -203,16 +252,16 @@ function DepartmentHeadPageContent() {
         );
 
         if (ignore) return;
-        setResolvedSymposiumId(effectiveSymposiumId);
-        setSymposiumName(resolvedName);
         setDepartments(nextDepartments);
         setSavedClasses(savedClassResults);
-
-        if (departmentIdFromLink && nextDepartments.some((department) => department.id === departmentIdFromLink)) {
-          setSelectedDepartmentId(departmentIdFromLink);
-        } else if (nextDepartments.length === 1) {
-          setSelectedDepartmentId(nextDepartments[0].id);
-        }
+        setSelectedDepartmentId((current) => {
+          if (current && nextDepartments.some((department) => department.id === current)) return current;
+          if (departmentIdFromLink && nextDepartments.some((department) => department.id === departmentIdFromLink)) {
+            return departmentIdFromLink;
+          }
+          if (nextDepartments.length === 1) return nextDepartments[0].id;
+          return "";
+        });
       } catch (error) {
         if (ignore) return;
         const text = error instanceof Error ? error.message : "Unknown error";
@@ -222,11 +271,11 @@ function DepartmentHeadPageContent() {
       }
     };
 
-    void load();
+    void loadSymposiumData();
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl, departmentIdFromLink, symposiumId]);
+  }, [authHeaders, backendUrl, departmentIdFromLink, selectedSymposiumId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -549,15 +598,25 @@ function DepartmentHeadPageContent() {
 
         <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
           <h2 className="text-xl font-bold text-[#111] md:text-2xl">Add Classes</h2>
+          <label className="mt-4 flex flex-col gap-1">
+            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Symposium</span>
+            <select
+              value={selectedSymposiumId}
+              onChange={(event) => setSelectedSymposiumId(event.target.value)}
+              disabled={loading || symposiumOptions.length === 0}
+              className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <option value="">Select symposium</option>
+              {symposiumOptions.map((symposium) => (
+                <option key={symposium.id} value={symposium.id}>
+                  {symposium.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <p className="mt-2 text-sm font-semibold text-[#2d3d7a]">
-            Symposium: {symposiumName || resolvedSymposiumId || symposiumId || "Missing symposium_id"}
+            Symposium: {selectedSymposiumName || "Select a symposium"}
           </p>
-
-          {!symposiumId && !departmentIdFromLink ? (
-            <p className="mt-4 text-sm font-semibold text-[#9a1f1f]">
-              Open this page with `?department_id=&lt;uuid&gt;` in the URL.
-            </p>
-          ) : null}
 
           <form onSubmit={submitProfessors} className="mt-4 space-y-4">
             <label className="flex flex-col gap-1">

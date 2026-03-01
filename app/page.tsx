@@ -218,10 +218,10 @@ function HomeContent() {
             Department Head Page
           </Link>
           <Link
-            href="/faculty"
+            href="/professor"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
-            Faculty Page
+            Professor Page
           </Link>
           <Link
             href="/student"
@@ -229,14 +229,6 @@ function HomeContent() {
           >
             Student Page
           </Link>
-          <button
-            type="button"
-            disabled
-            className="cursor-not-allowed rounded-md border border-[#c7c7c7] bg-[#efefef] px-4 py-2 text-sm font-semibold text-[#8a8a8a]"
-            title="Professor page not available yet"
-          >
-            Professor Page
-          </button>
         </div>
 
         <h1 className="mb-4 text-center text-4xl font-extrabold tracking-wide text-black md:text-6xl">OCC THESIS SYMPOSIUM</h1>

@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 type StudentTab = "availability" | "preferences";
 type CalendarDay = { key: string; label: string };
 type ProfessorOption = { id: string; name: string; email: string };
 type SavedProfessorRequest = { id: string; professorId: string; professorName: string; professorEmail: string };
+type StudentOption = { id: string; name: string };
 
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
 
@@ -35,10 +35,11 @@ function parseBackendDateTime(value: string) {
 }
 
 export default function StudentPage() {
-  const searchParams = useSearchParams();
-  const studentId = searchParams.get("student_id") ?? "";
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
+  const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
+  const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [loadingStudents, setLoadingStudents] = useState(false);
   const [activeTab, setActiveTab] = useState<StudentTab>("availability");
   const [availability, setAvailability] = useState<boolean[][]>([]);
   const [editableSlots, setEditableSlots] = useState<boolean[][]>([]);
@@ -46,8 +47,10 @@ export default function StudentPage() {
   const [calendarMessage, setCalendarMessage] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [dragValue, setDragValue] = useState<boolean | null>(null);
-  const hasStudentLink = Boolean(studentId);
+  const hasSelectedStudent = Boolean(selectedStudentId);
   const [studentName, setStudentName] = useState("");
+  const [symposiumName, setSymposiumName] = useState("");
+  const [className, setClassName] = useState("");
   const [presentationName, setPresentationName] = useState("");
   const [loadingIdentity, setLoadingIdentity] = useState(false);
   const [identityMessage, setIdentityMessage] = useState("");
@@ -57,7 +60,7 @@ export default function StudentPage() {
   const [savedProfessorRequests, setSavedProfessorRequests] = useState<SavedProfessorRequest[]>([]);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesMessage, setPreferencesMessage] = useState("");
-  const identityReady = hasStudentLink && !loadingIdentity && Boolean(studentName);
+  const identityReady = hasSelectedStudent && !loadingIdentity && Boolean(studentName);
 
   const isAvailabilityTab = activeTab === "availability";
 
@@ -72,10 +75,63 @@ export default function StudentPage() {
   }, []);
 
   useEffect(() => {
-    if (!studentId) {
+    let ignore = false;
+    const loadStudentOptions = async () => {
+      setLoadingStudents(true);
+      setIdentityMessage("");
+      try {
+        const studentsRes = await fetch(`${backendUrl}/api/events/students`, {
+          headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
+        });
+        const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
+          | { detail?: unknown; data?: Array<{ id?: string; name?: string }> }
+          | Array<{ id?: string; name?: string }>;
+        if (!studentsRes.ok) {
+          throw new Error("Failed to load students.");
+        }
+        const studentRows = Array.isArray(studentsPayload) ? studentsPayload : (studentsPayload.data ?? []);
+        const nextOptions = studentRows
+          .filter((row) => row.id)
+          .map((row) => ({
+            id: row.id as string,
+            name: (row.name ?? "").trim() || (row.id as string),
+          }));
+
+        if (ignore) return;
+        setStudentOptions(nextOptions);
+        setSelectedStudentId((current) => {
+          if (current && nextOptions.some((option) => option.id === current)) return current;
+          return nextOptions[0]?.id ?? "";
+        });
+        if (nextOptions.length === 0) {
+          setIdentityMessage("No students found.");
+        }
+      } catch (error) {
+        if (ignore) return;
+        const message = error instanceof Error ? error.message : "Unknown error";
+        setIdentityMessage(message);
+        setStudentOptions([]);
+        setSelectedStudentId("");
+      } finally {
+        if (!ignore) setLoadingStudents(false);
+      }
+    };
+
+    void loadStudentOptions();
+    return () => {
+      ignore = true;
+    };
+  }, [backendApiKey, backendUrl]);
+
+  useEffect(() => {
+    if (!selectedStudentId) {
       setStudentName("");
+      setSymposiumName("");
+      setClassName("");
       setPresentationName("");
-      setIdentityMessage("Missing student_id in URL.");
+      if (!loadingStudents) {
+        setIdentityMessage((current) => (current ? current : "Select a student to load data."));
+      }
       setCalendarDays([]);
       setEditableSlots([]);
       setAvailability([]);
@@ -93,7 +149,7 @@ export default function StudentPage() {
       setIdentityMessage("");
       setCalendarMessage("");
       try {
-        const [studentsRes, classesRes, departmentsRes, professorsRes] = await Promise.all([
+        const [studentsRes, classesRes, departmentsRes, professorsRes, symposiumsRes] = await Promise.all([
           fetch(`${backendUrl}/api/events/students`, {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }),
@@ -106,22 +162,28 @@ export default function StudentPage() {
           fetch(`${backendUrl}/api/events/professors`, {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }),
+          fetch(`${backendUrl}/api/events/symposiums`, {
+            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
+          }),
         ]);
 
         const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; name?: string; email?: string; class_id?: string }> }
           | Array<{ id?: string; name?: string; email?: string; class_id?: string }>;
         const classesPayload = (await classesRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; department_id?: string }> }
-          | Array<{ id?: string; department_id?: string }>;
+          | { detail?: unknown; data?: Array<{ id?: string; name?: string; department_id?: string }> }
+          | Array<{ id?: string; name?: string; department_id?: string }>;
         const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; symposium_id?: string }> }
           | Array<{ id?: string; symposium_id?: string }>;
         const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; name?: string; email?: string; class_id?: string }> }
           | Array<{ id?: string; name?: string; email?: string; class_id?: string }>;
+        const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
+          | { detail?: unknown; data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
+          | Array<{ id?: string; name?: string; symposium_name?: string }>;
 
-        if (!studentsRes.ok || !classesRes.ok || !departmentsRes.ok || !professorsRes.ok) {
+        if (!studentsRes.ok || !classesRes.ok || !departmentsRes.ok || !professorsRes.ok || !symposiumsRes.ok) {
           throw new Error("Failed to load student.");
         }
 
@@ -129,24 +191,25 @@ export default function StudentPage() {
         const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
         const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
         const professorRows = Array.isArray(professorsPayload) ? professorsPayload : (professorsPayload.data ?? []);
+        const symposiumInfoRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
 
-        const student = studentRows.find((row) => row.id === studentId);
+        const student = studentRows.find((row) => row.id === selectedStudentId);
         if (!student) {
-          throw new Error("Invalid student link. No student found for this student_id.");
+          throw new Error("Select a student to load data.");
         }
 
         const classId = student.class_id ?? "";
-        const presentationId = (student as { presentation_id?: string }).presentation_id ?? "";
         const classRow = classRows.find((row) => row.id === classId);
         const departmentId = classRow?.department_id ?? "";
         const departmentRow = departmentRows.find((row) => row.id === classRow?.department_id);
         const symposiumId = departmentRow?.symposium_id ?? "";
+        const symposiumRow = symposiumInfoRows.find((row) => row.id === symposiumId);
         if (!symposiumId) {
           throw new Error("No symposium is linked to this student.");
         }
 
         let resolvedPresentationName = "";
-        if (presentationId && classId) {
+        if (classId) {
           const presentationsRes = await fetch(
             `${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(classId)}`,
             {
@@ -154,14 +217,29 @@ export default function StudentPage() {
             }
           );
           const presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
-            | { data?: Array<{ id?: string; title?: string }> }
-            | Array<{ id?: string; title?: string }>;
+            | {
+                data?: Array<{
+                  id?: string;
+                  title?: string;
+                  presenting_students?: Array<{ id?: string; student_id?: string }>;
+                }>;
+              }
+            | Array<{ id?: string; title?: string; presenting_students?: Array<{ id?: string; student_id?: string }> }>;
           if (presentationsRes.ok) {
             const presentationRows = Array.isArray(presentationsPayload)
               ? presentationsPayload
               : (presentationsPayload.data ?? []);
+            const presentingMembershipRows = presentationRows.flatMap((presentation) =>
+              (presentation.presenting_students ?? []).map((presentingStudent) => ({
+                presentationId: presentation.id ?? "",
+                studentId: (presentingStudent.id ?? presentingStudent.student_id ?? "").trim(),
+              }))
+            );
+            const matchedPresentationId =
+              presentingMembershipRows.find((membership) => membership.studentId === selectedStudentId)?.presentationId ??
+              "";
             resolvedPresentationName =
-              presentationRows.find((presentation) => presentation.id === presentationId)?.title ?? "";
+              presentationRows.find((presentation) => presentation.id === matchedPresentationId)?.title ?? "";
           }
         }
 
@@ -178,12 +256,12 @@ export default function StudentPage() {
           throw new Error("Failed to load symposium timeframe.");
         }
 
-        const symposiumRows = Array.isArray(symposiumTimeframesPayload)
+        const symposiumTimeframeRows = Array.isArray(symposiumTimeframesPayload)
           ? symposiumTimeframesPayload
           : (symposiumTimeframesPayload.data ?? []);
         const uniqueDayKeys = new Set<string>();
         const parsedSymposiumRows: Array<{ start: Date; end: Date | null }> = [];
-        for (const row of symposiumRows) {
+        for (const row of symposiumTimeframeRows) {
           if (!row.start_time) continue;
           const start = parseBackendDateTime(row.start_time);
           if (Number.isNaN(start.getTime())) continue;
@@ -228,7 +306,7 @@ export default function StudentPage() {
         }
 
         const studentTimeframesRes = await fetch(
-          `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(studentId)}`,
+          `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(selectedStudentId)}`,
           {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }
@@ -283,7 +361,7 @@ export default function StudentPage() {
           }));
 
         const profReqRes = await fetch(
-          `${backendUrl}/api/events/prof_requests?student_id=${encodeURIComponent(studentId)}`,
+          `${backendUrl}/api/events/prof_requests?student_id=${encodeURIComponent(selectedStudentId)}`,
           {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }
@@ -313,6 +391,8 @@ export default function StudentPage() {
           }));
 
         setStudentName(student.name ?? "Student");
+        setSymposiumName(symposiumRow?.name ?? symposiumRow?.symposium_name ?? "");
+        setClassName(classRow?.name ?? "");
         setPresentationName(resolvedPresentationName);
         setProfessorOptions(nextProfessorOptions);
         setPreferredProfessorName("");
@@ -326,6 +406,8 @@ export default function StudentPage() {
         if (ignore) return;
         const message = error instanceof Error ? error.message : "Unknown error";
         setStudentName("");
+        setSymposiumName("");
+        setClassName("");
         setPresentationName("");
         setIdentityMessage(message);
         setCalendarDays([]);
@@ -344,7 +426,7 @@ export default function StudentPage() {
     return () => {
       ignore = true;
     };
-  }, [backendApiKey, backendUrl, studentId]);
+  }, [backendApiKey, backendUrl, loadingStudents, selectedStudentId]);
 
   const setCell = (dayIndex: number, slotIndex: number, value: boolean) => {
     setAvailability((current) =>
@@ -358,8 +440,8 @@ export default function StudentPage() {
 
   const handleSavePreferences = async () => {
     setPreferencesMessage("");
-    if (!studentId) {
-      setPreferencesMessage("Missing student_id in URL.");
+    if (!selectedStudentId) {
+      setPreferencesMessage("Select a student first.");
       return;
     }
 
@@ -387,7 +469,7 @@ export default function StudentPage() {
           ...(backendApiKey ? { "X-API-Key": backendApiKey } : {}),
         },
         body: JSON.stringify({
-          student_id: studentId,
+          student_id: selectedStudentId,
           professor_id: matchingProfessor.id,
         }),
       });
@@ -405,7 +487,7 @@ export default function StudentPage() {
       }
 
       const profReqRes = await fetch(
-        `${backendUrl}/api/events/prof_requests?student_id=${encodeURIComponent(studentId)}`,
+        `${backendUrl}/api/events/prof_requests?student_id=${encodeURIComponent(selectedStudentId)}`,
         {
           headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
         }
@@ -467,16 +549,43 @@ export default function StudentPage() {
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
             OCC THESIS SYMPOSIUM - STUDENT
           </h1>
+          <label className="mx-auto mt-4 block w-full max-w-xl">
+            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Student</span>
+            <select
+              value={selectedStudentId}
+              onChange={(event) => setSelectedStudentId(event.target.value)}
+              disabled={loadingStudents || studentOptions.length === 0}
+              className="mt-2 w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <option value="">Select student</option>
+              {studentOptions.map((student) => (
+                <option key={student.id} value={student.id}>
+                  {student.name}
+                </option>
+              ))}
+            </select>
+          </label>
           {identityMessage ? <p className="mt-2 text-center text-sm font-semibold text-[#9a1f1f]">{identityMessage}</p> : null}
-          {!hasStudentLink ? (
-            <p className="mt-2 text-center text-sm font-semibold text-[#9a1f1f]">
-              Open this page with `?student_id=&lt;uuid&gt;` in the URL.
-            </p>
-          ) : null}
         </header>
         <p className="mb-3 text-center text-3xl font-extrabold tracking-wide text-[#0f33a8] md:text-5xl">
           {loadingIdentity ? "Hello!" : `Hello${studentName ? `, ${studentName}` : ""}!`}
         </p>
+        {identityReady ? (
+          <div className="mb-3 overflow-hidden rounded-xl border border-[#d7e0ff] bg-white text-sm text-[#2d3d7a] md:grid md:grid-cols-3">
+            <p className="px-3 py-2.5 font-semibold md:border-r md:border-[#e4ebff]">
+              <span className="mr-1 font-bold">Symposium:</span>
+              <span>{symposiumName || "Unknown"}</span>
+            </p>
+            <p className="border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0 md:border-r md:border-[#e4ebff]">
+              <span className="mr-1 font-bold">Class:</span>
+              <span>{className || "Unknown"}</span>
+            </p>
+            <p className="border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0">
+              <span className="mr-1 font-bold">Presentation:</span>
+              <span>{presentationName || "Unknown"}</span>
+            </p>
+          </div>
+        ) : null}
 
         <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
           <button
@@ -515,7 +624,7 @@ export default function StudentPage() {
           </h2>
           {!identityReady ? (
             <p className="mt-2 text-sm font-semibold text-[#9a1f1f]">
-              Use your unique student link to access this page.
+              Select a student above to access this page.
             </p>
           ) : null}
 
