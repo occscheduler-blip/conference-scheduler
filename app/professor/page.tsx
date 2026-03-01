@@ -325,16 +325,42 @@ function ProfessorPageContent() {
         if (resolvedClassId) {
           let presentationsRes: Response | null = null;
           let presentationsPayload:
-            | { detail?: unknown; data?: Array<{ id?: string; title?: string; minutes?: number }> }
-            | Array<{ id?: string; title?: string; minutes?: number }> = {};
+            | {
+                detail?: unknown;
+                data?: Array<{
+                  id?: string;
+                  title?: string;
+                  minutes?: number;
+                  presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
+                }>;
+              }
+            | Array<{
+                id?: string;
+                title?: string;
+                minutes?: number;
+                presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
+              }> = {};
           for (const url of buildCandidateUrls(
             backendUrl,
             `/api/events/presentations?class_id=${encodeURIComponent(resolvedClassId)}`
           )) {
             presentationsRes = await fetch(url, { headers: authHeaders });
             presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
-              | { detail?: unknown; data?: Array<{ id?: string; title?: string; minutes?: number }> }
-              | Array<{ id?: string; title?: string; minutes?: number }>;
+              | {
+                  detail?: unknown;
+                  data?: Array<{
+                    id?: string;
+                    title?: string;
+                    minutes?: number;
+                    presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
+                  }>;
+                }
+              | Array<{
+                  id?: string;
+                  title?: string;
+                  minutes?: number;
+                  presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
+                }>;
             if (presentationsRes.status !== 404) break;
           }
           if (!presentationsRes || !presentationsRes.ok) {
@@ -352,31 +378,9 @@ function ProfessorPageContent() {
             const presentationId = presentation.id ?? "";
             if (!presentationId) continue;
 
-            let presentingRes: Response | null = null;
-            let presentingPayload:
-              | { detail?: unknown; data?: Array<{ student_id?: string; studentId?: string }> }
-              | Array<{ student_id?: string; studentId?: string }> = {};
-            for (const url of buildCandidateUrls(
-              backendUrl,
-              `/api/events/presenting_students?presentation_id=${encodeURIComponent(presentationId)}`
-            )) {
-              presentingRes = await fetch(url, { headers: authHeaders });
-              presentingPayload = (await presentingRes.json().catch(() => ({}))) as
-                | { detail?: unknown; data?: Array<{ student_id?: string; studentId?: string }> }
-                | Array<{ student_id?: string; studentId?: string }>;
-              if (presentingRes.status !== 404) break;
-            }
-            if (!presentingRes || !presentingRes.ok) {
-              throw new Error(
-                toMessage((presentingPayload as { detail?: unknown }).detail, "Failed to load presentation members.")
-              );
-            }
-
-            const presentingRows = Array.isArray(presentingPayload)
-              ? presentingPayload
-              : (presentingPayload.data ?? []);
+            const presentingRows = presentation.presenting_students ?? [];
             const studentIds = presentingRows
-              .map((row) => row.student_id ?? row.studentId ?? "")
+              .map((row) => row.id ?? row.student_id ?? row.studentId ?? "")
               .map((id) => normalizeId(id))
               .filter((id) => id.length > 0);
             const studentNames = studentIds
@@ -1137,10 +1141,17 @@ function ProfessorPageContent() {
         <p className="mb-3 text-center text-3xl font-extrabold tracking-wide text-[#0f33a8] md:text-5xl">
           {loadingIdentity ? "Hello!" : `Hello${professorName ? `, ${professorName}` : ""}!`}
         </p>
-        {symposiumName ? (
-          <p className="mb-3 text-center text-sm font-semibold text-[#2d3d7a] md:text-base">
-            Symposium: {symposiumName}
-          </p>
+        {identityReady ? (
+          <div className="mb-3 overflow-hidden rounded-xl border border-[#d7e0ff] bg-white text-sm text-[#2d3d7a] md:grid md:grid-cols-2">
+            <p className="px-3 py-2.5 font-semibold md:border-r md:border-[#e4ebff]">
+              <span className="mr-1 font-bold">Symposium:</span>
+              <span>{symposiumName || "Unknown"}</span>
+            </p>
+            <p className="border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0">
+              <span className="mr-1 font-bold">Class:</span>
+              <span>{className || "Unknown"}</span>
+            </p>
+          </div>
         ) : null}
 
         <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">

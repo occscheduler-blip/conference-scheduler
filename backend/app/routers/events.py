@@ -786,6 +786,18 @@ def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None 
         ) from exc
 
 
+@router.get("/requests")
+def get_requests(student_id: UUID | None = None):
+    try:
+        return read.get_requests(student_id=student_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get requests: {exc}"
+        ) from exc
+
+
 @router.delete("/delete_symposium")
 def delete_symposium(symposium_id: UUID):
     try:

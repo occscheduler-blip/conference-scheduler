@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 
 type StudentTab = "availability" | "preferences";
 type CalendarDay = { key: string; label: string };
-type ProfessorOption = { id: string; name: string; email: string };
 type SavedProfessorRequest = { id: string; professorId: string; professorName: string; professorEmail: string };
 type StudentOption = { id: string; name: string };
 
@@ -54,7 +53,6 @@ export default function StudentPage() {
   const [presentationName, setPresentationName] = useState("");
   const [loadingIdentity, setLoadingIdentity] = useState(false);
   const [identityMessage, setIdentityMessage] = useState("");
-  const [professorOptions, setProfessorOptions] = useState<ProfessorOption[]>([]);
   const [preferredProfessorName, setPreferredProfessorName] = useState("");
   const [preferredProfessorEmail, setPreferredProfessorEmail] = useState("");
   const [savedProfessorRequests, setSavedProfessorRequests] = useState<SavedProfessorRequest[]>([]);
@@ -136,7 +134,6 @@ export default function StudentPage() {
       setEditableSlots([]);
       setAvailability([]);
       setCalendarMessage("");
-      setProfessorOptions([]);
       setPreferredProfessorName("");
       setPreferredProfessorEmail("");
       setSavedProfessorRequests([]);
@@ -149,7 +146,7 @@ export default function StudentPage() {
       setIdentityMessage("");
       setCalendarMessage("");
       try {
-        const [studentsRes, classesRes, departmentsRes, professorsRes, symposiumsRes] = await Promise.all([
+        const [studentsRes, classesRes, departmentsRes, symposiumsRes] = await Promise.all([
           fetch(`${backendUrl}/api/events/students`, {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }),
@@ -157,9 +154,6 @@ export default function StudentPage() {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }),
           fetch(`${backendUrl}/api/events/departments`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/professors`, {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }),
           fetch(`${backendUrl}/api/events/symposiums`, {
@@ -176,21 +170,17 @@ export default function StudentPage() {
         const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; symposium_id?: string }> }
           | Array<{ id?: string; symposium_id?: string }>;
-        const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string; email?: string; class_id?: string }> }
-          | Array<{ id?: string; name?: string; email?: string; class_id?: string }>;
         const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
           | Array<{ id?: string; name?: string; symposium_name?: string }>;
 
-        if (!studentsRes.ok || !classesRes.ok || !departmentsRes.ok || !professorsRes.ok || !symposiumsRes.ok) {
+        if (!studentsRes.ok || !classesRes.ok || !departmentsRes.ok || !symposiumsRes.ok) {
           throw new Error("Failed to load student.");
         }
 
         const studentRows = Array.isArray(studentsPayload) ? studentsPayload : (studentsPayload.data ?? []);
         const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
         const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
-        const professorRows = Array.isArray(professorsPayload) ? professorsPayload : (professorsPayload.data ?? []);
         const symposiumInfoRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
 
         const student = studentRows.find((row) => row.id === selectedStudentId);
@@ -200,7 +190,6 @@ export default function StudentPage() {
 
         const classId = student.class_id ?? "";
         const classRow = classRows.find((row) => row.id === classId);
-        const departmentId = classRow?.department_id ?? "";
         const departmentRow = departmentRows.find((row) => row.id === classRow?.department_id);
         const symposiumId = departmentRow?.symposium_id ?? "";
         const symposiumRow = symposiumInfoRows.find((row) => row.id === symposiumId);
@@ -342,59 +331,33 @@ export default function StudentPage() {
         }
 
         if (ignore) return;
-        const classIdsInDepartment = new Set(
-          classRows
-            .filter((row) => row.department_id === departmentId)
-            .map((row) => row.id)
-            .filter((id): id is string => typeof id === "string" && id.length > 0)
-        );
-        const nextProfessorOptions = professorRows
-          .filter((professor) => {
-            const classIdForProfessor = professor.class_id ?? "";
-            return typeof classIdForProfessor === "string" && classIdsInDepartment.has(classIdForProfessor);
-          })
-          .filter((professor) => professor.id && professor.name && professor.email)
-          .map((professor) => ({
-            id: professor.id as string,
-            name: professor.name as string,
-            email: (professor.email as string).toLowerCase(),
-          }));
-
-        const profReqRes = await fetch(
-          `${backendUrl}/api/events/prof_requests?student_id=${encodeURIComponent(selectedStudentId)}`,
+        const requestsRes = await fetch(
+          `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
           {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }
         );
-        const profReqPayload = (await profReqRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; professor_id?: string }> }
-          | Array<{ id?: string; professor_id?: string }>;
-        const requestRows =
-          profReqRes.ok
-            ? Array.isArray(profReqPayload)
-              ? profReqPayload
-              : (profReqPayload.data ?? [])
-            : [];
-        const professorNameById = new Map(
-          professorRows
-            .filter((professor) => professor.id)
-            .map((professor) => [professor.id as string, professor.name ?? "Unknown"])
-        );
+        const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
+          | { data?: Array<{ id?: string; name?: string; email?: string }> }
+          | Array<{ id?: string; name?: string; email?: string }>;
+        const requestRows = requestsRes.ok
+          ? Array.isArray(requestsPayload)
+            ? requestsPayload
+            : (requestsPayload.data ?? [])
+          : [];
         const nextSavedRequests: SavedProfessorRequest[] = requestRows
-          .filter((row) => row.id && row.professor_id)
+          .filter((row) => row.id && row.name && row.email)
           .map((row) => ({
             id: row.id as string,
-            professorId: row.professor_id as string,
-            professorName: professorNameById.get(row.professor_id as string) ?? "Unknown",
-            professorEmail:
-              nextProfessorOptions.find((professor) => professor.id === row.professor_id)?.email ?? "Unknown email",
+            professorId: "",
+            professorName: row.name as string,
+            professorEmail: (row.email as string).toLowerCase(),
           }));
 
         setStudentName(student.name ?? "Student");
         setSymposiumName(symposiumRow?.name ?? symposiumRow?.symposium_name ?? "");
         setClassName(classRow?.name ?? "");
         setPresentationName(resolvedPresentationName);
-        setProfessorOptions(nextProfessorOptions);
         setPreferredProfessorName("");
         setPreferredProfessorEmail("");
         setSavedProfessorRequests(nextSavedRequests);
@@ -413,7 +376,6 @@ export default function StudentPage() {
         setCalendarDays([]);
         setEditableSlots([]);
         setAvailability([]);
-        setProfessorOptions([]);
         setPreferredProfessorName("");
         setPreferredProfessorEmail("");
         setSavedProfessorRequests([]);
@@ -445,32 +407,25 @@ export default function StudentPage() {
       return;
     }
 
-    const normalizedName = preferredProfessorName.trim().toLowerCase();
-    const normalizedEmail = preferredProfessorEmail.trim().toLowerCase();
-    if (!normalizedName || !normalizedEmail) {
+    const requestName = preferredProfessorName.trim();
+    const requestEmail = preferredProfessorEmail.trim().toLowerCase();
+    if (!requestName || !requestEmail) {
       setPreferencesMessage("Enter a name and email.");
-      return;
-    }
-
-    const matchingProfessor = professorOptions.find(
-      (professor) => professor.name.trim().toLowerCase() === normalizedName && professor.email === normalizedEmail
-    );
-    if (!matchingProfessor) {
-      setPreferencesMessage("No matching person found for that name and email.");
       return;
     }
 
     setSavingPreferences(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_prof_req`, {
+      const response = await fetch(`${backendUrl}/api/events/add_request`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(backendApiKey ? { "X-API-Key": backendApiKey } : {}),
         },
         body: JSON.stringify({
+          name: requestName,
+          email: requestEmail,
           student_id: selectedStudentId,
-          professor_id: matchingProfessor.id,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
@@ -486,25 +441,24 @@ export default function StudentPage() {
         return;
       }
 
-      const profReqRes = await fetch(
-        `${backendUrl}/api/events/prof_requests?student_id=${encodeURIComponent(selectedStudentId)}`,
+      const requestsRes = await fetch(
+        `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
         {
           headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
         }
       );
-      const profReqPayload = (await profReqRes.json().catch(() => ({}))) as
-        | { data?: Array<{ id?: string; professor_id?: string }> }
-        | Array<{ id?: string; professor_id?: string }>;
-      if (profReqRes.ok) {
-        const requestRows = Array.isArray(profReqPayload) ? profReqPayload : (profReqPayload.data ?? []);
-        const professorById = new Map(professorOptions.map((professor) => [professor.id, professor]));
+      const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
+        | { data?: Array<{ id?: string; name?: string; email?: string }> }
+        | Array<{ id?: string; name?: string; email?: string }>;
+      if (requestsRes.ok) {
+        const requestRows = Array.isArray(requestsPayload) ? requestsPayload : (requestsPayload.data ?? []);
         const nextSavedRequests: SavedProfessorRequest[] = requestRows
-          .filter((row) => row.id && row.professor_id)
+          .filter((row) => row.id && row.name && row.email)
           .map((row) => ({
             id: row.id as string,
-            professorId: row.professor_id as string,
-            professorName: professorById.get(row.professor_id as string)?.name ?? "Unknown",
-            professorEmail: professorById.get(row.professor_id as string)?.email ?? "Unknown email",
+            professorId: "",
+            professorName: row.name as string,
+            professorEmail: (row.email as string).toLowerCase(),
           }));
         setSavedProfessorRequests(nextSavedRequests);
       }
