@@ -2,15 +2,21 @@
 
 ```mermaid
 flowchart LR
-  User["User Browser"]
 
   subgraph FE["Next.js Frontend (/app)"]
-    SignIn["Sign In (not yet implemented)<br/>idk.tsx"]
+    User["Landing Page and Symposium Attendee view <br/>app/page.tsx"]
     Admin["Admin UI<br/>app/admin/page.tsx"]
-    Faculty["Faculty UI<br/>app/faculty/page.tsx"]
     DeptHead["Department Head UI<br/>app/department-head/page.tsx"]
+    Professor["Professor UI<br/>app/faculty/page.tsx"]
     Student["Student UI<br/>app/student/page.tsx"]
     HealthWidget["Backend Status Widget<br/>app/components/backend-status.tsx"]
+  end
+
+  subgraph EP["FastAPI Endpoints"]
+    POST["POST: Create new data in the database"]
+    PUT["PUT: Modify data in the database"]
+    GET["GET: Read data from the database"]
+    DELETE["DELETE: Remove data from the database"]
   end
 
   subgraph API["FastAPI Backend (/backend/app)"]
@@ -36,48 +42,39 @@ flowchart LR
     ProfRequests["prof_requests"]
   end
 
-  User --> SignIn
-  SignIn --> Admin
-  SignIn --> Faculty
-  SignIn --> DeptHead
-  SignIn --> Student
-  SignIn --> HealthWidget
+  User --> Admin
+  User --> DeptHead
+  User --> Professor
+  User --> Student
+  User --> HealthWidget
 
-  Admin <-->|"GET /api/events/symposiums"| Main
-  Admin <-->|"GET /api/events/timeframes"| Main
-  Admin -->|"POST /api/events/add_symposium"| Main
-  Admin -->|"POST /api/events/add_department"| Main
-  Admin -->|"PUT /api/events/update_timeframes"| Main
-  Admin -->|"DELETE /api/events/delete_symposium"|Main
-  Admin -->|"DELETE /api/events/delete_department"|Main
-  Admin -->|"DELETE /api/events/delete_class"|Main
-  Admin -->|"DELETE /api/events/delete_timeframes"|Main
-  Admin -->|"DELETE /api/events/delete_professor"|Main
-  Admin -->|"DELETE /api/events/delete_student"|Main
-  Admin -->|"DELETE /api/events/delete_presentation"|Main
-  Admin -->|"DELETE /api/events/delete_prof_request"|Main
-  DeptHead <-->|"GET /api/events/symposiums"| Main
-  DeptHead <-->|"GET /api/events/departments"| Main
-  DeptHead -->|"POST /api/events/add_class"| Main
-  DeptHead -->|"POST /api/events/add_professor"| Main
-  DeptHead -->|"DELETE /api/events/delete_professor"| Main
-  DeptHead -->|"DELETE /api/events/delete_class"| Main
-  Faculty <-->|"GET /api/events/classes"| Main
-  Faculty <-->|"GET /api/events/students"| Main
-  Faculty <-->|"GET /api/events/timeframes"| Main
-  Faculty <-->|"GET /api/events/prof_requests"| Main
-  Faculty -->|"POST /api/events/add_students"| Main
-  Faculty -->|"POST /api/events/add_presentation"| Main
-  Faculty -->|"PUT /api/events/update_timeframes"| Main
-  Faculty -->|"DELETE /api/events/delete_student"| Main
-  Faculty -->|"DELETE /api/events/delete_presentation"| Main
-  Student -->|"GET /api/events/presentations"| Main
-  Student -->|"GET /api/events/presentations"| Main
-  Student -->|"POST /api/events/add_prof_request"| Main
-  Student -->|"PUT /api/events/update_timeframes"| Main
-  Student -->|"PUT /api/events/update_presentation"| Main
-  Student -->|"DELETE /api/events/delete_prof_request"|Main
-  HealthWidget <-->|"GET /health"| Main
+  User --> GET
+
+  Admin --> POST
+  Admin --> PUT
+  Admin --> GET
+  Admin --> DELETE
+
+  DeptHead --> POST
+  DeptHead --> PUT
+  DeptHead --> GET
+  DeptHead --> DELETE
+
+  Professor --> POST
+  Professor --> PUT
+  Professor --> GET
+  Professor --> DELETE
+
+  Student --> POST
+  Student --> PUT
+  Student --> GET
+  Student --> DELETE
+
+
+  POST --> Main
+  PUT --> Main
+  GET --> Main
+  DELETE --> Main
 
   Main --> Security
   Main --> Events
@@ -109,3 +106,4 @@ flowchart LR
    - `supabase_io/read.py` for queries
    - `supabase_io/delete.py` for recursive/cascading deletes
 4. Data is persisted in Supabase tables, with `symposiums -> departments -> classes -> (professors, students, presentations)` and join-like helper tables (`presenting_students`, `prof_requests`).
+ 
