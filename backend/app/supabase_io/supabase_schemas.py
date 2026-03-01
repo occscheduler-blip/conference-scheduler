@@ -62,7 +62,8 @@ class PresentingStudents(BaseModel):
     student_id: UUID
 
 
-class ProfRequest(BaseModel):
+class Request(BaseModel):
     id: UUID
+    name: str
+    email: str
     student_id: UUID
-    professor_id: UUID

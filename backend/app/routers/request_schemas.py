@@ -278,17 +278,41 @@ class AddPresentationRequest(BaseModel):
     )
 
 
-class AddProfReqRequest(BaseModel):
+class AddReqRequest(BaseModel):
+    name: str
+    email: str
     student_id: UUID
-    professor_id: UUID
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "student_id": "6015d279-a271-4d9d-9c8e-435731caac04",
-                "professor_id": "00d31519-34c9-42ad-8003-134e254d721f",
+                "name": "John Smith",
+                "email": "jsmith@hamilton.edu",
+                "student_id": "<The requesting student's UUID>"
             }
         }
     )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str | None):
+        if name is None:
+            return name
+        name = name.strip()
+        if not name:
+            raise ValueError("Student name cannot be empty")
+        return name
+    
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, email: str | None):
+        if email is None:
+            return email
+        email = email.strip().lower()
+        if not email:
+            raise ValueError("Email cannot be blank.")
+        if not email.endswith("@hamilton.edu"):
+            raise ValueError("Email must be a @hamilton.edu address.")
+        return email
 
 
 class UpdateTimeframesRequest(BaseModel):

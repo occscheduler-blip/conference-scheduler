@@ -335,23 +335,24 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
         ) from exc
 
 
-@router.post("/add_prof_req")
-def add_prof_request(payload: request_schemas.AddProfReqRequest):
+@router.post("/add_request")
+def add_prof_request(payload: request_schemas.AddReqRequest):
     try:
-        request = supabase_schemas.ProfRequest(
+        request = supabase_schemas.Request(
             id=uuid4(),
-            student_id=payload.student_id,
-            professor_id=payload.professor_id,
+            name=payload.name,
+            email=payload.email,
+            student_id=payload.student_id
         )
 
-        response = write.insert("prof_requests", [request.model_dump()])
+        response = write.insert("requests", [request.model_dump()])
         prof_requests_inserted = _rows_affected(response, fallback=1)
         records_inserted = {"prof_requests": prof_requests_inserted}
 
         return {
             "status": "inserted",
-            "student_id": payload.student_id,
-            "professor_id": payload.professor_id,
+            "name": payload.name,
+            "email": payload.email,
             "records_inserted": records_inserted,
             "lines_edited": _sum_counts(records_inserted),
         }
