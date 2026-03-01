@@ -122,9 +122,26 @@ class ProfessorInit(BaseModel):
         return name
 
 class UpdateDepartmentRequest(BaseModel):
+    department_id: UUID
     department_name: str
     department_head_name: str
     email: str
+
+    @field_validator("department_name")
+    @classmethod
+    def validate_dept_name(cls, dept_name: str):
+        name = dept_name.strip()
+        if not name:
+            raise ValueError("Department name cannot be empty")
+        return name
+
+    @field_validator("department_head_name")
+    @classmethod
+    def validate_dept_head_name(cls, dept_head_name: str):
+        name = dept_head_name.strip()
+        if not name:
+            raise ValueError("Department head name cannot be empty")
+        return name
 
     @field_validator("email")
     @classmethod
@@ -317,6 +334,41 @@ class UpdateStudentRequest(BaseModel):
             and self.presentation_id is None
         ):
             raise ValueError("At least one student field must be provided for update.")
+        return self
+
+
+class UpdateProfessorRequest(BaseModel):
+    professor_id: UUID
+    name: str | None = None
+    email: str | None = None
+    class_id: UUID | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str | None):
+        if name is None:
+            return name
+        name = name.strip()
+        if not name:
+            raise ValueError("Professor name cannot be empty")
+        return name
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, email: str | None):
+        if email is None:
+            return email
+        email = email.strip().lower()
+        if not email:
+            raise ValueError("Email cannot be blank.")
+        if not email.endswith("@hamilton.edu"):
+            raise ValueError("Email must be a @hamilton.edu address.")
+        return email
+
+    @model_validator(mode="after")
+    def validate_has_updates(self):
+        if self.name is None and self.email is None and self.class_id is None:
+            raise ValueError("At least one professor field must be provided for update.")
         return self
 
 

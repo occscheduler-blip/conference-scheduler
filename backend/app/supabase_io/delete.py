@@ -189,7 +189,11 @@ def delete_department(department_id: UUID | list[UUID]):
 
     classes = read.get_classes(department_id).data
     for class_ in classes:
-        _merge_counts(counts, delete_class(class_["id"]))
+        class_id_raw = class_.get("id")
+        if class_id_raw is None:
+            continue
+        class_id = class_id_raw if isinstance(class_id_raw, UUID) else UUID(str(class_id_raw))
+        _merge_counts(counts, delete_class(class_id))
 
     del_dept_resp = (
         supabase.table("departments").delete().eq("id", department_id).execute()

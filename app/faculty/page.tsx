@@ -207,12 +207,25 @@ function FacultyPageContent() {
       setIdentityMessage("");
       setCalendarMessage("");
       try {
+        const fetchWithCandidates = async (path: string) => {
+          let response: Response | null = null;
+          for (const url of buildCandidateUrls(backendUrl, path)) {
+            response = await fetch(url, { headers: authHeaders });
+            if (response.status !== 404) break;
+          }
+          return response;
+        };
+
         const [professorsRes, classesRes, departmentsRes, symposiumsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/professors`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/classes`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
+          fetchWithCandidates("/api/events/professors"),
+          fetchWithCandidates("/api/events/classes"),
+          fetchWithCandidates("/api/events/departments"),
+          fetchWithCandidates("/api/events/symposiums"),
         ]);
+
+        if (!professorsRes || !classesRes || !departmentsRes || !symposiumsRes) {
+          throw new Error("Failed to load faculty identity data.");
+        }
 
         const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; name?: string; class_id?: string }> }
@@ -1268,6 +1281,9 @@ function FacultyPageContent() {
               deployedPresentationGroups.length > 0 ? (
                 <div className="w-full rounded-lg border border-[#d7e0ff] bg-[#fdfdff] p-3">
                   <p className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a]">Uploaded Students</p>
+                  <p className="mt-1 text-xs font-semibold text-[#4b5d99]">
+                    Click student names to select them, then click Make Presentation Group.
+                  </p>
                   {uploadedStudents.length > 0 ? (
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                       {uploadedStudents.map((student) => {

@@ -156,6 +156,35 @@ def test_add_students_inserts_all_students(client, monkeypatch):
     assert len(inserted["payload"]) == 2
 
 
+def test_add_class_returns_professor_ids(client, monkeypatch):
+    inserted_payloads = {}
+
+    def fake_insert(table_name, payload):
+        inserted_payloads[table_name] = payload
+        return SimpleNamespace(data=payload)
+
+    monkeypatch.setattr(events.write, "insert", fake_insert)
+    response = client.post(
+        "/api/events/add_class",
+        json={
+            "name": "CS 410",
+            "department_id": str(uuid4()),
+            "professors": [
+                {"name": "Prof One", "email": "one@hamilton.edu"},
+                {"name": "Prof Two", "email": "two@hamilton.edu"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body.get("class_id"), str)
+    professor_ids = body.get("professor_ids")
+    assert isinstance(professor_ids, list)
+    assert len(professor_ids) == 2
+    assert len(inserted_payloads["professors"]) == 2
+
+
 def test_add_presentation_returns_lines_edited_from_insert_responses(client, monkeypatch):
     class_id = str(uuid4())
     student_ids = [str(uuid4()), str(uuid4())]
@@ -349,6 +378,61 @@ def test_get_departments_forwards_query_param(client, monkeypatch):
 
     assert response.status_code == 200
     assert captured["value"] == symposium_id
+
+
+def test_get_symposiums_returns_legacy_and_data_keys(client, monkeypatch):
+    rows = [{"id": str(uuid4()), "name": "Spring Symposium"}]
+
+    monkeypatch.setattr(events.read, "get_symposiums", lambda: SimpleNamespace(data=rows))
+    response = client.get("/api/events/symposiums")
+
+    assert response.status_code == 200
+    assert response.json() == {"data": rows, "symposiums": rows}
+
+
+def test_get_symposium_by_id_includes_timeframes(client, monkeypatch):
+    symposium_id = uuid4()
+    symposium_rows = [{"id": str(symposium_id), "name": "Spring Symposium"}]
+    timeframe_rows = [
+        {
+            "id": str(uuid4()),
+            "linked_id": str(symposium_id),
+            "start_time": "2026-04-20T09:00:00Z",
+            "end_time": "2026-04-20T09:15:00Z",
+        }
+    ]
+
+    class QueryStub:
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def eq(self, _field, _value):
+            return self
+
+        def limit(self, _count):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=symposium_rows)
+
+    class SupabaseStub:
+        def table(self, _table_name):
+            return QueryStub()
+
+    monkeypatch.setattr(events, "supabase", SupabaseStub())
+    monkeypatch.setattr(
+        events.read,
+        "get_timeframes",
+        lambda linked_id=None: SimpleNamespace(data=timeframe_rows if linked_id == symposium_id else []),
+    )
+
+    response = client.get(f"/api/events/symposiums/{symposium_id}")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "symposium": symposium_rows[0],
+        "timeframes": timeframe_rows,
+    }
 
 
 def test_get_classes_returns_400_when_read_layer_fails(client, monkeypatch):

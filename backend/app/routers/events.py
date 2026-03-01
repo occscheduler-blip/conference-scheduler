@@ -107,6 +107,7 @@ def add_class(payload: request_schemas.AddClassRequest):
         return {
             "status": "Inserted",
             "class_id": class_def.id,
+            "professor_ids": [professor.id for professor in professors],
             "department_id": class_def.department_id,
             "records_inserted": records_inserted,
             "lines_edited": _sum_counts(records_inserted),
@@ -438,6 +439,41 @@ def update_student(payload: request_schemas.UpdateStudentRequest):
         ) from exc
 
 
+@router.put("/update_professor")
+def update_professor(payload: request_schemas.UpdateProfessorRequest):
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"professor_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("professors")
+            .update(update_payload)
+            .eq("id", str(payload.professor_id))
+            .execute()
+        )
+        records_updated = {
+            "professors": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
+
+        return {
+            "status": "updated",
+            "professor_id": str(payload.professor_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update professor: {exc}"
+        ) from exc
+
+
 @router.put("/update_class")
 def update_class(payload: request_schemas.UpdateClassRequest):
     try:
@@ -470,6 +506,41 @@ def update_class(payload: request_schemas.UpdateClassRequest):
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Failed to update class: {exc}"
+        ) from exc
+
+
+@router.put("/update_department")
+def update_department(payload: request_schemas.UpdateDepartmentRequest):
+    try:
+        update_payload = {
+            "department_name": payload.department_name,
+            "department_head_name": payload.department_head_name,
+            "email": payload.email,
+        }
+        update_resp = (
+            supabase.table("departments")
+            .update(update_payload)
+            .eq("id", str(payload.department_id))
+            .execute()
+        )
+        records_updated = {
+            "departments": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
+
+        return {
+            "status": "updated",
+            "department_id": str(payload.department_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update department: {exc}"
         ) from exc
 
 
@@ -589,7 +660,9 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest):
 @router.get("/symposiums")
 def get_symposiums():
     try:
-        return read.get_symposiums()
+        response = read.get_symposiums()
+        rows = list(getattr(response, "data", None) or [])
+        return {"data": rows, "symposiums": rows}
     except HTTPException:
         raise
     except Exception as exc:
@@ -598,10 +671,40 @@ def get_symposiums():
         ) from exc
 
 
+@router.get("/symposiums/{symposium_id}")
+def get_symposium(symposium_id: UUID):
+    try:
+        symposium_response = (
+            supabase.table("symposiums")
+            .select("*")
+            .eq("id", str(symposium_id))
+            .limit(1)
+            .execute()
+        )
+        symposium_rows = list(getattr(symposium_response, "data", None) or [])
+        if not symposium_rows:
+            raise HTTPException(status_code=404, detail="Symposium not found.")
+
+        timeframe_response = read.get_timeframes(linked_id=symposium_id)
+        timeframe_rows = list(getattr(timeframe_response, "data", None) or [])
+        return {
+            "symposium": symposium_rows[0],
+            "timeframes": timeframe_rows,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to get symposium: {exc}"
+        ) from exc
+
+
 @router.get("/departments")
 def get_departments(symposium_id: UUID | None = None):
     try:
-        return read.get_departments(symposium_id=symposium_id)
+        response = read.get_departments(symposium_id=symposium_id)
+        rows = list(getattr(response, "data", None) or [])
+        return {"data": rows, "departments": rows}
     except HTTPException:
         raise
     except Exception as exc:

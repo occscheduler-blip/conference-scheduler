@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type AdminTab = "create" | "edit";
-type DepartmentAction = "add" | "edit" | "delete";
+type DepartmentAction = "add" | "edit";
 
 type SymposiumOption = {
   id: string;
@@ -62,6 +62,22 @@ function parseBackendDateTime(value: string) {
   const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
   // Treat timezone-less backend timestamps as UTC to prevent local timezone drift when reloading/editing.
   return new Date(hasExplicitTimezone ? value : `${value}Z`);
+}
+
+function toMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const joined = detail
+      .map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg))
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .join("; ");
+    if (joined) return joined;
+  }
+  if (detail && typeof detail === "object") {
+    const msg = (detail as { msg?: unknown }).msg;
+    if (typeof msg === "string" && msg.trim()) return msg;
+  }
+  return fallback;
 }
 
 function buildCalendarDates(startDate: string, endDate: string) {
@@ -172,10 +188,11 @@ export default function AdminPage() {
   const [departmentName, setDepartmentName] = useState("");
   const [departmentHeadName, setDepartmentHeadName] = useState("");
   const [departmentHeadEmail, setDepartmentHeadEmail] = useState("");
-  const [departmentToDeleteId, setDepartmentToDeleteId] = useState("");
   const [isSavingDepartment, setIsSavingDepartment] = useState(false);
+  const [deletingDepartmentId, setDeletingDepartmentId] = useState("");
   const [departmentMessage, setDepartmentMessage] = useState<string | null>(null);
   const [departmentMessageKind, setDepartmentMessageKind] = useState<"success" | "error" | null>(null);
+  const [deployEventMessage, setDeployEventMessage] = useState<string | null>(null);
 
   const isCreateTab = activeTab === "create";
   const hasSelectedSymposium = Boolean(selectedSymposiumId.trim());
@@ -215,7 +232,6 @@ export default function AdminPage() {
       if (!symposiumId.trim()) {
         setDepartments([]);
         setDepartmentToEditId("");
-        setDepartmentToDeleteId("");
         setDepartmentLoadError(null);
         return;
       }
@@ -235,9 +251,6 @@ export default function AdminPage() {
         const loaded = payload.departments ?? [];
         setDepartments(loaded);
         setDepartmentToEditId((current) =>
-          loaded.some((department) => department.id === current) ? current : loaded[0]?.id ?? ""
-        );
-        setDepartmentToDeleteId((current) =>
           loaded.some((department) => department.id === current) ? current : loaded[0]?.id ?? ""
         );
       } catch (error) {
@@ -340,14 +353,13 @@ export default function AdminPage() {
     setDepartmentHeadName("");
     setDepartmentHeadEmail("");
     setDepartmentToEditId("");
-    setDepartmentToDeleteId("");
     setDepartmentAction("add");
     void fetchDepartments(selectedSymposiumId);
     void fetchSymposiumDetails(selectedSymposiumId);
   }, [fetchDepartments, fetchSymposiumDetails, selectedSymposiumId]);
 
   useEffect(() => {
-    if (departmentAction !== "add" && departmentAction !== "edit") return;
+    if (departmentAction !== "edit") return;
 
     if (!departmentToEditId) {
       setDepartmentName("");
@@ -495,10 +507,13 @@ export default function AdminPage() {
     setIsDeletingSymposium(true);
     setSymposiumEditMessage(null);
     try {
-      const response = await fetch(`${backendUrl}/api/events/symposiums/${selectedSymposiumId}`, {
+      const response = await fetch(
+        `${backendUrl}/api/events/delete_symposium?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
+        {
         method: "DELETE",
         headers: authHeaders,
-      });
+        }
+      );
       const payload = (await response.json()) as { detail?: string; status?: string };
       if (!response.ok) {
         setSymposiumEditMessage(payload.detail ?? "Failed to delete event.");
@@ -550,12 +565,6 @@ export default function AdminPage() {
         setDepartmentMessageKind("error");
         return;
       }
-    } else {
-      if (!departmentToDeleteId) {
-        setDepartmentMessage("Select a department to delete.");
-        setDepartmentMessageKind("error");
-        return;
-      }
     }
 
     setIsSavingDepartment(true);
@@ -565,16 +574,16 @@ export default function AdminPage() {
           method: "POST",
           headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
           body: JSON.stringify({
-            symposium: selectedSymposiumId,
+            symposium_id: selectedSymposiumId,
             department_name: departmentName.trim(),
             department_head_name: departmentHeadName.trim(),
             email: departmentHeadEmail.trim().toLowerCase(),
           }),
         });
 
-        const payload = (await response.json()) as { detail?: string; status?: string };
+        const payload = (await response.json()) as { detail?: unknown; status?: string };
         if (!response.ok) {
-          setDepartmentMessage(payload.detail ?? "Failed to add department.");
+          setDepartmentMessage(toMessage(payload.detail, "Failed to add department."));
           setDepartmentMessageKind("error");
           return;
         }
@@ -585,40 +594,31 @@ export default function AdminPage() {
         setDepartmentMessage("Department added.");
         setDepartmentMessageKind("success");
       } else if (departmentAction === "edit") {
-        const response = await fetch(`${backendUrl}/api/events/departments/${departmentToEditId}`, {
+        const response = await fetch(`${backendUrl}/api/events/update_department`, {
           method: "PUT",
           headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
           body: JSON.stringify({
+            department_id: departmentToEditId,
             department_name: departmentName.trim(),
             department_head_name: departmentHeadName.trim(),
             email: departmentHeadEmail.trim().toLowerCase(),
           }),
         });
 
-        const payload = (await response.json()) as { detail?: string; status?: string };
+        const payload = (await response.json()) as { detail?: unknown; status?: string };
         if (!response.ok) {
-          setDepartmentMessage(payload.detail ?? "Failed to update department.");
+          setDepartmentMessage(toMessage(payload.detail, "Failed to update department."));
           setDepartmentMessageKind("error");
           return;
         }
 
         setDepartmentMessage("Department updated.");
         setDepartmentMessageKind("success");
-      } else {
-        const response = await fetch(`${backendUrl}/api/events/departments/${departmentToDeleteId}`, {
-          method: "DELETE",
-          headers: authHeaders,
-        });
-
-        const payload = (await response.json()) as { detail?: string; status?: string };
-        if (!response.ok) {
-          setDepartmentMessage(payload.detail ?? "Failed to delete department.");
-          setDepartmentMessageKind("error");
-          return;
-        }
-
-        setDepartmentMessage("Department deleted.");
-        setDepartmentMessageKind("success");
+        setDepartmentAction("add");
+        setDepartmentToEditId("");
+        setDepartmentName("");
+        setDepartmentHeadName("");
+        setDepartmentHeadEmail("");
       }
 
       await fetchDepartments(selectedSymposiumId);
@@ -629,6 +629,112 @@ export default function AdminPage() {
     } finally {
       setIsSavingDepartment(false);
     }
+  };
+
+  const handleDeleteDepartment = async (department: DepartmentRecord) => {
+    const confirmed = window.confirm(`Delete department "${department.department_name}"?`);
+    if (!confirmed) return;
+
+    setDeletingDepartmentId(department.id);
+    setDepartmentMessage(null);
+    setDepartmentMessageKind(null);
+    try {
+      const response = await fetch(
+        `${backendUrl}/api/events/delete_department?department_id=${encodeURIComponent(department.id)}`,
+        {
+          method: "DELETE",
+          headers: authHeaders,
+        }
+      );
+      const payload = (await response.json()) as { detail?: unknown; status?: string };
+      if (!response.ok) {
+        setDepartmentMessage(toMessage(payload.detail, "Failed to delete department."));
+        setDepartmentMessageKind("error");
+        return;
+      }
+
+      setDepartmentMessage("Department deleted.");
+      setDepartmentMessageKind("success");
+      await fetchDepartments(selectedSymposiumId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setDepartmentMessage(`Request failed: ${message}`);
+      setDepartmentMessageKind("error");
+    } finally {
+      setDeletingDepartmentId("");
+    }
+  };
+
+  const handleStartEditDepartment = (department: DepartmentRecord) => {
+    setDepartmentAction("edit");
+    setDepartmentToEditId(department.id);
+    setDepartmentName(department.department_name);
+    setDepartmentHeadName(department.department_head_name);
+    setDepartmentHeadEmail(department.email);
+    setDepartmentMessage(null);
+    setDepartmentMessageKind(null);
+  };
+
+  const handleDeployEvent = () => {
+    setDeployEventMessage(null);
+    if (!selectedSymposiumId) {
+      setDeployEventMessage("Select an event first.");
+      return;
+    }
+    if (departments.length === 0) {
+      setDeployEventMessage("Add at least one department before deploying.");
+      return;
+    }
+    setDeployEventMessage("Deploy Event is not connected yet.");
+  };
+
+  const resetCreateTabState = () => {
+    setCreateSymposiumName("");
+    setCreateRooms("");
+    setCreateStartDate("");
+    setCreateEndDate("");
+    setCreateAvailability([]);
+    setIsCreateDragging(false);
+    setCreateDragValue(null);
+    setIsSavingCreate(false);
+    setCreateSaveMessage(null);
+  };
+
+  const resetEditTabState = () => {
+    setSelectedSymposiumId("");
+    setEditSymposiumName("");
+    setEditRooms("");
+    setEditStartDate("");
+    setEditEndDate("");
+    setEditAvailability([]);
+    setIsEditDragging(false);
+    setEditDragValue(null);
+    setIsLoadingSymposiumDetails(false);
+    setIsSavingSymposiumEdit(false);
+    setIsDeletingSymposium(false);
+    setSymposiumEditMessage(null);
+    setDepartments([]);
+    setDepartmentLoadError(null);
+    setDepartmentAction("add");
+    setDepartmentToEditId("");
+    setDepartmentName("");
+    setDepartmentHeadName("");
+    setDepartmentHeadEmail("");
+    setIsSavingDepartment(false);
+    setDeletingDepartmentId("");
+    setDepartmentMessage(null);
+    setDepartmentMessageKind(null);
+    setDeployEventMessage(null);
+  };
+
+  const handleTabSwitch = (tab: AdminTab) => {
+    setActiveTab(tab);
+    if (tab === "create") {
+      resetCreateTabState();
+      return;
+    }
+    resetEditTabState();
+    void fetchSymposiums();
   };
 
   return (
@@ -651,7 +757,7 @@ export default function AdminPage() {
         <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
           <button
             type="button"
-            onClick={() => setActiveTab("create")}
+            onClick={() => handleTabSwitch("create")}
             className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
               isCreateTab
                 ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
@@ -662,7 +768,7 @@ export default function AdminPage() {
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab("edit")}
+            onClick={() => handleTabSwitch("edit")}
             className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
               isCreateTab
                 ? "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
@@ -702,7 +808,7 @@ export default function AdminPage() {
                   </label>
                 </div>
 
-                <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="mt-5 grid grid-cols-1 gap-4">
                   <label className="flex flex-col gap-1.5">
                     <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Start Date</span>
                     <input
@@ -874,7 +980,7 @@ export default function AdminPage() {
                       </label>
                     </div>
 
-                    <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="mt-5 grid grid-cols-1 gap-4">
                       <label className="flex flex-col gap-1.5">
                         <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Start Date</span>
                         <input
@@ -970,140 +1076,141 @@ export default function AdminPage() {
 
                 <div className="mt-6 rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-4 md:p-5">
                   <h3 className="mb-3 text-lg font-bold text-[#111]">Departments</h3>
-
-                  <form onSubmit={handleDepartmentSubmit} className="space-y-4">
-                    <label className="flex flex-col gap-1.5 max-w-sm">
-                      <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Action</span>
-                      <select
-                        className={fieldClass}
-                        value={departmentAction}
-                        onChange={(event) => {
-                          const nextAction = event.target.value as DepartmentAction;
-                          setDepartmentAction(nextAction);
-                          if (nextAction === "add") {
+                  <form onSubmit={handleDepartmentSubmit} className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div />
+                      {departmentAction === "edit" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDepartmentAction("add");
                             setDepartmentToEditId("");
                             setDepartmentName("");
                             setDepartmentHeadName("");
                             setDepartmentHeadEmail("");
-                          }
-                        }}
-                      >
-                        <option value="add">Add Department</option>
-                        <option value="edit">Edit Department</option>
-                        <option value="delete">Delete Department</option>
-                      </select>
-                    </label>
-
-                    {departmentAction === "add" || departmentAction === "edit" ? (
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                        <label className="flex flex-col gap-1.5 md:col-span-3">
-                          <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
-                            {departmentAction === "add"
-                              ? "Select Existing Department (Optional Prefill)"
-                              : "Select Department To Edit"}
-                          </span>
-                          <select
-                            className={fieldClass}
-                            value={departmentToEditId}
-                            onChange={(event) => setDepartmentToEditId(event.target.value)}
-                            disabled={departmentAction === "add" || isLoadingDepartments || departments.length === 0}
-                          >
-                            {departmentAction === "add" ? (
-                              <option value="">Create new department</option>
-                            ) : (
-                              <>
-                                {departments.length === 0 ? <option value="">No departments found</option> : null}
-                                {departments.map((department) => (
-                                  <option key={department.id} value={department.id}>
-                                    {department.department_name} - {department.department_head_name}
-                                  </option>
-                                ))}
-                              </>
-                            )}
-                          </select>
-                        </label>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Department Name</span>
-                          <input
-                            className={fieldClass}
-                            value={departmentName}
-                            onChange={(event) => setDepartmentName(event.target.value)}
-                            placeholder="Ex. Biology"
-                          />
-                        </label>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Department Head Name</span>
-                          <input
-                            className={fieldClass}
-                            value={departmentHeadName}
-                            onChange={(event) => setDepartmentHeadName(event.target.value)}
-                            placeholder="Ex. John Smith"
-                          />
-                        </label>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Hamilton Email</span>
-                          <input
-                            type="email"
-                            className={fieldClass}
-                            value={departmentHeadEmail}
-                            onChange={(event) => setDepartmentHeadEmail(event.target.value)}
-                            placeholder="jsmith@hamilton.edu"
-                          />
-                        </label>
-                      </div>
-                    ) : (
-                      <label className="flex flex-col gap-1.5 max-w-xl">
-                        <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
-                          Select Department To Delete
-                        </span>
-                        <select
-                          className={fieldClass}
-                          value={departmentToDeleteId}
-                          onChange={(event) => setDepartmentToDeleteId(event.target.value)}
-                          disabled={isLoadingDepartments || departments.length === 0}
+                          }}
+                          className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:bg-[#f5f5f5]"
                         >
-                          {departments.length === 0 ? <option value="">No departments found</option> : null}
-                          {departments.map((department) => (
-                            <option key={department.id} value={department.id}>
-                              {department.department_name} - {department.department_head_name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="submit"
-                        disabled={isSavingDepartment || !hasSelectedSymposium}
-                        className="rounded-lg bg-[#0f33a8] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isSavingDepartment
-                          ? "Saving..."
-                          : departmentAction === "add"
-                            ? "Add Department"
-                            : departmentAction === "edit"
-                              ? "Update Department"
-                              : "Delete Department"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void fetchDepartments(selectedSymposiumId)}
-                        disabled={isLoadingDepartments || !hasSelectedSymposium}
-                        className="rounded-lg border border-[#b7b7b7] bg-white px-4 py-2 text-sm font-semibold text-[#222] transition hover:bg-[#f7f7f7] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isLoadingDepartments ? "Loading..." : "Refresh Departments"}
-                      </button>
+                          Cancel Edit
+                        </button>
+                      ) : null}
                     </div>
 
-                    {departmentLoadError ? <p className="text-sm font-semibold text-[#b00020]">{departmentLoadError}</p> : null}
-                    {departmentMessage ? (
-                      <p className={`text-sm font-semibold ${departmentMessageKind === "error" ? "text-[#b00020]" : "text-[#167a2f]"}`}>
-                        {departmentMessage}
-                      </p>
-                    ) : null}
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <label className="flex flex-col gap-1.5">
+                        <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
+                          Department Name
+                        </span>
+                        <input
+                          className={fieldClass}
+                          value={departmentName}
+                          onChange={(event) => setDepartmentName(event.target.value)}
+                          disabled={isSavingDepartment}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1.5">
+                        <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
+                          Department Head
+                        </span>
+                        <input
+                          className={fieldClass}
+                          value={departmentHeadName}
+                          onChange={(event) => setDepartmentHeadName(event.target.value)}
+                          disabled={isSavingDepartment}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1.5">
+                        <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Email</span>
+                        <input
+                          type="email"
+                          className={fieldClass}
+                          value={departmentHeadEmail}
+                          onChange={(event) => setDepartmentHeadEmail(event.target.value)}
+                          disabled={isSavingDepartment}
+                          placeholder="name@hamilton.edu"
+                        />
+                      </label>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSavingDepartment || isLoadingDepartments}
+                      className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSavingDepartment
+                        ? "Saving..."
+                        : departmentAction === "add"
+                          ? "Add Department"
+                          : "Save Department Changes"}
+                    </button>
                   </form>
+
+                  {departmentLoadError ? (
+                    <p className="mt-3 text-sm font-semibold text-[#9a1f1f]">{departmentLoadError}</p>
+                  ) : null}
+                  {departmentMessage ? (
+                    <p
+                      className={`mt-2 text-sm font-semibold ${
+                        departmentMessageKind === "error" ? "text-[#9a1f1f]" : "text-[#1f5132]"
+                      }`}
+                    >
+                      {departmentMessage}
+                    </p>
+                  ) : null}
+
+                  <div className="mt-4 rounded-lg border border-[#d7e0ff] bg-white p-3">
+                    <p className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a]">Saved Departments</p>
+                    {isLoadingDepartments ? (
+                      <p className="mt-2 text-sm text-[#555]">Loading departments...</p>
+                    ) : departments.length === 0 ? (
+                      <p className="mt-2 text-sm text-[#555]">No departments saved yet.</p>
+                    ) : (
+                      <ul className="mt-2 space-y-2 text-sm text-[#222]">
+                        {departments.map((department) => (
+                          <li key={department.id} className="rounded border border-[#e5e7eb] bg-[#fafafa] p-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="font-semibold">{department.department_name}</p>
+                                <p className="text-xs text-[#555]">
+                                  {department.department_head_name} ({department.email})
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditDepartment(department)}
+                                  className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#0f33a8] hover:text-[#0f33a8]"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteDepartment(department)}
+                                  disabled={deletingDepartmentId === department.id}
+                                  className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {deletingDepartmentId === department.id ? "Deleting..." : "Delete"}
+                                </button>
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={handleDeployEvent}
+                      className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#155622]"
+                    >
+                      Deploy Event
+                    </button>
+                    {deployEventMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployEventMessage}</p> : null}
+                  </div>
                 </div>
+
               </>
             ) : (
               <div className="mt-5 rounded-xl border border-[#e0e0e0] bg-[#f9f9f9] p-4 text-sm font-semibold text-[#333]">

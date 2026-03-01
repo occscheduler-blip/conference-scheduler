@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
 type DepartmentOption = { id: string; name: string };
-type ProfessorRow = { name: string; email: string };
+type ProfessorRow = { id?: string; name: string; email: string };
 type SavedClass = {
   localId: string;
   classId: string;
@@ -44,42 +44,54 @@ function DepartmentHeadPageContent() {
   );
 
   const [symposiumName, setSymposiumName] = useState<string>("");
+  const [resolvedSymposiumId, setResolvedSymposiumId] = useState<string>("");
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>("");
   const [className, setClassName] = useState("");
   const [professors, setProfessors] = useState<ProfessorRow[]>([{ name: "", email: "" }]);
   const [savedClasses, setSavedClasses] = useState<SavedClass[]>([]);
   const [deployedClassIds, setDeployedClassIds] = useState<string[]>([]);
+
+  const [editingLocalId, setEditingLocalId] = useState<string>("");
+  const [editingClassName, setEditingClassName] = useState<string>("");
+  const [editingDepartmentId, setEditingDepartmentId] = useState<string>("");
+  const [editingProfessors, setEditingProfessors] = useState<ProfessorRow[]>([]);
+
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingLocalId, setDeletingLocalId] = useState<string>("");
+  const [updatingLocalId, setUpdatingLocalId] = useState<string>("");
   const [message, setMessage] = useState<string>("");
+
   const deployedStorageKey = useMemo(
-    () => (symposiumId ? `deployed_classes_${symposiumId}` : "deployed_classes"),
-    [symposiumId]
+    () =>
+      `deployed_classes_${resolvedSymposiumId || symposiumId || departmentIdFromLink || "global"}`,
+    [departmentIdFromLink, resolvedSymposiumId, symposiumId]
   );
 
   useEffect(() => {
-    if (!symposiumId) return;
+    if (!symposiumId && !departmentIdFromLink) return;
     let ignore = false;
 
     const load = async () => {
       setLoading(true);
       setMessage("");
       try {
+        const departmentsUrl = symposiumId
+          ? `${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`
+          : `${backendUrl}/api/events/departments`;
+
         const [symposiumsRes, departmentsRes] = await Promise.all([
           fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`, {
-            headers: authHeaders,
-          }),
+          fetch(departmentsUrl, { headers: authHeaders }),
         ]);
 
         const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
           | Array<{ id?: string; name?: string; symposium_name?: string }>;
         const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; department_name?: string }> }
-          | Array<{ id?: string; department_name?: string }>;
+          | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
+          | Array<{ id?: string; department_name?: string; symposium_id?: string }>;
 
         if (!symposiumsRes.ok) {
           throw new Error(toMessage((symposiumsPayload as { detail?: unknown }).detail, "Failed to load symposium."));
@@ -88,12 +100,25 @@ function DepartmentHeadPageContent() {
           throw new Error(toMessage((departmentsPayload as { detail?: unknown }).detail, "Failed to load departments."));
         }
 
-        const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
-        const match = symposiumRows.find((row) => row.id === symposiumId);
-        const resolvedName = match?.name ?? match?.symposium_name ?? symposiumId;
-
         const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
+        const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
+
+        let effectiveSymposiumId = symposiumId;
+        if (!effectiveSymposiumId && departmentIdFromLink) {
+          const linkedDepartment = departmentRows.find((row) => row.id === departmentIdFromLink);
+          effectiveSymposiumId = linkedDepartment?.symposium_id ?? "";
+        }
+        if (!effectiveSymposiumId) {
+          throw new Error("Invalid department link. No symposium found for this department.");
+        }
+
+        const resolvedName =
+          symposiumRows.find((row) => row.id === effectiveSymposiumId)?.name ??
+          symposiumRows.find((row) => row.id === effectiveSymposiumId)?.symposium_name ??
+          effectiveSymposiumId;
+
         const nextDepartments = departmentRows
+          .filter((row) => row.symposium_id === effectiveSymposiumId)
           .filter((row) => row.id)
           .map((row) => ({ id: row.id as string, name: row.department_name ?? (row.id as string) }));
 
@@ -144,7 +169,8 @@ function DepartmentHeadPageContent() {
                 const professorRows = Array.isArray(professorsPayload)
                   ? professorsPayload
                   : (professorsPayload.data ?? []);
-                const professors = professorRows.map((professor) => ({
+                const normalizedProfessors = professorRows.map((professor) => ({
+                  id: professor.id,
                   name: professor.name ?? "",
                   email: professor.email ?? "",
                 }));
@@ -152,18 +178,17 @@ function DepartmentHeadPageContent() {
                   .map((professor) => professor.id)
                   .filter((id): id is string => typeof id === "string" && id.length > 0);
 
-                const savedClass: SavedClass = {
+                return {
                   localId: classRow.id,
                   classId: classRow.id,
                   professorIds,
                   departmentId: department.id,
                   departmentName: department.name,
                   className: classRow.name,
-                  professors,
-                };
-                return savedClass;
+                  professors: normalizedProfessors,
+                } as SavedClass;
               } catch {
-                const savedClass: SavedClass = {
+                return {
                   localId: classRow.id,
                   classId: classRow.id,
                   professorIds: [],
@@ -171,14 +196,14 @@ function DepartmentHeadPageContent() {
                   departmentName: department.name,
                   className: classRow.name,
                   professors: [],
-                };
-                return savedClass;
+                } as SavedClass;
               }
             })
           )
         );
 
         if (ignore) return;
+        setResolvedSymposiumId(effectiveSymposiumId);
         setSymposiumName(resolvedName);
         setDepartments(nextDepartments);
         setSavedClasses(savedClassResults);
@@ -261,7 +286,7 @@ function DepartmentHeadPageContent() {
     setDeletingLocalId(savedClass.localId);
     try {
       if (savedClass.professorIds.length > 0) {
-        const professorDeletes = await Promise.all(
+        await Promise.all(
           savedClass.professorIds.map(async (professorId) => {
             const response = await fetch(
               `${backendUrl}/api/events/delete_professor?professor_id=${encodeURIComponent(professorId)}`,
@@ -274,12 +299,8 @@ function DepartmentHeadPageContent() {
             if (!response.ok) {
               throw new Error(toMessage(payload.detail, `Unable to delete professor ${professorId}.`));
             }
-            return true;
           })
         );
-        if (professorDeletes.length !== savedClass.professorIds.length) {
-          throw new Error("Not all professors were deleted.");
-        }
       }
 
       const classResponse = await fetch(
@@ -302,6 +323,117 @@ function DepartmentHeadPageContent() {
       setMessage(`Delete failed: ${text}`);
     } finally {
       setDeletingLocalId("");
+    }
+  };
+
+  const startEditSavedClass = (savedClass: SavedClass) => {
+    setEditingLocalId(savedClass.localId);
+    setEditingClassName(savedClass.className);
+    setEditingDepartmentId(savedClass.departmentId);
+    setEditingProfessors(savedClass.professors.map((professor) => ({ ...professor })));
+    setMessage("");
+  };
+
+  const cancelEditSavedClass = () => {
+    setEditingLocalId("");
+    setEditingClassName("");
+    setEditingDepartmentId("");
+    setEditingProfessors([]);
+  };
+
+  const setEditingProfessorField = (index: number, field: "name" | "email", value: string) => {
+    setEditingProfessors((current) => current.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  };
+
+  const saveEditedClass = async (savedClass: SavedClass) => {
+    const nextName = editingClassName.trim();
+    if (!nextName) {
+      setMessage("Enter a class name.");
+      return;
+    }
+    if (!editingDepartmentId) {
+      setMessage("Select a department.");
+      return;
+    }
+
+    const cleanedProfessors = editingProfessors.map((professor) => ({
+      id: professor.id ?? "",
+      name: professor.name.trim(),
+      email: professor.email.trim().toLowerCase(),
+    }));
+    if (cleanedProfessors.some((professor) => !professor.name || !professor.email)) {
+      setMessage("Every professor must include name and email.");
+      return;
+    }
+    if (cleanedProfessors.some((professor) => !professor.id)) {
+      setMessage("Unable to update professor data: missing professor id.");
+      return;
+    }
+
+    setMessage("");
+    setUpdatingLocalId(savedClass.localId);
+    try {
+      const classResponse = await fetch(`${backendUrl}/api/events/update_class`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeaders ?? {}),
+        },
+        body: JSON.stringify({
+          class_id: savedClass.classId,
+          name: nextName,
+          department_id: editingDepartmentId,
+        }),
+      });
+      const classPayload = (await classResponse.json().catch(() => ({}))) as { detail?: unknown };
+      if (!classResponse.ok) {
+        setMessage(`Update failed: ${toMessage(classPayload.detail, "Unable to update class.")}`);
+        return;
+      }
+
+      await Promise.all(
+        cleanedProfessors.map(async (professor) => {
+          const response = await fetch(`${backendUrl}/api/events/update_professor`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              ...(authHeaders ?? {}),
+            },
+            body: JSON.stringify({
+              professor_id: professor.id,
+              name: professor.name,
+              email: professor.email,
+            }),
+          });
+          const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+          if (!response.ok) {
+            throw new Error(toMessage(payload.detail, "Unable to update professor."));
+          }
+        })
+      );
+
+      const nextDepartmentName =
+        departments.find((department) => department.id === editingDepartmentId)?.name ?? editingDepartmentId;
+      setSavedClasses((current) =>
+        current.map((item) =>
+          item.localId === savedClass.localId
+            ? {
+                ...item,
+                className: nextName,
+                departmentId: editingDepartmentId,
+                departmentName: nextDepartmentName,
+                professors: cleanedProfessors,
+              }
+            : item
+        )
+      );
+      cancelEditSavedClass();
+      setMessage(`Updated class "${nextName}".`);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "Unknown error";
+      setMessage(`Update failed: ${text}`);
+    } finally {
+      setUpdatingLocalId("");
     }
   };
 
@@ -356,17 +488,14 @@ function DepartmentHeadPageContent() {
           professors: cleanProfessors,
         }),
       });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown; class_id?: string; professor_ids?: string[] };
       if (!response.ok) {
         setMessage(`Save failed: ${toMessage(payload.detail, "Unable to save class.")}`);
         return;
       }
-      const addClassPayload = payload as {
-        class_id?: string;
-        professor_ids?: string[];
-      };
-      const classId = addClassPayload.class_id;
-      const professorIds = addClassPayload.professor_ids ?? [];
+
+      const classId = payload.class_id;
+      const professorIds = payload.professor_ids ?? [];
       if (!classId || !Array.isArray(professorIds)) {
         setMessage("Save failed: backend did not return class/professor IDs.");
         return;
@@ -379,7 +508,11 @@ function DepartmentHeadPageContent() {
         departmentId: selectedDepartmentId,
         departmentName,
         className: className.trim(),
-        professors: cleanProfessors,
+        professors: cleanProfessors.map((professor, index) => ({
+          id: professorIds[index],
+          name: professor.name,
+          email: professor.email,
+        })),
       };
       setSavedClasses((current) => [...current, newClass]);
       setClassName("");
@@ -417,12 +550,12 @@ function DepartmentHeadPageContent() {
         <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
           <h2 className="text-xl font-bold text-[#111] md:text-2xl">Add Classes</h2>
           <p className="mt-2 text-sm font-semibold text-[#2d3d7a]">
-            Symposium: {symposiumName || (symposiumId ? symposiumId : "Missing symposium_id")}
+            Symposium: {symposiumName || resolvedSymposiumId || symposiumId || "Missing symposium_id"}
           </p>
 
-          {!symposiumId ? (
+          {!symposiumId && !departmentIdFromLink ? (
             <p className="mt-4 text-sm font-semibold text-[#9a1f1f]">
-              Open this page with `?symposium_id=&lt;uuid&gt;` in the URL.
+              Open this page with `?department_id=&lt;uuid&gt;` in the URL.
             </p>
           ) : null}
 
@@ -511,26 +644,100 @@ function DepartmentHeadPageContent() {
               <div className="mt-3 space-y-3">
                 {pendingClasses.map((savedClass) => (
                   <div key={savedClass.localId} className="rounded-lg border border-[#d7e0ff] bg-white p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-[#111]">
-                        {savedClass.departmentName}: {savedClass.className}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => void removeSavedClass(savedClass)}
-                        disabled={deletingLocalId === savedClass.localId}
-                        className="rounded-lg border border-[#b7b7b7] bg-white px-2.5 py-1 text-xs font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
-                      >
-                        {deletingLocalId === savedClass.localId ? "Deleting..." : "Delete"}
-                      </button>
-                    </div>
-                    <ul className="mt-2 space-y-1 text-sm text-[#333]">
-                      {savedClass.professors.map((professor, index) => (
-                        <li key={`${savedClass.localId}-${index}`}>
-                          {professor.name} ({professor.email})
-                        </li>
-                      ))}
-                    </ul>
+                    {editingLocalId === savedClass.localId ? (
+                      <div className="space-y-2">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Class Name</span>
+                          <input
+                            value={editingClassName}
+                            onChange={(event) => setEditingClassName(event.target.value)}
+                            className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Department</span>
+                          <select
+                            value={editingDepartmentId}
+                            onChange={(event) => setEditingDepartmentId(event.target.value)}
+                            className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                          >
+                            {departments.map((department) => (
+                              <option key={department.id} value={department.id}>
+                                {department.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="space-y-2">
+                          {editingProfessors.map((professor, index) => (
+                            <div key={`${savedClass.localId}-edit-prof-${index}`} className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <input
+                                value={professor.name}
+                                onChange={(event) => setEditingProfessorField(index, "name", event.target.value)}
+                                placeholder="Professor name"
+                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                              />
+                              <input
+                                type="email"
+                                value={professor.email}
+                                onChange={(event) => setEditingProfessorField(index, "email", event.target.value)}
+                                placeholder="name@hamilton.edu"
+                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void saveEditedClass(savedClass)}
+                            disabled={updatingLocalId === savedClass.localId}
+                            className="rounded-lg bg-[#0f33a8] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {updatingLocalId === savedClass.localId ? "Saving..." : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditSavedClass}
+                            className="rounded-lg border border-[#b7b7b7] bg-white px-3 py-1.5 text-xs font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-[#111]">
+                          {savedClass.departmentName}: {savedClass.className}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => startEditSavedClass(savedClass)}
+                            className="rounded-lg border border-[#b7b7b7] bg-white px-2.5 py-1 text-xs font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void removeSavedClass(savedClass)}
+                            disabled={deletingLocalId === savedClass.localId}
+                            className="rounded-lg border border-[#b7b7b7] bg-white px-2.5 py-1 text-xs font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
+                          >
+                            {deletingLocalId === savedClass.localId ? "Deleting..." : "Delete"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {editingLocalId !== savedClass.localId ? (
+                      <ul className="mt-2 space-y-1 text-sm text-[#333]">
+                        {savedClass.professors.map((professor, index) => (
+                          <li key={`${savedClass.localId}-${index}`}>
+                            {professor.name} ({professor.email})
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 ))}
               </div>
