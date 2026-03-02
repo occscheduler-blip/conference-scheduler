@@ -1,0 +1,52 @@
+Next.js:
+https://nextjs.org/learn
+
+React:
+useState: react.dev/reference/react/useState
+useEffect: react.dev/reference/react/useEffect
+useMemo: react.dev/reference/react/useMemo
+useCallback: react.dev/reference/react/useCallback
+useRef: react.dev/reference/react/useRef
+
+TypeScript:
+Types for variables/objects: Everyday Types
+Typed function parameters/returns: Functions
+Custom object shapes: Interfaces
+Type aliases: Type Aliases
+Generics (for reusable typed patterns): Generics
+Project config (tsconfig): TSConfig Reference
+Supabase: 
+https://supabase.com/docs/guides/database/postgres/configuration 
+https://supabase.com/docs/guides/getting-started/quickstarts/nextjs 
+
+FastAPI:
+https://fastapi.tiangolo.com/tutorial/
+
+Core Frameworks and Platforms
+Next.js Documentation. Vercel. https://nextjs.org/docs
+React Documentation. Meta Open Source. https://react.dev/ 
+FastAPI Documentation. Sebastián Ramírez. https://fastapi.tiangolo.com/ 
+Supabase Documentation. Supabase. https://supabase.com/docs 
+
+Backend Libraries
+Pydantic Settings Documentation. Pydantic. https://docs.pydantic.dev/latest/concepts/pydantic_settings/ 
+Uvicorn Documentation. Encode. https://www.uvicorn.org/ 
+pandas Documentation. The pandas development team. https://pandas.pydata.org/docs/ 
+NumPy Documentation. NumPy Developers. https://numpy.org/doc/ 
+Psycopg 3 Documentation. Psycopg Team. https://www.psycopg.org/psycopg3/docs/ 
+python-multipart (PyPI). https://pypi.org/project/python-multipart/ 
+OR-Tools Documentation. Google Developers. https://developers.google.com/optimization 
+
+Frontend 
+TypeScript Handbook. Microsoft. https://www.typescriptlang.org/docs/ 
+ESLint Documentation. OpenJS Foundation. https://eslint.org/docs/latest/ 
+Tailwind CSS Documentation. Tailwind Labs. https://tailwindcss.com/docs 
+
+Diagram 
+Mermaid Documentation. Mermaid. https://mermaid.js.org/intro/ 
+
+
+
+
+
+
