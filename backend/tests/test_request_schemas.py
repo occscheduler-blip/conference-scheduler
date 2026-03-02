@@ -69,13 +69,13 @@ def test_add_department_request_enforces_hamilton_email():
         )
 
 
-def test_add_class_request_normalizes_professor_email():
+def test_add_class_request_preserves_professor_email():
     req = AddClassRequest(
         name="BIO101",
         department_id=uuid4(),
         professors=[{"name": "Prof", "email": "PROF@Hamilton.edu"}],
     )
-    assert req.professors[0].email == "prof@hamilton.edu"
+    assert req.professors[0].email == "PROF@Hamilton.edu"
 
 
 def test_add_students_request_validates_student_email_domain():

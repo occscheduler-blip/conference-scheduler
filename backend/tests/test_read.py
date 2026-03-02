@@ -85,13 +85,11 @@ def test_get_presentations_enriches_with_presenting_student_records(
     ]
 
 
-def test_get_prof_requests_applies_both_filters(fake_supabase, monkeypatch):
+def test_get_requests_applies_student_filter(fake_supabase, monkeypatch):
     monkeypatch.setattr(read, "supabase", fake_supabase)
     student_id = uuid4()
-    professor_id = uuid4()
 
-    read.get_prof_requests(student_id=student_id, professor_id=professor_id)
+    read.get_requests(student_id=student_id)
 
-    actions = fake_supabase.queries["prof_requests"].actions
+    actions = fake_supabase.queries["requests"].actions
     assert ("eq", {"field": "student_id", "value": student_id}) in actions
-    assert ("eq", {"field": "professor_id", "value": professor_id}) in actions
