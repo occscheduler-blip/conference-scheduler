@@ -9,14 +9,15 @@ flowchart LR
     DeptHead["Department Head UI<br/>app/department-head/page.tsx"]
     Faculty["Faculty UI<br/>app/faculty/page.tsx"]
     Student["Student UI (local-only today)<br/>app/student/page.tsx"]
-    HealthWidget["Backend Status Widget (defined, not mounted)<br/>app/components/backend-status.tsx"]
+    HealthWidget["Backend Status Widget<br/>app/components/backend-status.tsx"]
   end
 
   subgraph EP["FastAPI Event Routes (/api/events/*)"]
-    PAdd["POST /add_symposium<br/>POST /add_department<br/>POST /add_class<br/>POST /add_students<br/>POST /add_presentation<br/>POST /add_prof_req"]
-    PUpd["PUT /update_timeframes<br/>PUT /update_student<br/>PUT /update_class<br/>PUT /update_symposium<br/>PUT /update_presentation"]
-    PGet["GET /symposiums<br/>GET /departments<br/>GET /classes<br/>GET /students<br/>GET /presentations<br/>GET /professors<br/>GET /timeframes<br/>GET /prof_requests"]
+    PAdd["POST /add_symposium<br/>POST /add_department<br/>POST /add_class<br/>POST /add_students<br/>POST /add_presentation<br/>POST /add_request"]
+    PUpd["PUT /update_timeframes<br/>PUT /update_student<br/>PUT /update_professor<br/>PUT /update_class<br/>PUT /update_department<br/>PUT /update_symposium<br/>PUT /update_presentation"]
+    PGet["GET /symposiums<br/>GET /symposiums/{id}<br/>GET /departments<br/>GET /classes<br/>GET /students<br/>GET /presentations<br/>GET /professors<br/>GET /timeframes<br/>GET /requests"]
     PDel["DELETE /delete_symposium<br/>DELETE /delete_department<br/>DELETE /delete_class<br/>DELETE /delete_student<br/>DELETE /delete_professor<br/>DELETE /delete_presentation"]
+    PHealth["GET /health"]
   end
 
   subgraph API["FastAPI Backend (/backend/app)"]
@@ -46,8 +47,11 @@ flowchart LR
   Home --> PGet
   Admin --> PAdd
   Admin --> PGet
+  Admin --> PDel
+  Admin --> PUpd
   DeptHead --> PAdd
   DeptHead --> PGet
+  DeptHead --> PUpd
   DeptHead --> PDel
   Faculty --> PAdd
   Faculty --> PUpd
@@ -55,8 +59,9 @@ flowchart LR
   Faculty --> PDel
   Student --> PGet
   Student --> PAdd
+  Student --> PUpd
   Student --> PDel
-  HealthWidget -. defined but currently unused .- Main
+  HealthWidget --> PHealth
 
   PAdd --> Main
   PUpd --> Main
