@@ -774,10 +774,10 @@ def get_timeframes(linked_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/prof_requests")
-def get_prof_requests(student_id: UUID | None = None, professor_id: UUID | None = None):
+@router.get("/requests")
+def get_requests(student_id: UUID | None = None):
     try:
-        return read.get_prof_requests(student_id=student_id, professor_id=professor_id)
+        return read.get_requests(student_id=student_id)
     except HTTPException:
         raise
     except Exception as exc:
