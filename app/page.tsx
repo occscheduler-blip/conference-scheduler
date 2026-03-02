@@ -167,13 +167,15 @@ function HomeContent() {
 
           const classRows = classPayloads.flatMap((payload, index) => {
             if (!classResponses[index].ok) return [];
-            const list = Array.isArray(payload) ? payload : payload.data ?? [];
+            const list: Array<{ id?: string; department_id?: string }> = Array.isArray(payload)
+              ? payload
+              : (payload.data ?? []);
             return list
               .map((row) => ({
                 id: row.id ?? "",
                 department_id: row.department_id ?? "",
               }))
-              .filter((row) => row.id && row.department_id);
+              .filter((row): row is ClassRecord => Boolean(row.id && row.department_id));
           });
           setClasses(classRows);
 
@@ -221,19 +223,28 @@ function HomeContent() {
 
           const studentRows = studentPayloads.flatMap((payload, index) => {
             if (!studentResponses[index].ok) return [];
-            const list = Array.isArray(payload) ? payload : payload.data ?? [];
+            const list: Array<{ id?: string; name?: string; class_id?: string }> = Array.isArray(payload)
+              ? payload
+              : (payload.data ?? []);
             return list
               .map((row) => ({
                 id: row.id ?? "",
                 name: row.name?.trim() ?? "",
               }))
-              .filter((row) => row.id && row.name);
+              .filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
           });
           const studentNameById = new Map(studentRows.map((row) => [normalizeId(row.id), row.name]));
 
           const presentationRows = presentationPayloads.flatMap((payload, index) => {
             if (!presentationResponses[index].ok) return [];
-            const list = Array.isArray(payload) ? payload : payload.data ?? [];
+            const list: Array<{
+              id?: string;
+              class_id?: string;
+              title?: string;
+              presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
+            }> = Array.isArray(payload)
+              ? payload
+              : (payload.data ?? []);
             return list
               .map((row) => {
                 const presenterNames = (row.presenting_students ?? [])
@@ -251,7 +262,7 @@ function HomeContent() {
                   presenterNames: Array.from(new Set(presenterNames)),
                 };
               })
-              .filter((row) => row.id && row.class_id);
+              .filter((row): row is PresentationRecord => Boolean(row.id && row.class_id));
           });
           setPresentations(presentationRows);
         } else {
@@ -313,7 +324,7 @@ function HomeContent() {
             card
           ): card is {
             department: DepartmentRecord;
-            timeframe: Timeframe | null;
+            timeframe: Timeframe;
             room: string;
             title: string;
             presenterNames: string[];
