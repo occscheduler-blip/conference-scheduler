@@ -11,6 +11,16 @@ type DepartmentRecord = {
   department_name: string;
   department_head_name: string;
 };
+type ClassRecord = {
+  id: string;
+  department_id: string;
+};
+type PresentationRecord = {
+  id: string;
+  class_id: string;
+  title: string;
+  presenterNames: string[];
+};
 type SymposiumDetails = {
   id: string;
   name: string;
@@ -20,6 +30,10 @@ type SymposiumDetails = {
 function parseBackendDateTime(value: string) {
   const normalized = value.includes(" ") ? value.replace(" ", "T") : value;
   return new Date(normalized);
+}
+
+function normalizeId(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function dayKey(date: Date) {
@@ -57,6 +71,8 @@ function HomeContent() {
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
   const [timeframes, setTimeframes] = useState<Timeframe[]>([]);
   const [departments, setDepartments] = useState<DepartmentRecord[]>([]);
+  const [classes, setClasses] = useState<ClassRecord[]>([]);
+  const [presentations, setPresentations] = useState<PresentationRecord[]>([]);
   const [roomsAvailable, setRoomsAvailable] = useState(1);
   const [selectedDay, setSelectedDay] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -94,6 +110,8 @@ function HomeContent() {
       if (!selectedSymposiumId) {
         setTimeframes([]);
         setDepartments([]);
+        setClasses([]);
+        setPresentations([]);
         setRoomsAvailable(1);
         setSelectedDay("");
         return;
@@ -130,9 +148,116 @@ function HomeContent() {
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
 
         if (departmentsRes.ok) {
-          setDepartments(departmentsPayload.departments ?? []);
+          const departmentRows = departmentsPayload.departments ?? [];
+          setDepartments(departmentRows);
+
+          const classResponses = await Promise.all(
+            departmentRows.map((department) =>
+              fetch(`${backendUrl}/api/events/classes?department_id=${encodeURIComponent(department.id)}`, {
+                headers: authHeaders,
+              })
+            )
+          );
+
+          const classPayloads = await Promise.all(
+            classResponses.map((response) =>
+              response.json().catch(() => ({} as { data?: Array<{ id?: string; department_id?: string }> }))
+            )
+          );
+
+          const classRows = classPayloads.flatMap((payload, index) => {
+            if (!classResponses[index].ok) return [];
+            const list = Array.isArray(payload) ? payload : payload.data ?? [];
+            return list
+              .map((row) => ({
+                id: row.id ?? "",
+                department_id: row.department_id ?? "",
+              }))
+              .filter((row) => row.id && row.department_id);
+          });
+          setClasses(classRows);
+
+          const [presentationResponses, studentResponses] = await Promise.all([
+            Promise.all(
+              classRows.map((row) =>
+                fetch(`${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(row.id)}`, {
+                  headers: authHeaders,
+                })
+              )
+            ),
+            Promise.all(
+              classRows.map((row) =>
+                fetch(`${backendUrl}/api/events/students?class_id=${encodeURIComponent(row.id)}`, {
+                  headers: authHeaders,
+                })
+              )
+            ),
+          ]);
+
+          const [presentationPayloads, studentPayloads] = await Promise.all([
+            Promise.all(
+              presentationResponses.map((response) =>
+                response.json().catch(
+                  () =>
+                    ({} as {
+                      data?: Array<{
+                        id?: string;
+                        class_id?: string;
+                        title?: string;
+                        presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
+                      }>;
+                    })
+                )
+              )
+            ),
+            Promise.all(
+              studentResponses.map((response) =>
+                response.json().catch(
+                  () => ({} as { data?: Array<{ id?: string; name?: string; class_id?: string }> })
+                )
+              )
+            ),
+          ]);
+
+          const studentRows = studentPayloads.flatMap((payload, index) => {
+            if (!studentResponses[index].ok) return [];
+            const list = Array.isArray(payload) ? payload : payload.data ?? [];
+            return list
+              .map((row) => ({
+                id: row.id ?? "",
+                name: row.name?.trim() ?? "",
+              }))
+              .filter((row) => row.id && row.name);
+          });
+          const studentNameById = new Map(studentRows.map((row) => [normalizeId(row.id), row.name]));
+
+          const presentationRows = presentationPayloads.flatMap((payload, index) => {
+            if (!presentationResponses[index].ok) return [];
+            const list = Array.isArray(payload) ? payload : payload.data ?? [];
+            return list
+              .map((row) => {
+                const presenterNames = (row.presenting_students ?? [])
+                  .map((student) => {
+                    const directName = student.name?.trim() ?? "";
+                    if (directName) return directName;
+                    const studentId = student.id ?? student.student_id ?? "";
+                    return studentNameById.get(normalizeId(studentId)) ?? "";
+                  })
+                  .filter((name) => name.length > 0);
+                return {
+                  id: row.id ?? "",
+                  class_id: row.class_id ?? "",
+                  title: row.title?.trim() ?? "",
+                  presenterNames: Array.from(new Set(presenterNames)),
+                };
+              })
+              .filter((row) => row.id && row.class_id);
+          });
+          setPresentations(presentationRows);
         } else {
           setDepartments([]);
+          setClasses([]);
+          setPresentations([]);
         }
 
         const days = Array.from(new Set(list.map((item) => dayKey(parseBackendDateTime(item.start_time)))));
@@ -143,6 +268,8 @@ function HomeContent() {
         setMessage(msg);
         setTimeframes([]);
         setDepartments([]);
+        setClasses([]);
+        setPresentations([]);
         setRoomsAvailable(1);
       }
     }
@@ -164,14 +291,46 @@ function HomeContent() {
   }, [selectedDay, timeframes]);
 
   const cards = useMemo(
-    () =>
-      departments.map((department, index) => ({
+    () => {
+      const departmentById = new Map(departments.map((department) => [department.id, department]));
+      const departmentIdByClassId = new Map(classes.map((classRow) => [classRow.id, classRow.department_id]));
+
+      const cardsFromPresentations = presentations
+        .map((presentation, index) => {
+          const departmentId = departmentIdByClassId.get(presentation.class_id);
+          const department = departmentId ? departmentById.get(departmentId) : undefined;
+          if (!department) return null;
+          return {
+            department,
+            timeframe: visibleRows[index] ?? null,
+            room: `Room ${(index % roomsAvailable) + 1}`,
+            title: presentation.title || `${department.department_name} Presentation`,
+            presenterNames: Array.isArray(presentation.presenterNames) ? presentation.presenterNames : [],
+          };
+        })
+        .filter(
+          (
+            card
+          ): card is {
+            department: DepartmentRecord;
+            timeframe: Timeframe | null;
+            room: string;
+            title: string;
+            presenterNames: string[];
+          } => Boolean(card)
+        );
+
+      if (cardsFromPresentations.length > 0) return cardsFromPresentations;
+
+      return departments.map((department, index) => ({
         department,
         timeframe: visibleRows[index] ?? null,
         room: `Room ${(index % roomsAvailable) + 1}`,
-        title: `Presentation ${index + 1}`,
-      })),
-    [departments, roomsAvailable, visibleRows]
+        title: `${department.department_name} Presentation`,
+        presenterNames: [],
+      }));
+    },
+    [classes, departments, presentations, roomsAvailable, visibleRows]
   );
 
   const filterOptions = useMemo(() => {
@@ -187,6 +346,7 @@ function HomeContent() {
     return cards.filter((card) => {
       const haystack = [
         card.title,
+        ...(card.presenterNames ?? []),
         card.department.department_name,
         card.department.department_head_name,
         card.room,
@@ -343,9 +503,10 @@ function HomeContent() {
             <p className="text-sm font-semibold text-[#555]">No matches found for your search.</p>
           ) : null}
 
-          {filteredCards.map(({ department, timeframe, room, title }, index) => {
+          {filteredCards.map(({ department, timeframe, room, title, presenterNames }, index) => {
             const dept = department.department_name;
             const prof = department.department_head_name;
+            const safePresenterNames = presenterNames ?? [];
             return (
               <article key={`${department.id}-${selectedDay || "no-day"}-${index}`} className="overflow-hidden rounded-md border border-[#d6b676] bg-white">
                 <div className="bg-[#1635a7] px-4 py-2 text-2xl font-semibold text-white">
@@ -355,8 +516,11 @@ function HomeContent() {
                   <h3 className="text-3xl font-extrabold text-[#111]">{title}</h3>
                   <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xl text-[#111]">
                     <span>{room}</span>
-                    <span>Presenter A</span>
-                    <span>Presenter B</span>
+                    {safePresenterNames.length > 0 ? (
+                      safePresenterNames.map((name) => <span key={`${department.id}-${title}-${name}`}>{name}</span>)
+                    ) : (
+                      <span>Presenters TBD</span>
+                    )}
                     <span>{dept}</span>
                     <span>{prof}</span>
                   </div>
