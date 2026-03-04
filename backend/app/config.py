@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     supabase_departments_table: str = "departments"
     supabase_timeframes_table: str = "timeframes"
     supabase_students_table: str = "students"
+    log_level: str = "INFO"
 
     @property
     def cors_origins(self) -> list[str]:

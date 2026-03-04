@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4, UUID
 
@@ -9,6 +10,7 @@ from app.supabase_io.client import supabase
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/events", tags=["events"])
 SYMPOSIUM_DATAFRAMES: dict[int, dict[str, pd.DataFrame]] = {}
 
@@ -80,6 +82,7 @@ def _sum_counts(*groups: dict[str, int]) -> int:
 @router.post("/add_class")
 def add_class(payload: request_schemas.AddClassRequest):
     try:
+        logger.info("Creating class '%s' in department %s", payload.name, payload.department_id)
         class_id = uuid4()
         class_def = supabase_schemas.Class(
             id=class_id, name=payload.name, department_id=payload.department_id
@@ -104,6 +107,7 @@ def add_class(payload: request_schemas.AddClassRequest):
             "classes": class_inserted,
             "professors": professors_inserted,
         }
+        logger.info("Created class %s with %d professor(s)", class_id, professors_inserted)
         return {
             "status": "Inserted",
             "class_id": class_def.id,
@@ -115,8 +119,10 @@ def add_class(payload: request_schemas.AddClassRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in add_class: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to create class: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -125,6 +131,11 @@ def add_class(payload: request_schemas.AddClassRequest):
 @router.post("/add_department")
 def add_department(payload: request_schemas.AddDepartmentRequest):
     try:
+        logger.info(
+            "Creating department '%s' in symposium %s",
+            payload.department_name,
+            payload.symposium_id,
+        )
         department = supabase_schemas.Department(
             id=uuid4(),
             department_name=payload.department_name,
@@ -136,7 +147,7 @@ def add_department(payload: request_schemas.AddDepartmentRequest):
         resp = write.insert("departments", [department.model_dump()])
         departments_inserted = _rows_affected(resp, fallback=1)
         records_inserted = {"departments": departments_inserted}
-
+        logger.info("Created department %s", department.id)
         return {
             "status": "Inserted",
             "department_id": department.id,
@@ -147,8 +158,10 @@ def add_department(payload: request_schemas.AddDepartmentRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in add_department: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to create department: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -165,6 +178,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         dict[str, Any]: status payload with inserted record counts.
     """
     try:
+        logger.info("Creating symposium '%s'", payload.symposium_name)
         symposium_id = uuid4()
         symposium = supabase_schemas.Symposium(
             id=symposium_id,
@@ -196,6 +210,9 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
             "timeframes": timeframes_inserted,
         }
 
+        logger.info(
+            "Created symposium %s with %d timeframe(s)", symposium_id, timeframes_inserted
+        )
         return {
             "status": "saved",
             "symposium_id": str(symposium_id),
@@ -206,8 +223,10 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in add_symposium: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to create symposium: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -217,6 +236,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
 def add_students(payload: request_schemas.AddStudentsRequest):
     """Adds a list of students to the students table in the database."""
     try:
+        logger.info("Adding %d student(s) to class %s", len(payload.students), payload.class_id)
         students: list[supabase_schemas.Student] = []
         for student in payload.students:
             students.append(
@@ -233,6 +253,7 @@ def add_students(payload: request_schemas.AddStudentsRequest):
         response = write.insert("students", students_payload)
         students_inserted = _rows_affected(response, fallback=len(students_payload))
         records_inserted = {"students": students_inserted}
+        logger.info("Added %d student(s) to class %s", students_inserted, payload.class_id)
         return {
             "status": "inserted",
             "class_id": str(payload.class_id),
@@ -242,8 +263,10 @@ def add_students(payload: request_schemas.AddStudentsRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in add_students: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to add students: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -252,6 +275,12 @@ def add_students(payload: request_schemas.AddStudentsRequest):
 @router.post("/add_presentation")
 def add_presentation(payload: request_schemas.AddPresentationRequest):
     try:
+        logger.info(
+            "Creating presentation '%s' for class %s with %d student(s)",
+            payload.title,
+            payload.class_id,
+            len(payload.presenting_students),
+        )
         presentation_id = uuid4()
         presentation_payload = {
             "id": presentation_id,
@@ -285,6 +314,7 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
             "presenting_students": presenting_students_inserted,
         }
 
+        logger.info("Created presentation %s", presentation_id)
         return {
             "status": "inserted",
             "presentation_id": presentation_id,
@@ -296,8 +326,10 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in add_presentation: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to create presentation: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -306,6 +338,12 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
 @router.post("/add_request")
 def add_prof_request(payload: request_schemas.AddReqRequest):
     try:
+        logger.info(
+            "Student %s submitting professor request for '%s' (%s)",
+            payload.student_id,
+            payload.name,
+            payload.email,
+        )
         request = supabase_schemas.Request(
             id=uuid4(),
             name=payload.name,
@@ -316,7 +354,7 @@ def add_prof_request(payload: request_schemas.AddReqRequest):
         response = write.insert("requests", [request.model_dump()])
         prof_requests_inserted = _rows_affected(response, fallback=1)
         records_inserted = {"prof_requests": prof_requests_inserted}
-
+        logger.info("Saved professor request %s", request.id)
         return {
             "status": "inserted",
             "name": payload.name,
@@ -327,8 +365,10 @@ def add_prof_request(payload: request_schemas.AddReqRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in add_request: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to add professor request: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -337,6 +377,11 @@ def add_prof_request(payload: request_schemas.AddReqRequest):
 @router.put("/update_timeframes")
 def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
     try:
+        logger.info(
+            "Replacing timeframes for linked_id=%s (%d new window(s))",
+            payload.linked_id,
+            len(payload.timeframes),
+        )
         deleted_timeframes = delete.delete_timeframes(payload.linked_id)
 
         timeframes = [
@@ -356,6 +401,12 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
         records_deleted = {"timeframes": deleted_timeframes}
         records_inserted = {"timeframes": timeframes_inserted}
 
+        logger.info(
+            "Updated timeframes for linked_id=%s: deleted=%d inserted=%d",
+            payload.linked_id,
+            deleted_timeframes,
+            timeframes_inserted,
+        )
         return {
             "status": "updated",
             "linked_id": payload.linked_id,
@@ -366,8 +417,10 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in update_timeframes: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to update timeframes: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Failed to update timeframes: {exc}"
         ) from exc
@@ -376,6 +429,7 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
 @router.put("/update_student")
 def update_student(payload: request_schemas.UpdateStudentRequest):
     try:
+        logger.info("Updating student %s", payload.student_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"student_id"},
@@ -391,6 +445,7 @@ def update_student(payload: request_schemas.UpdateStudentRequest):
             "students": _rows_affected(update_resp, fallback=1 if update_payload else 0)
         }
 
+        logger.info("Updated student %s: fields=%s", payload.student_id, sorted(update_payload.keys()))
         return {
             "status": "updated",
             "student_id": str(payload.student_id),
@@ -401,8 +456,10 @@ def update_student(payload: request_schemas.UpdateStudentRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in update_student: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to update student %s: %s", payload.student_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to update student: {exc}"
         ) from exc
@@ -411,6 +468,7 @@ def update_student(payload: request_schemas.UpdateStudentRequest):
 @router.put("/update_professor")
 def update_professor(payload: request_schemas.UpdateProfessorRequest):
     try:
+        logger.info("Updating professor %s", payload.professor_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"professor_id"},
@@ -426,6 +484,7 @@ def update_professor(payload: request_schemas.UpdateProfessorRequest):
             "professors": _rows_affected(update_resp, fallback=1 if update_payload else 0)
         }
 
+        logger.info("Updated professor %s: fields=%s", payload.professor_id, sorted(update_payload.keys()))
         return {
             "status": "updated",
             "professor_id": str(payload.professor_id),
@@ -436,8 +495,10 @@ def update_professor(payload: request_schemas.UpdateProfessorRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in update_professor: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to update professor %s: %s", payload.professor_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to update professor: {exc}"
         ) from exc
@@ -446,6 +507,7 @@ def update_professor(payload: request_schemas.UpdateProfessorRequest):
 @router.put("/update_class")
 def update_class(payload: request_schemas.UpdateClassRequest):
     try:
+        logger.info("Updating class %s", payload.class_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"class_id"},
@@ -461,6 +523,7 @@ def update_class(payload: request_schemas.UpdateClassRequest):
             "classes": _rows_affected(update_resp, fallback=1 if update_payload else 0)
         }
 
+        logger.info("Updated class %s: fields=%s", payload.class_id, sorted(update_payload.keys()))
         return {
             "status": "updated",
             "class_id": str(payload.class_id),
@@ -471,8 +534,10 @@ def update_class(payload: request_schemas.UpdateClassRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in update_class: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to update class %s: %s", payload.class_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to update class: {exc}"
         ) from exc
@@ -481,6 +546,7 @@ def update_class(payload: request_schemas.UpdateClassRequest):
 @router.put("/update_department")
 def update_department(payload: request_schemas.UpdateDepartmentRequest):
     try:
+        logger.info("Updating department %s", payload.department_id)
         update_payload = {
             "department_name": payload.department_name,
             "department_head_name": payload.department_head_name,
@@ -496,6 +562,7 @@ def update_department(payload: request_schemas.UpdateDepartmentRequest):
             "departments": _rows_affected(update_resp, fallback=1 if update_payload else 0)
         }
 
+        logger.info("Updated department %s", payload.department_id)
         return {
             "status": "updated",
             "department_id": str(payload.department_id),
@@ -506,8 +573,10 @@ def update_department(payload: request_schemas.UpdateDepartmentRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in update_department: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to update department %s: %s", payload.department_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to update department: {exc}"
         ) from exc
@@ -516,6 +585,7 @@ def update_department(payload: request_schemas.UpdateDepartmentRequest):
 @router.put("/update_symposium")
 def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
     try:
+        logger.info("Updating symposium %s", payload.symposium_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"symposium_id"},
@@ -535,6 +605,7 @@ def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
             )
         }
 
+        logger.info("Updated symposium %s: fields=%s", payload.symposium_id, sorted(update_payload.keys()))
         return {
             "status": "updated",
             "symposium_id": str(payload.symposium_id),
@@ -545,8 +616,10 @@ def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in update_symposium: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to update symposium %s: %s", payload.symposium_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to update symposium: {exc}"
         ) from exc
@@ -555,6 +628,7 @@ def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
 @router.put("/update_presentation")
 def update_presentation(payload: request_schemas.UpdatePresentationRequest):
     try:
+        logger.info("Updating presentation %s", payload.presentation_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"presentation_id", "presenting_students"},
@@ -604,6 +678,12 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest):
         records_deleted = {"presenting_students": presenting_students_deleted}
         records_updated = {"presentations": presentations_updated}
 
+        logger.info(
+            "Updated presentation %s: fields=%s presenting_students_replaced=%s",
+            payload.presentation_id,
+            sorted(update_payload.keys()),
+            payload.presenting_students is not None,
+        )
         return {
             "status": "updated",
             "presentation_id": str(payload.presentation_id),
@@ -619,8 +699,10 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("Validation error in update_presentation: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.error("Failed to update presentation %s: %s", payload.presentation_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to update presentation: {exc}"
         ) from exc
@@ -652,6 +734,7 @@ def get_symposium(symposium_id: UUID):
         )
         symposium_rows = list(getattr(symposium_response, "data", None) or [])
         if not symposium_rows:
+            logger.warning("Symposium %s not found", symposium_id)
             raise HTTPException(status_code=404, detail="Symposium not found.")
 
         timeframe_response = read.get_timeframes(linked_id=symposium_id)
@@ -769,9 +852,11 @@ def get_requests(student_id: UUID | None = None):
 @router.delete("/delete_symposium")
 def delete_symposium(symposium_id: UUID):
     try:
+        logger.info("Deleting symposium %s", symposium_id)
         counts = _normalize_counts(
             delete.delete_symposium(symposium_id), {"symposiums": 1}
         )
+        logger.info("Deleted symposium %s → %s", symposium_id, counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -780,6 +865,7 @@ def delete_symposium(symposium_id: UUID):
     except HTTPException:
         raise
     except Exception as exc:
+        logger.error("Failed to delete symposium %s: %s", symposium_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete symposium: {exc}"
         ) from exc
@@ -788,9 +874,11 @@ def delete_symposium(symposium_id: UUID):
 @router.delete("/delete_department")
 def delete_department(department_id: UUID):
     try:
+        logger.info("Deleting department %s", department_id)
         counts = _normalize_counts(
             delete.delete_department(department_id), {"departments": 1}
         )
+        logger.info("Deleted department %s → %s", department_id, counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -799,6 +887,7 @@ def delete_department(department_id: UUID):
     except HTTPException:
         raise
     except Exception as exc:
+        logger.error("Failed to delete department %s: %s", department_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete department: {exc}"
         ) from exc
@@ -807,7 +896,9 @@ def delete_department(department_id: UUID):
 @router.delete("/delete_class")
 def delete_class(class_id: UUID):
     try:
+        logger.info("Deleting class %s", class_id)
         counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
+        logger.info("Deleted class %s → %s", class_id, counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -816,6 +907,7 @@ def delete_class(class_id: UUID):
     except HTTPException:
         raise
     except Exception as exc:
+        logger.error("Failed to delete class %s: %s", class_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete class: {exc}"
         ) from exc
@@ -824,7 +916,9 @@ def delete_class(class_id: UUID):
 @router.delete("/delete_student")
 def delete_student(student_id: UUID):
     try:
+        logger.info("Deleting student %s", student_id)
         counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
+        logger.info("Deleted student %s → %s", student_id, counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -833,6 +927,7 @@ def delete_student(student_id: UUID):
     except HTTPException:
         raise
     except Exception as exc:
+        logger.error("Failed to delete student %s: %s", student_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete student: {exc}"
         ) from exc
@@ -841,9 +936,11 @@ def delete_student(student_id: UUID):
 @router.delete("/delete_professor")
 def delete_professor(professor_id: UUID):
     try:
+        logger.info("Deleting professor %s", professor_id)
         counts = _normalize_counts(
             delete.delete_professor(professor_id), {"professors": 1}
         )
+        logger.info("Deleted professor %s → %s", professor_id, counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -852,6 +949,7 @@ def delete_professor(professor_id: UUID):
     except HTTPException:
         raise
     except Exception as exc:
+        logger.error("Failed to delete professor %s: %s", professor_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete professor: {exc}"
         ) from exc
@@ -860,9 +958,11 @@ def delete_professor(professor_id: UUID):
 @router.delete("/delete_presentation")
 def delete_presentation(presentation_id: UUID):
     try:
+        logger.info("Deleting presentation %s", presentation_id)
         counts = _normalize_counts(
             delete.delete_presentation(presentation_id), {"presentations": 1}
         )
+        logger.info("Deleted presentation %s → %s", presentation_id, counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -871,6 +971,7 @@ def delete_presentation(presentation_id: UUID):
     except HTTPException:
         raise
     except Exception as exc:
+        logger.error("Failed to delete presentation %s: %s", presentation_id, exc, exc_info=True)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete presentation: {exc}"
         ) from exc

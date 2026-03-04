@@ -1,8 +1,12 @@
-import pandas as pd
+import logging
 from datetime import date, datetime
 from uuid import UUID
 
+import pandas as pd
+
 from app.supabase_io.client import supabase
+
+logger = logging.getLogger(__name__)
 
 
 def _to_json_scalar(value):
@@ -17,7 +21,8 @@ def _to_json_scalar(value):
 
 def insert(table_name: str, data: list[dict]):
     lines = [{k: _to_json_scalar(v) for k, v in row.items()} for row in data]
-
+    logger.debug("INSERT into %s (%d row(s))", table_name, len(lines))
     resp = supabase.table(table_name).insert(lines).execute()
-
+    inserted = len(getattr(resp, "data", None) or [])
+    logger.info("Inserted %d row(s) into %s", inserted, table_name)
     return resp
