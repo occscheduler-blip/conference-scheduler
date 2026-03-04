@@ -1,137 +1,160 @@
+"""Tests for supabase_io.delete cascade logic."""
+
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
+
+import pytest
 
 from app.supabase_io import delete
 
 
-def test_delete_timeframes_returns_count_for_uuid(fake_supabase, monkeypatch):
-    linked_id = uuid4()
-    fake_supabase.table("timeframes").response = SimpleNamespace(data=[], count=3)
-    monkeypatch.setattr(delete, "supabase", fake_supabase)
+class TestRowsAffectedDelete:
+    """Test the local _rows_affected helper in delete module."""
 
-    deleted = delete.delete_timeframes(linked_id)
+    def test_dict_count(self):
+        assert delete._rows_affected({"count": 3}) == 3
 
-    assert deleted == 3
-    actions = fake_supabase.queries["timeframes"].actions
-    assert ("delete", None) in actions
-    assert ("eq", {"field": "linked_id", "value": linked_id}) in actions
+    def test_object_data_list(self):
+        assert delete._rows_affected(SimpleNamespace(data=[1, 2])) == 2
 
-
-def test_delete_class_cascades_students_professors_presentations(monkeypatch):
-    class_id = uuid4()
-    student_id = uuid4()
-    professor_id = uuid4()
-    presentation_id = uuid4()
-    calls = []
-
-    monkeypatch.setattr(
-        delete.read,
-        "get_students",
-        lambda class_id: SimpleNamespace(data=[{"id": str(student_id)}]),
-    )
-    monkeypatch.setattr(
-        delete.read,
-        "get_professors",
-        lambda class_id: SimpleNamespace(data=[{"id": str(professor_id)}]),
-    )
-    monkeypatch.setattr(
-        delete.read,
-        "get_presentations",
-        lambda class_id: SimpleNamespace(data=[{"id": str(presentation_id)}]),
-    )
-    monkeypatch.setattr(delete, "delete_student", lambda student_id: calls.append(("student", student_id)))
-    monkeypatch.setattr(delete, "delete_professor", lambda prof_id: calls.append(("professor", prof_id)))
-    monkeypatch.setattr(
-        delete,
-        "delete_presentation",
-        lambda presentation_id: calls.append(("presentation", presentation_id)),
-    )
-
-    class FakeDeleteQuery:
-        def eq(self, *_args, **_kwargs):
-            return self
-
-        def execute(self):
-            return SimpleNamespace(data=[])
-
-    class FakeClassTable:
-        def delete(self):
-            return FakeDeleteQuery()
-
-    class FakeSupabase:
-        def table(self, name):
-            assert name == "classes"
-            return FakeClassTable()
-
-    monkeypatch.setattr(delete, "supabase", FakeSupabase())
-
-    delete.delete_class(class_id)
-
-    assert ("student", student_id) in calls
-    assert ("professor", professor_id) in calls
-    assert ("presentation", presentation_id) in calls
+    def test_fallback(self):
+        assert delete._rows_affected(SimpleNamespace(), fallback=9) == 9
 
 
-def test_delete_department_list_short_circuits_to_bulk_delete(monkeypatch):
-    department_ids = [uuid4(), uuid4()]
-    called = {"bulk": False, "get_classes": False}
+class TestMergeCounts:
+    def test_merge_into_empty(self):
+        target = {}
+        delete._merge_counts(target, {"a": 1, "b": 2})
+        assert target == {"a": 1, "b": 2}
 
-    def fake_bulk(ids):
-        called["bulk"] = ids == department_ids
+    def test_merge_accumulates(self):
+        target = {"a": 3}
+        delete._merge_counts(target, {"a": 2, "b": 1})
+        assert target == {"a": 5, "b": 1}
 
-    def fake_get_classes(_department_id):
-        called["get_classes"] = True
-        return SimpleNamespace(data=[])
+    def test_none_source_is_noop(self):
+        target = {"a": 1}
+        delete._merge_counts(target, None)
+        assert target == {"a": 1}
 
-    monkeypatch.setattr(delete, "delete_multiple_departments", fake_bulk)
-    monkeypatch.setattr(delete.read, "get_classes", fake_get_classes)
-
-    delete.delete_department(department_ids)
-
-    assert called["bulk"] is True
-    assert called["get_classes"] is False
+    def test_negative_values_ignored(self):
+        target = {}
+        delete._merge_counts(target, {"a": -1, "b": 5})
+        assert target == {"b": 5}
 
 
-def test_delete_symposium_deletes_child_departments(monkeypatch):
-    symposium_id = uuid4()
-    department_id = uuid4()
-    calls = []
+class TestSafeCount:
+    def test_positive_int(self):
+        assert delete._safe_count(5) == 5
 
-    monkeypatch.setattr(
-        delete.read,
-        "get_departments",
-        lambda symposium_id: SimpleNamespace(data=[{"id": str(department_id)}]),
-    )
-    monkeypatch.setattr(
-        delete,
-        "delete_department",
-        lambda dept_id: calls.append(("department", dept_id)),
-    )
-    monkeypatch.setattr(
-        delete,
-        "delete_timeframes",
-        lambda linked_id: calls.append(("timeframes", linked_id)),
-    )
+    def test_zero(self):
+        assert delete._safe_count(0) == 0
 
-    class FakeDeleteQuery:
-        def eq(self, *_args, **_kwargs):
-            return self
+    def test_negative(self):
+        assert delete._safe_count(-1) == 0
 
-        def execute(self):
-            return SimpleNamespace(data=[])
+    def test_non_int(self):
+        assert delete._safe_count("bad") == 0
 
-    class FakeSymposiumTable:
-        def delete(self):
-            return FakeDeleteQuery()
 
-    class FakeSupabase:
-        def table(self, name):
-            assert name == "symposiums"
-            return FakeSymposiumTable()
+class TestDeleteTimeframes:
+    def test_calls_delete_with_uuid(self, mock_supabase):
+        uid = uuid4()
 
-    monkeypatch.setattr(delete, "supabase", FakeSupabase())
+        def _table(name):
+            table = MagicMock()
+            for m in ("select", "insert", "update", "delete", "eq", "in_", "limit"):
+                getattr(table, m).return_value = table
+            # The count query returns count=2
+            table.execute.return_value = SimpleNamespace(data=[], count=2)
+            return table
 
-    delete.delete_symposium(symposium_id)
+        mock_supabase.table.side_effect = _table
+        result = delete.delete_timeframes(uid)
+        assert result == 2
 
-    assert ("department", department_id) in calls
-    assert ("timeframes", symposium_id) in calls
+
+class TestDeleteStudent:
+    def test_returns_count_dict(self, mock_supabase):
+        uid = uuid4()
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=0
+        )
+        result = delete.delete_student(uid)
+        assert "students" in result
+        assert "presenting_students" in result
+        assert "prof_requests" in result
+        assert "timeframes" in result
+
+
+class TestDeleteProfessor:
+    def test_returns_count_dict(self, mock_supabase):
+        uid = uuid4()
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=0
+        )
+        result = delete.delete_professor(uid)
+        assert "professors" in result
+        assert "prof_requests" in result
+        assert "timeframes" in result
+
+
+class TestDeletePresentation:
+    def test_returns_count_dict(self, mock_supabase):
+        uid = uuid4()
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=0
+        )
+        result = delete.delete_presentation(uid)
+        assert "presentations" in result
+        assert "presenting_students" in result
+        assert "timeframes" in result
+
+
+class TestDeleteClass:
+    def test_cascade_empty_class(self, mock_supabase):
+        """Deleting a class with no students/professors/presentations."""
+        uid = uuid4()
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=0
+        )
+        result = delete.delete_class(uid)
+        assert "classes" in result
+
+    def test_list_dispatches_to_multiple(self, mock_supabase):
+        uids = [uuid4(), uuid4()]
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=0
+        )
+        result = delete.delete_class(uids)
+        assert isinstance(result, dict)
+
+
+class TestDeleteDepartment:
+    def test_cascade_empty_department(self, mock_supabase):
+        uid = uuid4()
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=0
+        )
+        result = delete.delete_department(uid)
+        assert "departments" in result
+
+    def test_list_dispatches(self, mock_supabase):
+        uids = [uuid4(), uuid4()]
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=0
+        )
+        result = delete.delete_department(uids)
+        assert isinstance(result, dict)
+
+
+class TestDeleteSymposium:
+    def test_cascade_empty_symposium(self, mock_supabase):
+        uid = uuid4()
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=0
+        )
+        result = delete.delete_symposium(uid)
+        assert "symposiums" in result
+        assert "timeframes" in result

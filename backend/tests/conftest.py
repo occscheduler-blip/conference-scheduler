@@ -1,74 +1,70 @@
+"""Shared fixtures for backend tests.
+
+Mocks the Supabase client so tests run without a live database.
+"""
+
 import os
-import sys
-from dataclasses import dataclass, field
-from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
-
-# Make backend/app importable as top-level package "app".
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.config import get_settings
-
-# Ensure app imports can build a Supabase client during test module imports.
-# Force deterministic defaults so CI host env does not leak into tests.
-os.environ["SUPABASE_URL"] = "https://example.supabase.co"
-os.environ["SUPABASE_KEY"] = "test-key"
-os.environ["BACKEND_API_KEY"] = "test-api-key"
+# Set required env vars BEFORE any app module is imported.
+os.environ.setdefault("SUPABASE_URL", "https://fake.supabase.co")
+os.environ.setdefault("SUPABASE_KEY", "fake-key")
+os.environ.setdefault("BACKEND_API_KEY", "test-api-key")
 
 
-@pytest.fixture(autouse=True)
-def stable_test_environment(monkeypatch):
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setenv("SUPABASE_KEY", "test-key")
-    monkeypatch.setenv("BACKEND_API_KEY", "test-api-key")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
+def _make_response(data=None, count=None):
+    """Build a lightweight object that looks like a Supabase response."""
+    return SimpleNamespace(data=data or [], count=count)
 
 
-@dataclass
-class QueryRecorder:
-    table: str
-    actions: list[tuple[str, object]] = field(default_factory=list)
-    response: object = field(default_factory=lambda: SimpleNamespace(data=[], count=0))
+@pytest.fixture()
+def mock_supabase():
+    """Patch the global supabase client used by the I/O layer."""
+    fake_client = MagicMock(name="supabase_client")
 
-    def select(self, *args, **kwargs):
-        self.actions.append(("select", {"args": args, "kwargs": kwargs}))
-        return self
+    def _table(name):
+        table_mock = MagicMock(name=f"table:{name}")
+        # Default chaining returns an empty response
+        for method in ("select", "insert", "update", "delete", "eq", "in_", "limit"):
+            getattr(table_mock, method).return_value = table_mock
+        table_mock.execute.return_value = _make_response()
+        return table_mock
 
-    def eq(self, field_name, value):
-        self.actions.append(("eq", {"field": field_name, "value": value}))
-        return self
+    fake_client.table.side_effect = _table
 
-    def in_(self, field_name, values):
-        self.actions.append(("in_", {"field": field_name, "values": values}))
-        return self
-
-    def insert(self, payload):
-        self.actions.append(("insert", payload))
-        return self
-
-    def delete(self):
-        self.actions.append(("delete", None))
-        return self
-
-    def execute(self):
-        self.actions.append(("execute", None))
-        return self.response
+    with patch("app.supabase_io.client.supabase", fake_client), \
+         patch("app.supabase_io.read.supabase", fake_client), \
+         patch("app.supabase_io.write.supabase", fake_client), \
+         patch("app.supabase_io.delete.supabase", fake_client), \
+         patch("app.routers.events.supabase", fake_client):
+        yield fake_client
 
 
-class FakeSupabase:
-    def __init__(self):
-        self.queries: dict[str, QueryRecorder] = {}
-
-    def table(self, name: str):
-        if name not in self.queries:
-            self.queries[name] = QueryRecorder(name)
-        return self.queries[name]
+@pytest.fixture()
+def api_headers():
+    """Return headers dict with a valid API key."""
+    return {"X-API-Key": "test-api-key"}
 
 
-@pytest.fixture
-def fake_supabase():
-    return FakeSupabase()
+@pytest.fixture()
+def client(mock_supabase):
+    """FastAPI TestClient with Supabase mocked out."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    return TestClient(app)
+
+
+# ---------------------------------------------------------------------------
+# Reusable UUID constants
+# ---------------------------------------------------------------------------
+SYMPOSIUM_ID = uuid4()
+DEPARTMENT_ID = uuid4()
+CLASS_ID = uuid4()
+PROFESSOR_ID = uuid4()
+STUDENT_ID = uuid4()
+PRESENTATION_ID = uuid4()
+TIMEFRAME_ID = uuid4()
