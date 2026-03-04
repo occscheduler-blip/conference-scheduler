@@ -1,14 +1,21 @@
 from types import SimpleNamespace
-from app.supabase_io.client import supabase
 from uuid import UUID
+
+from app.logging_config import get_logger
+from app.supabase_io.client import supabase
+
+logger = get_logger("supabase_io")
 
 
 def get_symposiums():
+    logger.debug("query → symposiums (no filter)")
     resp = supabase.table("symposiums").select("*").execute()
     return resp
 
 
 def get_departments(symposium_id: UUID | None = None):
+    filters = {"symposium_id": str(symposium_id)} if symposium_id else {}
+    logger.debug("query → departments (filters=%s)", filters)
     query = supabase.table("departments").select("*")
     if symposium_id:
         query = query.eq("symposium_id", symposium_id)
@@ -16,6 +23,8 @@ def get_departments(symposium_id: UUID | None = None):
 
 
 def get_classes(department_id: UUID | list[UUID] | None = None):
+    filters = {"department_id": str(department_id)} if department_id else {}
+    logger.debug("query → classes (filters=%s)", filters)
     query = supabase.table("classes").select("*")
 
     if department_id:
@@ -30,6 +39,8 @@ def get_classes(department_id: UUID | list[UUID] | None = None):
 
 
 def get_students(class_id: UUID | list[UUID] | None = None):
+    filters = {"class_id": str(class_id)} if class_id else {}
+    logger.debug("query → students (filters=%s)", filters)
     query = supabase.table("students").select("*")
 
     if class_id:
@@ -44,6 +55,8 @@ def get_students(class_id: UUID | list[UUID] | None = None):
 
 
 def get_professors(class_id: UUID | list[UUID] | None = None):
+    filters = {"class_id": str(class_id)} if class_id else {}
+    logger.debug("query → professors (filters=%s)", filters)
     query = supabase.table("professors").select("*")
 
     if class_id:
@@ -58,6 +71,8 @@ def get_professors(class_id: UUID | list[UUID] | None = None):
 
 
 def get_presentations(class_id: UUID | list[UUID] | None = None):
+    filters = {"class_id": str(class_id)} if class_id else {}
+    logger.debug("query → presentations (filters=%s)", filters)
     query = supabase.table("presentations").select("*")
 
     if class_id:
@@ -115,6 +130,8 @@ def get_presentations(class_id: UUID | list[UUID] | None = None):
 
 
 def get_presenting_students(presentation_id: UUID | list[UUID] | None = None):
+    filters = {"presentation_id": str(presentation_id)} if presentation_id else {}
+    logger.debug("query → presenting_students (filters=%s)", filters)
     query = supabase.table("presenting_students").select("*")
 
     if presentation_id:
@@ -129,6 +146,8 @@ def get_presenting_students(presentation_id: UUID | list[UUID] | None = None):
 
 
 def get_timeframes(linked_id: UUID | list[UUID] | None = None):
+    filters = {"linked_id": str(linked_id)} if linked_id else {}
+    logger.debug("query → timeframes (filters=%s)", filters)
     query = supabase.table("timeframes").select("*")
 
     if linked_id:
@@ -145,20 +164,8 @@ def get_timeframes(linked_id: UUID | list[UUID] | None = None):
 def get_requests(
     student_id: UUID | list[UUID] | None = None,
 ):
-    query = supabase.table("requests").select("*")
-
-    if student_id:
-        if isinstance(student_id, UUID):
-            query = query.eq("student_id", student_id)
-        elif isinstance(student_id, list):
-            query = query.in_("student_id", student_id)
-        else:
-            raise ValueError("student_id must be a UUID or list of UUIDs.")
-
-    return query.execute()
-
-
-def get_requests(student_id: UUID | list[UUID] | None = None):
+    filters = {"student_id": str(student_id)} if student_id else {}
+    logger.debug("query → requests (filters=%s)", filters)
     query = supabase.table("requests").select("*")
 
     if student_id:

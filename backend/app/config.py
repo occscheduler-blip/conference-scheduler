@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_db_url: str = ""
+    log_level: str = "INFO"
+
     supabase_events_table: str = "events"
     supabase_symposiums_table: str = "symposiums"
     supabase_departments_table: str = "departments"

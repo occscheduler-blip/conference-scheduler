@@ -1,6 +1,10 @@
-from app.supabase_io.client import supabase
 from uuid import UUID
+
+from app.logging_config import get_logger
 from app.supabase_io import read
+from app.supabase_io.client import supabase
+
+logger = get_logger("supabase_io")
 
 
 def _rows_affected(response, fallback: int = 0) -> int:
@@ -61,6 +65,7 @@ def delete_timeframes(linked_id: UUID | list[UUID]):
         del_timeframes_query = del_timeframes_query.in_("linked_id", linked_id)
 
     del_timeframes_resp = del_timeframes_query.execute()
+    logger.debug("delete → timeframes (linked_id=%s) — %d rows", linked_id, num_deleted or 0)
 
     return num_deleted
 
@@ -88,12 +93,17 @@ def delete_student(student_id: UUID | list[UUID]):
     del_stu_resp = del_stu_query.execute()
     del_presenting_student_resp = del_presenting_student_query.execute()
     del_prof_request_resp = del_prof_request_query.execute()
-    return {
+
+    counts = {
         "students": _rows_affected(del_stu_resp),
         "presenting_students": _rows_affected(del_presenting_student_resp),
         "prof_requests": _rows_affected(del_prof_request_resp),
         "timeframes": deleted_timeframes,
     }
+    logger.debug(
+        "delete → student cascade (id=%s) — %s", student_id, counts
+    )
+    return counts
 
 
 def delete_professor(prof_id: UUID | list[UUID]):
@@ -111,11 +121,14 @@ def delete_professor(prof_id: UUID | list[UUID]):
     deleted_timeframes = _safe_count(delete_timeframes(prof_id))
     del_prof_resp = del_prof_query.execute()
     del_prof_request_resp = del_prof_request_query.execute()
-    return {
+
+    counts = {
         "professors": _rows_affected(del_prof_resp),
         "prof_requests": _rows_affected(del_prof_request_resp),
         "timeframes": deleted_timeframes,
     }
+    logger.debug("delete → professor cascade (id=%s) — %s", prof_id, counts)
+    return counts
 
 
 def delete_presentation(presentation_id: UUID | list[UUID]):
@@ -136,11 +149,16 @@ def delete_presentation(presentation_id: UUID | list[UUID]):
     deleted_timeframes = _safe_count(delete_timeframes(presentation_id))
     del_pres_resp = del_pres_query.execute()
     del_presenting_student_resp = del_presenting_student_query.execute()
-    return {
+
+    counts = {
         "presentations": _rows_affected(del_pres_resp),
         "presenting_students": _rows_affected(del_presenting_student_resp),
         "timeframes": deleted_timeframes,
     }
+    logger.debug(
+        "delete → presentation cascade (id=%s) — %s", presentation_id, counts
+    )
+    return counts
 
 
 def delete_multiple_classes(class_ids: list[UUID]):
@@ -171,6 +189,7 @@ def delete_class(class_id: UUID | list[UUID]):
 
     del_class_resp = supabase.table("classes").delete().eq("id", class_id).execute()
     counts["classes"] = counts.get("classes", 0) + _rows_affected(del_class_resp)
+    logger.debug("delete → class cascade (id=%s) — %s", class_id, counts)
     return counts
 
 
@@ -199,6 +218,7 @@ def delete_department(department_id: UUID | list[UUID]):
         supabase.table("departments").delete().eq("id", department_id).execute()
     )
     counts["departments"] = counts.get("departments", 0) + _rows_affected(del_dept_resp)
+    logger.debug("delete → department cascade (id=%s) — %s", department_id, counts)
     return counts
 
 
@@ -217,4 +237,5 @@ def delete_symposium(symposium_id: UUID):
     counts["symposiums"] = counts.get("symposiums", 0) + _rows_affected(
         del_symposium_resp
     )
+    logger.info("delete → symposium cascade (id=%s) — %s", symposium_id, counts)
     return counts
