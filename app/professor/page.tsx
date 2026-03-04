@@ -1,8 +1,11 @@
 "use client";
 
+// Header describing the page incl last person to edit
+
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+// Work this out: ProfessorTabs
 type FacultyTab = "availability" | "students";
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
 type CalendarDay = { key: string; label: string };
@@ -16,6 +19,7 @@ type PresentationGroup = {
 };
 type ProfessorOption = { id: string; name: string; classId: string };
 
+// Daylight savings?
 function formatTimeLabel(slotIndex: number) {
   const totalMinutes = 9 * 60 + slotIndex * 15;
   const hour24 = Math.floor(totalMinutes / 60);
@@ -39,6 +43,7 @@ function parseBackendDateTime(value: string) {
   return new Date(hasExplicitTimezone ? value : `${value}Z`);
 }
 
+// General function goes in utils
 function toMessage(detail: unknown, fallback: string): string {
   if (typeof detail === "string" && detail.trim()) return detail;
   if (Array.isArray(detail)) {
@@ -56,6 +61,7 @@ function toMessage(detail: unknown, fallback: string): string {
 }
 
 function parseCsvLine(line: string): string[] {
+  // Add citation and unit tests
   const cells: string[] = [];
   let current = "";
   let inQuotes = false;
@@ -83,6 +89,7 @@ function parseCsvLine(line: string): string[] {
 }
 
 function buildCandidateUrls(baseUrl: string, path: string): string[] {
+  // Cite
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const direct = `${normalizedBase}${normalizedPath}`;
@@ -196,6 +203,7 @@ function ProfessorPageContent() {
       setLoadingProfessors(true);
       setIdentityMessage("");
       try {
+        // Res or Resp or Response?
         let professorsRes: Response | null = null;
         for (const url of buildCandidateUrls(backendUrl, "/api/events/professors")) {
           professorsRes = await fetch(url, { headers: authHeaders, cache: "no-store" });
@@ -219,6 +227,7 @@ function ProfessorPageContent() {
             classId: row.class_id ?? "",
           }));
 
+        // Is this needed?
         if (ignore) return;
         setProfessorOptions(nextProfessorOptions);
         setSelectedProfessorId((current) => {
@@ -281,6 +290,7 @@ function ProfessorPageContent() {
           fetchWithCandidates("/api/events/symposiums"),
         ]);
 
+          // more detail
         if (!classesRes || !departmentsRes || !symposiumsRes) {
           throw new Error("Failed to load page data.");
         }
@@ -308,6 +318,8 @@ function ProfessorPageContent() {
         const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
         const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
         const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
+
+        // TODO: Fix in alphja
         const professor = professorOptions.find((row) => row.id === selectedProfessorId);
         if (!professor) {
           throw new Error("Select a professor to load data.");

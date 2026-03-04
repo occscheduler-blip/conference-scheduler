@@ -74,24 +74,6 @@ class TestAddSymposium:
         assert "symposium_id" in body
         assert "records_inserted" in body
 
-    def test_add_symposium_with_existing_id_updates(self, client, api_headers, mock_supabase):
-        sid = uuid4()
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[{"id": str(sid)}], count=1
-        )
-        payload = {
-            "symposium_id": str(sid),
-            "symposium_name": "Updated",
-            "rooms_available": 3,
-            "timeframes": [],
-        }
-        resp = client.post(
-            "/api/events/add_symposium", json=payload, headers=api_headers
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["symposium_id"] == str(sid)
-
     def test_add_symposium_validation_error(self, client, api_headers):
         payload = {
             "symposium_name": "",

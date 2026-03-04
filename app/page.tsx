@@ -1,9 +1,11 @@
 "use client";
 
+// Static vs Updating
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
+// Make a UUID type
 type SymposiumOption = { id: string; name: string };
 type Timeframe = { id: string; start_time: string; end_time: string };
 type DepartmentRecord = {
@@ -24,19 +26,24 @@ type PresentationRecord = {
 type SymposiumDetails = {
   id: string;
   name: string;
-  rooms_available?: number | null;
+  rooms_available?: number | null; // Snake case vs camel case (use a linter)
 };
+// ^ Create all these types only once
+// ^ Consistent naming scheme
 
 function parseBackendDateTime(value: string) {
+  // Add normalize to name
   const normalized = value.includes(" ") ? value.replace(" ", "T") : value;
   return new Date(normalized);
 }
 
 function normalizeId(value: string) {
+  // UUID not ID
   return value.trim().toLowerCase();
 }
 
 function dayKey(date: Date) {
+  // More descriptive name
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
@@ -44,6 +51,7 @@ function dayKey(date: Date) {
 }
 
 function dayLabel(key: string) {
+  // More descriptive
   return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
     weekday: "long",
     month: "short",
@@ -66,7 +74,9 @@ function HomeContent() {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
   const authHeaders = useMemo(() => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined), [backendApiKey]);
+  // Add error handling when the API key is not correct
 
+  // Symposia not symposiums
   const [symposiums, setSymposiums] = useState<SymposiumOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
   const [timeframes, setTimeframes] = useState<Timeframe[]>([]);
@@ -74,7 +84,7 @@ function HomeContent() {
   const [classes, setClasses] = useState<ClassRecord[]>([]);
   const [presentations, setPresentations] = useState<PresentationRecord[]>([]);
   const [roomsAvailable, setRoomsAvailable] = useState(1);
-  const [selectedDay, setSelectedDay] = useState("");
+  const [selectedDay, setSelectedDay] = useState(""); // Create an empty string constant with a descriptive name
   const [searchQuery, setSearchQuery] = useState("");
   const [locationFilter, setLocationFilter] = useState("");
   const [professorFilter, setProfessorFilter] = useState("");
@@ -552,3 +562,6 @@ export default function Home() {
     </Suspense>
   );
 }
+
+// Add header to file, some comments to break up big blocks
+// Move common functions to a common file

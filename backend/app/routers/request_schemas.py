@@ -3,8 +3,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from app.supabase_io.client import supabase
-
 # NOTE: This is possibly not necessary and for now is just an arbitrary value, we can determine what the real max is later.
 MAX_ROOMS = 100
 MAX_TIME = 60
@@ -24,7 +22,6 @@ class TimeframeWindow(BaseModel):
         return self
 
 class AddSymposiumRequest(BaseModel):
-    symposium_id: UUID | None = None
     symposium_name: str
     rooms_available: int
     timeframes: list[TimeframeWindow]
@@ -32,7 +29,6 @@ class AddSymposiumRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "symposium_id": "9e1fd0da-ea43-48f2-85df-5281a495f054",
                 "symposium_name": "Spring Symposium",
                 "rooms_available": 5,
                 "timeframes": [

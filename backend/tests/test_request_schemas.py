@@ -64,16 +64,6 @@ class TestAddSymposiumRequest:
             timeframes=[{"start_time": NOW, "end_time": LATER}],
         )
         assert req.symposium_name == "Spring"
-        assert req.symposium_id is None
-
-    def test_with_optional_id(self):
-        req = AddSymposiumRequest(
-            symposium_id=UUID1,
-            symposium_name="Fall",
-            rooms_available=1,
-            timeframes=[],
-        )
-        assert req.symposium_id == UUID1
 
     def test_empty_name_raises(self):
         with pytest.raises(ValidationError, match="empty"):

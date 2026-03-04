@@ -165,7 +165,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         dict[str, Any]: status payload with inserted record counts.
     """
     try:
-        symposium_id = payload.symposium_id or uuid4()
+        symposium_id = uuid4()
         symposium = supabase_schemas.Symposium(
             id=symposium_id,
             name=payload.symposium_name,
@@ -174,35 +174,9 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
         )
         symposium_payload = symposium.model_dump()
 
-        # If the symposium already exists (fixed UUID edit flow), update it instead of failing.
-        existing = (
-            supabase.table("symposiums")
-            .select("id")
-            .eq("id", str(symposium_id))
-            .limit(1)
-            .execute()
-        )
-        symposiums_inserted = 0
-        symposiums_updated = 0
-        if existing.data:
-            symposium_update_resp = (
-                supabase.table("symposiums")
-                .update(
-                    {
-                        "name": symposium_payload["name"],
-                        "rooms_available": symposium_payload["rooms_available"],
-                    }
-                )
-                .eq("id", str(symposium_id))
-                .execute()
-            )
-            symposiums_updated = _rows_affected(symposium_update_resp, fallback=1)
-        else:
-            symposium_insert_resp = write.insert("symposiums", [symposium_payload])
-            symposiums_inserted = _rows_affected(symposium_insert_resp, fallback=1)
+        symposium_insert_resp = write.insert("symposiums", [symposium_payload])
+        symposiums_inserted = _rows_affected(symposium_insert_resp, fallback=1)
 
-        # Replace all existing timeframes for this symposium with the newly submitted set.
-        deleted_timeframes = delete.delete_timeframes(symposium_id)
         timeframes = [
             supabase_schemas.Timeframe(
                 id=uuid4(),
@@ -221,19 +195,13 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
             "symposiums": symposiums_inserted,
             "timeframes": timeframes_inserted,
         }
-        records_updated = {"symposiums": symposiums_updated}
-        records_deleted = {"timeframes": deleted_timeframes}
 
         return {
             "status": "saved",
             "symposium_id": str(symposium_id),
             "name": payload.symposium_name,
             "records_inserted": records_inserted,
-            "records_updated": records_updated,
-            "records_deleted": records_deleted,
-            "lines_edited": _sum_counts(
-                records_inserted, records_updated, records_deleted
-            ),
+            "lines_edited": _sum_counts(records_inserted),
         }
     except HTTPException:
         raise
