@@ -142,22 +142,6 @@ def get_timeframes(linked_id: UUID | list[UUID] | None = None):
     return query.execute()
 
 
-def get_requests(
-    student_id: UUID | list[UUID] | None = None,
-):
-    query = supabase.table("requests").select("*")
-
-    if student_id:
-        if isinstance(student_id, UUID):
-            query = query.eq("student_id", student_id)
-        elif isinstance(student_id, list):
-            query = query.in_("student_id", student_id)
-        else:
-            raise ValueError("student_id must be a UUID or list of UUIDs.")
-
-    return query.execute()
-
-
 def get_requests(student_id: UUID | list[UUID] | None = None):
     query = supabase.table("requests").select("*")
 

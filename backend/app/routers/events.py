@@ -5,6 +5,7 @@ from uuid import uuid4, UUID
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from app.supabase_io import delete, read, write
+from app.supabase_io.delete import rows_affected as _rows_affected
 from app.supabase_io.client import supabase
 
 import app.routers.request_schemas as request_schemas
@@ -24,33 +25,6 @@ def _serialize_update_fields(fields: dict):
             serialized[key] = value
     return serialized
 
-
-def _rows_affected(response, fallback: int = 0) -> int:
-    """Return rows affected from a Supabase response object."""
-    if isinstance(response, dict):
-        count = response.get("count")
-        if isinstance(count, int) and count >= 0:
-            return count
-
-        data = response.get("data")
-        if isinstance(data, list):
-            return len(data)
-        if isinstance(data, dict):
-            return 1
-
-        return fallback
-
-    count = getattr(response, "count", None)
-    if isinstance(count, int) and count >= 0:
-        return count
-
-    data = getattr(response, "data", None)
-    if isinstance(data, list):
-        return len(data)
-    if isinstance(data, dict):
-        return 1
-
-    return fallback
 
 
 def _normalize_counts(
@@ -124,7 +98,7 @@ def add_class(payload: request_schemas.AddClassRequest):
     except Exception as exc:
         logger.error("Failed to create class: %s", exc, exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+            status_code=500, detail=f"Failed to create class: {exc}"
         ) from exc
 
 
@@ -163,7 +137,7 @@ def add_department(payload: request_schemas.AddDepartmentRequest):
     except Exception as exc:
         logger.error("Failed to create department: %s", exc, exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+            status_code=500, detail=f"Failed to create department: {exc}"
         ) from exc
 
 
@@ -268,7 +242,7 @@ def add_students(payload: request_schemas.AddStudentsRequest):
     except Exception as exc:
         logger.error("Failed to add students: %s", exc, exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+            status_code=500, detail=f"Failed to add students: {exc}"
         ) from exc
 
 
@@ -331,7 +305,7 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
     except Exception as exc:
         logger.error("Failed to create presentation: %s", exc, exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+            status_code=500, detail=f"Failed to create presentation: {exc}"
         ) from exc
 
 
@@ -370,7 +344,7 @@ def add_prof_request(payload: request_schemas.AddReqRequest):
     except Exception as exc:
         logger.error("Failed to add professor request: %s", exc, exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+            status_code=500, detail=f"Failed to add professor request: {exc}"
         ) from exc
 
 
@@ -547,11 +521,11 @@ def update_class(payload: request_schemas.UpdateClassRequest):
 def update_department(payload: request_schemas.UpdateDepartmentRequest):
     try:
         logger.info("Updating department %s", payload.department_id)
-        update_payload = {
-            "department_name": payload.department_name,
-            "department_head_name": payload.department_head_name,
-            "email": payload.email,
-        }
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"department_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
         update_resp = (
             supabase.table("departments")
             .update(update_payload)
@@ -562,7 +536,7 @@ def update_department(payload: request_schemas.UpdateDepartmentRequest):
             "departments": _rows_affected(update_resp, fallback=1 if update_payload else 0)
         }
 
-        logger.info("Updated department %s", payload.department_id)
+        logger.info("Updated department %s: fields=%s", payload.department_id, sorted(update_payload.keys()))
         return {
             "status": "updated",
             "department_id": str(payload.department_id),
@@ -822,18 +796,6 @@ def get_timeframes(linked_id: UUID | None = None):
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Failed to get timeframes: {exc}"
-        ) from exc
-
-
-@router.get("/requests")
-def get_requests(student_id: UUID | None = None):
-    try:
-        return read.get_requests(student_id=student_id)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to get professor requests: {exc}"
         ) from exc
 
 

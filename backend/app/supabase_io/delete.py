@@ -7,7 +7,7 @@ from app.supabase_io import read
 logger = logging.getLogger(__name__)
 
 
-def _rows_affected(response, fallback: int = 0) -> int:
+def rows_affected(response, fallback: int = 0) -> int:
     """Return rows affected from a Supabase response object."""
     if isinstance(response, dict):
         count = response.get("count")
@@ -64,7 +64,7 @@ def delete_timeframes(linked_id: UUID | list[UUID]):
     elif isinstance(linked_id, list):
         del_timeframes_query = del_timeframes_query.in_("linked_id", linked_id)
 
-    del_timeframes_resp = del_timeframes_query.execute()
+    del_timeframes_query.execute()
     logger.info("Deleted %s timeframe(s) for linked_id=%s", num_deleted, linked_id)
     return num_deleted
 
@@ -73,7 +73,7 @@ def delete_student(student_id: UUID | list[UUID]):
     # TODO: Make sure that if the last student is deleted from a presentation, the presentation is deleted as well.
     del_stu_query = supabase.table("students").delete()
     del_presenting_student_query = supabase.table("presenting_students").delete()
-    del_prof_request_query = supabase.table("prof_requests").delete()
+    del_prof_request_query = supabase.table("requests").delete()
 
     if isinstance(student_id, UUID):
         del_stu_query = del_stu_query.eq("id", student_id)
@@ -93,9 +93,9 @@ def delete_student(student_id: UUID | list[UUID]):
     del_presenting_student_resp = del_presenting_student_query.execute()
     del_prof_request_resp = del_prof_request_query.execute()
     counts = {
-        "students": _rows_affected(del_stu_resp),
-        "presenting_students": _rows_affected(del_presenting_student_resp),
-        "prof_requests": _rows_affected(del_prof_request_resp),
+        "students": rows_affected(del_stu_resp),
+        "presenting_students": rows_affected(del_presenting_student_resp),
+        "prof_requests": rows_affected(del_prof_request_resp),
         "timeframes": deleted_timeframes,
     }
     logger.info("Deleted student(s) %s → %s", student_id, counts)
@@ -105,7 +105,7 @@ def delete_student(student_id: UUID | list[UUID]):
 def delete_professor(prof_id: UUID | list[UUID]):
     # TODO: What to do when the last professor in a class/presentation is removed?
     del_prof_query = supabase.table("professors").delete()
-    del_prof_request_query = supabase.table("prof_requests").delete()
+    del_prof_request_query = supabase.table("requests").delete()
 
     if isinstance(prof_id, UUID):
         del_prof_query = del_prof_query.eq("id", prof_id)
@@ -118,8 +118,8 @@ def delete_professor(prof_id: UUID | list[UUID]):
     del_prof_resp = del_prof_query.execute()
     del_prof_request_resp = del_prof_request_query.execute()
     counts = {
-        "professors": _rows_affected(del_prof_resp),
-        "prof_requests": _rows_affected(del_prof_request_resp),
+        "professors": rows_affected(del_prof_resp),
+        "prof_requests": rows_affected(del_prof_request_resp),
         "timeframes": deleted_timeframes,
     }
     logger.info("Deleted professor(s) %s → %s", prof_id, counts)
@@ -145,8 +145,8 @@ def delete_presentation(presentation_id: UUID | list[UUID]):
     del_pres_resp = del_pres_query.execute()
     del_presenting_student_resp = del_presenting_student_query.execute()
     counts = {
-        "presentations": _rows_affected(del_pres_resp),
-        "presenting_students": _rows_affected(del_presenting_student_resp),
+        "presentations": rows_affected(del_pres_resp),
+        "presenting_students": rows_affected(del_presenting_student_resp),
         "timeframes": deleted_timeframes,
     }
     logger.info("Deleted presentation(s) %s → %s", presentation_id, counts)
@@ -180,7 +180,7 @@ def delete_class(class_id: UUID | list[UUID]):
         )
 
     del_class_resp = supabase.table("classes").delete().eq("id", class_id).execute()
-    counts["classes"] = counts.get("classes", 0) + _rows_affected(del_class_resp)
+    counts["classes"] = counts.get("classes", 0) + rows_affected(del_class_resp)
     logger.info("Deleted class %s → %s", class_id, counts)
     return counts
 
@@ -209,7 +209,7 @@ def delete_department(department_id: UUID | list[UUID]):
     del_dept_resp = (
         supabase.table("departments").delete().eq("id", department_id).execute()
     )
-    counts["departments"] = counts.get("departments", 0) + _rows_affected(del_dept_resp)
+    counts["departments"] = counts.get("departments", 0) + rows_affected(del_dept_resp)
     logger.info("Deleted department %s → %s", department_id, counts)
     return counts
 
@@ -226,7 +226,7 @@ def delete_symposium(symposium_id: UUID):
     del_symposium_resp = (
         supabase.table("symposiums").delete().eq("id", symposium_id).execute()
     )
-    counts["symposiums"] = counts.get("symposiums", 0) + _rows_affected(
+    counts["symposiums"] = counts.get("symposiums", 0) + rows_affected(
         del_symposium_resp
     )
     logger.info("Deleted symposium %s → %s", symposium_id, counts)

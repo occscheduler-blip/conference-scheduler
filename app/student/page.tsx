@@ -58,6 +58,7 @@ export default function StudentPage() {
   const [savedProfessorRequests, setSavedProfessorRequests] = useState<SavedProfessorRequest[]>([]);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesMessage, setPreferencesMessage] = useState("");
+  const [savingAvailability, setSavingAvailability] = useState(false);
   const identityReady = hasSelectedStudent && !loadingIdentity && Boolean(studentName);
 
   const isAvailabilityTab = activeTab === "availability";
@@ -400,6 +401,63 @@ export default function StudentPage() {
     );
   };
 
+  const handleSaveAvailability = async () => {
+    if (!selectedStudentId) return;
+    const timeframes: { start_time: string; end_time: string }[] = [];
+    for (let dayIndex = 0; dayIndex < calendarDays.length; dayIndex++) {
+      const dayKey = calendarDays[dayIndex].key;
+      let runStart: number | null = null;
+      for (let slotIndex = 0; slotIndex <= totalSlots; slotIndex++) {
+        const isAvailable = slotIndex < totalSlots && (availability[dayIndex]?.[slotIndex] ?? false);
+        if (isAvailable && runStart === null) {
+          runStart = slotIndex;
+        } else if (!isAvailable && runStart !== null) {
+          const startMinutes = 9 * 60 + runStart * 15;
+          const endMinutes = 9 * 60 + slotIndex * 15;
+          const sh = String(Math.floor(startMinutes / 60)).padStart(2, "0");
+          const sm = String(startMinutes % 60).padStart(2, "0");
+          const eh = String(Math.floor(endMinutes / 60)).padStart(2, "0");
+          const em = String(endMinutes % 60).padStart(2, "0");
+          timeframes.push({
+            start_time: `${dayKey}T${sh}:${sm}:00Z`,
+            end_time: `${dayKey}T${eh}:${em}:00Z`,
+          });
+          runStart = null;
+        }
+      }
+    }
+    setSavingAvailability(true);
+    setCalendarMessage("");
+    try {
+      const response = await fetch(`${backendUrl}/api/events/update_timeframes`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(backendApiKey ? { "X-API-Key": backendApiKey } : {}),
+        },
+        body: JSON.stringify({ linked_id: selectedStudentId, timeframes }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
+        const detail = payload.detail;
+        const text =
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg)).join("; ")
+              : "Failed to save availability.";
+        setCalendarMessage(`Save failed: ${text}`);
+        return;
+      }
+      setCalendarMessage("Availability saved.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setCalendarMessage(`Save failed: ${message}`);
+    } finally {
+      setSavingAvailability(false);
+    }
+  };
+
   const handleSavePreferences = async () => {
     setPreferencesMessage("");
     if (!selectedStudentId) {
@@ -653,7 +711,19 @@ export default function StudentPage() {
                   </div>
                 </div>
               </div>
-              {calendarMessage ? <p className="mt-3 text-sm font-semibold text-[#9a1f1f]">{calendarMessage}</p> : null}
+              <button
+                type="button"
+                onClick={() => void handleSaveAvailability()}
+                disabled={savingAvailability || calendarDays.length === 0}
+                className="mt-4 rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingAvailability ? "Saving..." : "Save Availability"}
+              </button>
+              {calendarMessage ? (
+                <p className={`mt-3 text-sm font-semibold ${calendarMessage.startsWith("Save failed") ? "text-[#9a1f1f]" : "text-[#166534]"}`}>
+                  {calendarMessage}
+                </p>
+              ) : null}
             </div>
           ) : identityReady ? (
             <div className="mt-4 w-full max-w-4xl rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-4">
