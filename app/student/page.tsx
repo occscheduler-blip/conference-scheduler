@@ -34,8 +34,6 @@ function parseBackendDateTime(value: string) {
 }
 
 export default function StudentPage() {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
   const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [loadingStudents, setLoadingStudents] = useState(false);
@@ -78,9 +76,7 @@ export default function StudentPage() {
       setLoadingStudents(true);
       setIdentityMessage("");
       try {
-        const studentsRes = await fetch(`${backendUrl}/api/events/students`, {
-          headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-        });
+        const studentsRes = await fetch("/api/proxy/students");
         const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; name?: string }> }
           | Array<{ id?: string; name?: string }>;
@@ -119,7 +115,7 @@ export default function StudentPage() {
     return () => {
       ignore = true;
     };
-  }, [backendApiKey, backendUrl]);
+  }, []);
 
   useEffect(() => {
     if (!selectedStudentId) {
@@ -147,18 +143,10 @@ export default function StudentPage() {
       setCalendarMessage("");
       try {
         const [studentsRes, classesRes, departmentsRes, symposiumsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/students`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/classes`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/departments`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/symposiums`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
+          fetch("/api/proxy/students"),
+          fetch("/api/proxy/classes"),
+          fetch("/api/proxy/departments"),
+          fetch("/api/proxy/symposiums"),
         ]);
 
         const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
@@ -200,10 +188,7 @@ export default function StudentPage() {
         let resolvedPresentationName = "";
         if (classId) {
           const presentationsRes = await fetch(
-            `${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(classId)}`,
-            {
-              headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-            }
+            `/api/proxy/presentations?class_id=${encodeURIComponent(classId)}`
           );
           const presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
             | {
@@ -233,10 +218,7 @@ export default function StudentPage() {
         }
 
         const symposiumTimeframesRes = await fetch(
-          `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(symposiumId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
+          `/api/proxy/timeframes?linked_id=${encodeURIComponent(symposiumId)}`
         );
         const symposiumTimeframesPayload = (await symposiumTimeframesRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ start_time?: string; end_time?: string }> }
@@ -295,10 +277,7 @@ export default function StudentPage() {
         }
 
         const studentTimeframesRes = await fetch(
-          `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(selectedStudentId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
+          `/api/proxy/timeframes?linked_id=${encodeURIComponent(selectedStudentId)}`
         );
         const studentTimeframesPayload = (await studentTimeframesRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ start_time?: string; end_time?: string }> }
@@ -332,10 +311,7 @@ export default function StudentPage() {
 
         if (ignore) return;
         const requestsRes = await fetch(
-          `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
+          `/api/proxy/requests?student_id=${encodeURIComponent(selectedStudentId)}`
         );
         const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; name?: string; email?: string }> }
@@ -388,7 +364,7 @@ export default function StudentPage() {
     return () => {
       ignore = true;
     };
-  }, [backendApiKey, backendUrl, loadingStudents, selectedStudentId]);
+  }, [loadingStudents, selectedStudentId]);
 
   const setCell = (dayIndex: number, slotIndex: number, value: boolean) => {
     setAvailability((current) =>
@@ -416,12 +392,9 @@ export default function StudentPage() {
 
     setSavingPreferences(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_request`, {
+      const response = await fetch("/api/proxy/add_request", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(backendApiKey ? { "X-API-Key": backendApiKey } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: requestName,
           email: requestEmail,
@@ -442,10 +415,7 @@ export default function StudentPage() {
       }
 
       const requestsRes = await fetch(
-        `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
-        {
-          headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-        }
+        `/api/proxy/requests?student_id=${encodeURIComponent(selectedStudentId)}`
       );
       const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
         | { data?: Array<{ id?: string; name?: string; email?: string }> }

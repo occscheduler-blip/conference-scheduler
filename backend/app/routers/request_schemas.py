@@ -121,6 +121,16 @@ class ProfessorInit(BaseModel):
             raise ValueError("Class name cannot be empty")
         return name
 
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, email: str):
+        email = email.strip().lower()
+        if not email:
+            raise ValueError("Email cannot be blank.")
+        if not email.endswith("@hamilton.edu"):
+            raise ValueError("Email must be a @hamilton.edu address.")
+        return email
+
 class UpdateDepartmentRequest(BaseModel):
     department_id: UUID
     department_name: str

@@ -63,10 +63,6 @@ function timeLabel(start: string, end: string) {
 
 function HomeContent() {
   const searchParams = useSearchParams();
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(() => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined), [backendApiKey]);
-
   const [symposiums, setSymposiums] = useState<SymposiumOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
   const [timeframes, setTimeframes] = useState<Timeframe[]>([]);
@@ -91,7 +87,7 @@ function HomeContent() {
   useEffect(() => {
     async function loadSymposiums() {
       try {
-        const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
+        const response = await fetch("/api/proxy/symposiums");
         const payload = (await response.json().catch(() => ({}))) as { detail?: string; symposiums?: SymposiumOption[] };
         if (!response.ok) throw new Error(payload.detail ?? "Failed to load symposiums.");
         const list = payload.symposiums ?? [];
@@ -103,7 +99,7 @@ function HomeContent() {
       }
     }
     void loadSymposiums();
-  }, [authHeaders, backendUrl]);
+  }, []);
 
   useEffect(() => {
     async function loadSymposiumDetails() {
@@ -120,10 +116,8 @@ function HomeContent() {
       try {
         setMessage(null);
         const [symposiumRes, departmentsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/symposiums/${selectedSymposiumId}`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`, {
-            headers: authHeaders,
-          }),
+          fetch(`/api/proxy/symposiums/${selectedSymposiumId}`),
+          fetch(`/api/proxy/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`),
         ]);
 
         const symposiumPayload = (await symposiumRes.json().catch(() => ({}))) as {
@@ -153,9 +147,7 @@ function HomeContent() {
 
           const classResponses = await Promise.all(
             departmentRows.map((department) =>
-              fetch(`${backendUrl}/api/events/classes?department_id=${encodeURIComponent(department.id)}`, {
-                headers: authHeaders,
-              })
+              fetch(`/api/proxy/classes?department_id=${encodeURIComponent(department.id)}`)
             )
           );
 
@@ -182,16 +174,12 @@ function HomeContent() {
           const [presentationResponses, studentResponses] = await Promise.all([
             Promise.all(
               classRows.map((row) =>
-                fetch(`${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(row.id)}`, {
-                  headers: authHeaders,
-                })
+                fetch(`/api/proxy/presentations?class_id=${encodeURIComponent(row.id)}`)
               )
             ),
             Promise.all(
               classRows.map((row) =>
-                fetch(`${backendUrl}/api/events/students?class_id=${encodeURIComponent(row.id)}`, {
-                  headers: authHeaders,
-                })
+                fetch(`/api/proxy/students?class_id=${encodeURIComponent(row.id)}`)
               )
             ),
           ]);
@@ -285,7 +273,7 @@ function HomeContent() {
       }
     }
     void loadSymposiumDetails();
-  }, [authHeaders, backendUrl, selectedSymposiumId]);
+  }, [selectedSymposiumId]);
 
   const days = useMemo(
     () => Array.from(new Set(timeframes.map((item) => dayKey(parseBackendDateTime(item.start_time))))),

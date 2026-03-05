@@ -36,13 +36,6 @@ function DepartmentHeadPageContent() {
   const searchParams = useSearchParams();
   const symposiumIdFromLink = searchParams.get("symposium_id") ?? "";
   const departmentIdFromLink = searchParams.get("department_id") ?? "";
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(
-    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
-    [backendApiKey]
-  );
-
   const [symposiumOptions, setSymposiumOptions] = useState<DepartmentOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState<string>("");
   const [departments, setDepartments] = useState<DepartmentOption[]>([]);
@@ -81,8 +74,8 @@ function DepartmentHeadPageContent() {
       setMessage("");
       try {
         const [symposiumsRes, allDepartmentsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
+          fetch("/api/proxy/symposiums"),
+          fetch("/api/proxy/departments"),
         ]);
 
         const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
@@ -140,7 +133,7 @@ function DepartmentHeadPageContent() {
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl, departmentIdFromLink, symposiumIdFromLink]);
+  }, [departmentIdFromLink, symposiumIdFromLink]);
 
   useEffect(() => {
     if (!selectedSymposiumId) {
@@ -156,8 +149,7 @@ function DepartmentHeadPageContent() {
       setMessage("");
       try {
         const departmentsRes = await fetch(
-          `${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
-          { headers: authHeaders }
+          `/api/proxy/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`
         );
         const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
@@ -174,8 +166,7 @@ function DepartmentHeadPageContent() {
         const classesByDepartment = await Promise.all(
           nextDepartments.map(async (department) => {
             const classesRes = await fetch(
-              `${backendUrl}/api/events/classes?department_id=${encodeURIComponent(department.id)}`,
-              { headers: authHeaders }
+              `/api/proxy/classes?department_id=${encodeURIComponent(department.id)}`
             );
             const classesPayload = (await classesRes.json().catch(() => ({}))) as
               | { data?: Array<{ id?: string; name?: string }> }
@@ -202,8 +193,7 @@ function DepartmentHeadPageContent() {
             classes.map(async (classRow) => {
               try {
                 const professorsRes = await fetch(
-                  `${backendUrl}/api/events/professors?class_id=${encodeURIComponent(classRow.id)}`,
-                  { headers: authHeaders }
+                  `/api/proxy/professors?class_id=${encodeURIComponent(classRow.id)}`
                 );
                 const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
                   | { data?: Array<{ id?: string; name?: string; email?: string }> }
@@ -275,7 +265,7 @@ function DepartmentHeadPageContent() {
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl, departmentIdFromLink, selectedSymposiumId]);
+  }, [departmentIdFromLink, selectedSymposiumId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -338,10 +328,9 @@ function DepartmentHeadPageContent() {
         await Promise.all(
           savedClass.professorIds.map(async (professorId) => {
             const response = await fetch(
-              `${backendUrl}/api/events/delete_professor?professor_id=${encodeURIComponent(professorId)}`,
+              `/api/proxy/delete_professor?professor_id=${encodeURIComponent(professorId)}`,
               {
                 method: "DELETE",
-                headers: authHeaders,
               }
             );
             const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
@@ -353,10 +342,9 @@ function DepartmentHeadPageContent() {
       }
 
       const classResponse = await fetch(
-        `${backendUrl}/api/events/delete_class?class_id=${encodeURIComponent(savedClass.classId)}`,
+        `/api/proxy/delete_class?class_id=${encodeURIComponent(savedClass.classId)}`,
         {
           method: "DELETE",
-          headers: authHeaders,
         }
       );
       const classPayload = (await classResponse.json().catch(() => ({}))) as { detail?: unknown };
@@ -422,12 +410,9 @@ function DepartmentHeadPageContent() {
     setMessage("");
     setUpdatingLocalId(savedClass.localId);
     try {
-      const classResponse = await fetch(`${backendUrl}/api/events/update_class`, {
+      const classResponse = await fetch("/api/proxy/update_class", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           class_id: savedClass.classId,
           name: nextName,
@@ -442,12 +427,9 @@ function DepartmentHeadPageContent() {
 
       await Promise.all(
         cleanedProfessors.map(async (professor) => {
-          const response = await fetch(`${backendUrl}/api/events/update_professor`, {
+          const response = await fetch("/api/proxy/update_professor", {
             method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              ...(authHeaders ?? {}),
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               professor_id: professor.id,
               name: professor.name,
@@ -525,12 +507,9 @@ function DepartmentHeadPageContent() {
 
     setSaving(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_class`, {
+      const response = await fetch("/api/proxy/add_class", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: className.trim(),
           department_id: selectedDepartmentId,
@@ -570,7 +549,7 @@ function DepartmentHeadPageContent() {
     } catch (error) {
       const text = error instanceof Error ? error.message : "Unknown error";
       if (text.toLowerCase().includes("load failed") || text.toLowerCase().includes("failed to fetch")) {
-        setMessage(`Save failed: backend is unreachable at ${backendUrl}.`);
+        setMessage("Save failed: backend is unreachable.");
       } else {
         setMessage(`Save failed: ${text}`);
       }

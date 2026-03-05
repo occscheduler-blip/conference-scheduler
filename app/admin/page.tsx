@@ -147,8 +147,6 @@ function gridFromTimeframes(timeframes: TimeframeRecord[]) {
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-
   // Create event state
   const [createSymposiumName, setCreateSymposiumName] = useState("");
   const [createRooms, setCreateRooms] = useState("");
@@ -196,12 +194,6 @@ export default function AdminPage() {
 
   const isCreateTab = activeTab === "create";
   const hasSelectedSymposium = Boolean(selectedSymposiumId.trim());
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(
-    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
-    [backendApiKey]
-  );
-
   const createCalendarDates = useMemo(
     () => buildCalendarDates(createStartDate, createEndDate),
     [createStartDate, createEndDate]
@@ -212,7 +204,7 @@ export default function AdminPage() {
     setIsLoadingSymposiums(true);
     setSymposiumLoadError(null);
     try {
-      const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
+      const response = await fetch("/api/proxy/symposiums");
       const payload = (await response.json()) as { detail?: string; symposiums?: SymposiumOption[] };
       if (!response.ok) {
         setSymposiumLoadError(payload.detail ?? "Failed to load symposiums.");
@@ -225,7 +217,7 @@ export default function AdminPage() {
     } finally {
       setIsLoadingSymposiums(false);
     }
-  }, [authHeaders, backendUrl]);
+  }, []);
 
   const fetchDepartments = useCallback(
     async (symposiumId: string) => {
@@ -239,9 +231,7 @@ export default function AdminPage() {
       setIsLoadingDepartments(true);
       setDepartmentLoadError(null);
       try {
-        const response = await fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`, {
-          headers: authHeaders,
-        });
+        const response = await fetch(`/api/proxy/departments?symposium_id=${encodeURIComponent(symposiumId)}`);
         const payload = (await response.json()) as { detail?: string; departments?: DepartmentRecord[] };
         if (!response.ok) {
           setDepartmentLoadError(payload.detail ?? "Failed to load departments.");
@@ -261,7 +251,7 @@ export default function AdminPage() {
         setIsLoadingDepartments(false);
       }
     },
-    [authHeaders, backendUrl]
+    []
   );
 
   const fetchSymposiumDetails = useCallback(
@@ -278,7 +268,7 @@ export default function AdminPage() {
       setIsLoadingSymposiumDetails(true);
       setSymposiumEditMessage(null);
       try {
-        const response = await fetch(`${backendUrl}/api/events/symposiums/${symposiumId}`, { headers: authHeaders });
+        const response = await fetch(`/api/proxy/symposiums/${symposiumId}`);
         const payload = (await response.json()) as {
           detail?: string;
           symposium?: { id: string; name: string; rooms_available: number };
@@ -303,7 +293,7 @@ export default function AdminPage() {
         setIsLoadingSymposiumDetails(false);
       }
     },
-    [authHeaders, backendUrl]
+    []
   );
 
   useEffect(() => {
@@ -416,9 +406,9 @@ export default function AdminPage() {
 
     setIsSavingCreate(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_symposium`, {
+      const response = await fetch("/api/proxy/add_symposium", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symposium_name: trimmedName,
           rooms_available: parsedRooms,
@@ -473,9 +463,9 @@ export default function AdminPage() {
 
     setIsSavingSymposiumEdit(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/symposiums/${selectedSymposiumId}`, {
+      const response = await fetch(`/api/proxy/symposiums/${selectedSymposiumId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symposium_name: trimmedName,
           rooms_available: parsedRooms,
@@ -508,11 +498,8 @@ export default function AdminPage() {
     setSymposiumEditMessage(null);
     try {
       const response = await fetch(
-        `${backendUrl}/api/events/delete_symposium?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
-        {
-        method: "DELETE",
-        headers: authHeaders,
-        }
+        `/api/proxy/delete_symposium?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
+        { method: "DELETE" }
       );
       const payload = (await response.json()) as { detail?: string; status?: string };
       if (!response.ok) {
@@ -570,9 +557,9 @@ export default function AdminPage() {
     setIsSavingDepartment(true);
     try {
       if (departmentAction === "add") {
-        const response = await fetch(`${backendUrl}/api/events/add_department`, {
+        const response = await fetch("/api/proxy/add_department", {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             symposium_id: selectedSymposiumId,
             department_name: departmentName.trim(),
@@ -594,9 +581,9 @@ export default function AdminPage() {
         setDepartmentMessage("Department added.");
         setDepartmentMessageKind("success");
       } else if (departmentAction === "edit") {
-        const response = await fetch(`${backendUrl}/api/events/update_department`, {
+        const response = await fetch("/api/proxy/update_department", {
           method: "PUT",
-          headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             department_id: departmentToEditId,
             department_name: departmentName.trim(),
@@ -640,11 +627,8 @@ export default function AdminPage() {
     setDepartmentMessageKind(null);
     try {
       const response = await fetch(
-        `${backendUrl}/api/events/delete_department?department_id=${encodeURIComponent(department.id)}`,
-        {
-          method: "DELETE",
-          headers: authHeaders,
-        }
+        `/api/proxy/delete_department?department_id=${encodeURIComponent(department.id)}`,
+        { method: "DELETE" }
       );
       const payload = (await response.json()) as { detail?: unknown; status?: string };
       if (!response.ok) {
