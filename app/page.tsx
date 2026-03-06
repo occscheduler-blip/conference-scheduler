@@ -443,7 +443,7 @@ function HomeContent() {
           <input
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search title, professor, or department"
+            placeholder="Search title, professor, presenting student, or department"
             className="rounded-full border border-[#d7b980] bg-white px-4 py-2 text-xl"
           />
           <div className="rounded-3xl border border-[#d7b980] bg-white p-3 text-lg">
