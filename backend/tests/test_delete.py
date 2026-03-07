@@ -79,37 +79,46 @@ class TestDeleteStudent:
     def test_returns_count_dict(self, mock_supabase):
         uid = uuid4()
         mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=0
+            data=[], count=1
         )
         result = delete.delete_student(uid)
         assert "students" in result
         assert "presenting_students" in result
         assert "prof_requests" in result
         assert "timeframes" in result
+        for key, val in result.items():
+            assert isinstance(val, int), f"{key} is not int: {val!r}"
+            assert val >= 0, f"{key} is negative: {val}"
 
 
 class TestDeleteProfessor:
     def test_returns_count_dict(self, mock_supabase):
         uid = uuid4()
         mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=0
+            data=[], count=1
         )
         result = delete.delete_professor(uid)
         assert "professors" in result
         assert "prof_requests" in result
         assert "timeframes" in result
+        for key, val in result.items():
+            assert isinstance(val, int), f"{key} is not int: {val!r}"
+            assert val >= 0, f"{key} is negative: {val}"
 
 
 class TestDeletePresentation:
     def test_returns_count_dict(self, mock_supabase):
         uid = uuid4()
         mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=0
+            data=[], count=1
         )
         result = delete.delete_presentation(uid)
         assert "presentations" in result
         assert "presenting_students" in result
         assert "timeframes" in result
+        for key, val in result.items():
+            assert isinstance(val, int), f"{key} is not int: {val!r}"
+            assert val >= 0, f"{key} is negative: {val}"
 
 
 class TestDeleteClass:
