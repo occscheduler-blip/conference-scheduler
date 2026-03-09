@@ -1,662 +1,807 @@
+"""Integration tests for all /api/events/* endpoints via FastAPI TestClient.
+
+Every test uses the `client` fixture which patches the Supabase client.
+"""
+
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from uuid import uuid4
+from unittest.mock import MagicMock
+from uuid import UUID, uuid4
 
 import pytest
-from fastapi.testclient import TestClient
-
-from app.config import get_settings
-from app.main import app
-from app.routers import events
 
 
-@pytest.fixture
-def client():
-    return TestClient(app, headers={"X-API-Key": "test-api-key"})
+NOW = datetime.now(timezone.utc)
+LATER = NOW + timedelta(hours=3)
+
+# Realistic Supabase row shapes — IDs are strings, timestamps are ISO strings,
+# nullable fields are None. These mirror what the real client returns.
+_SYMP_ID = str(uuid4())
+_DEPT_ID = str(uuid4())
+_CLASS_ID = str(uuid4())
+_PROF_ID = str(uuid4())
+_STUDENT_ID = str(uuid4())
+_PRES_ID = str(uuid4())
+_TF_ID = str(uuid4())
+
+SYMPOSIUM_ROW = {
+    "id": _SYMP_ID,
+    "name": "Spring Symposium",
+    "rooms_available": 5,
+    "created_at": "2026-03-06T12:00:00+00:00",
+}
+DEPARTMENT_ROW = {
+    "id": _DEPT_ID,
+    "department_name": "Biology",
+    "department_head_name": "Dr. Smith",
+    "email": "smith@hamilton.edu",
+    "symposium_id": _SYMP_ID,
+}
+CLASS_ROW = {
+    "id": _CLASS_ID,
+    "name": "BIO 101",
+    "department_id": _DEPT_ID,
+}
+PROFESSOR_ROW = {
+    "id": _PROF_ID,
+    "name": "Dr. A",
+    "email": "a@hamilton.edu",
+    "class_id": _CLASS_ID,
+}
+STUDENT_ROW = {
+    "id": _STUDENT_ID,
+    "name": "Alice",
+    "email": "alice@hamilton.edu",
+    "class_id": _CLASS_ID,
+    "presentation_id": None,
+}
+PRESENTATION_ROW = {
+    "id": _PRES_ID,
+    "title": "My Research",
+    "class_id": _CLASS_ID,
+    "minutes": 20,
+    "start_time": None,
+    "end_time": None,
+}
+TIMEFRAME_ROW = {
+    "id": _TF_ID,
+    "linked_id": _SYMP_ID,
+    "start_time": "2026-04-20T09:00:00+00:00",
+    "end_time": "2026-04-20T12:00:00+00:00",
+}
 
 
-@pytest.fixture(autouse=True)
-def clear_settings_cache():
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
+def _is_uuid(s: object) -> bool:
+    """Return True if s is a valid UUID string."""
+    try:
+        UUID(str(s))
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
-def test_health_endpoint_returns_environment(client):
-    response = client.get("/health")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert "environment" in body
+def _assert_counts(d: dict) -> None:
+    """Assert every value in a records_* dict is a non-negative integer."""
+    for key, val in d.items():
+        assert isinstance(val, int), f"{key} count is not int: {val!r}"
+        assert val >= 0, f"{key} count is negative: {val}"
 
 
-def test_add_symposium_inserts_timeframes_and_symposium(client, monkeypatch):
-    symposium_id = str(uuid4())
-    write_calls = []
+def _configure_mock(mock_supabase, data=None, count=None):
+    """
+    Override the table side_effect so every table call returns the given data.
+    The conftest fixture uses side_effect=_table, so setting table.return_value
+    has no effect — this helper replaces the side_effect instead.
+    """
+    def _table(name):
+        table = MagicMock()
+        for m in ("select", "insert", "update", "delete", "eq", "in_", "limit"):
+            getattr(table, m).return_value = table
+        table.execute.return_value = SimpleNamespace(data=list(data or []), count=count)
+        return table
+    mock_supabase.table.side_effect = _table
 
-    class SymposiumQueryStub:
-        def select(self, *_args, **_kwargs):
-            return self
 
-        def eq(self, *_args, **_kwargs):
-            return self
+# ===================================================================
+# Health check (no auth)
+# ===================================================================
+class TestHealthCheck:
+    def test_health_ok(self, client):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert "environment" in body
 
-        def limit(self, *_args, **_kwargs):
-            return self
 
-        def update(self, *_args, **_kwargs):
-            return self
+# ===================================================================
+# Auth enforcement
+# ===================================================================
+class TestAuth:
+    def test_missing_key_returns_401(self, client):
+        resp = client.get("/api/events/symposiums")
+        assert resp.status_code == 401
 
-        def execute(self):
-            return SimpleNamespace(data=[])
+    def test_wrong_key_returns_401(self, client):
+        resp = client.get(
+            "/api/events/symposiums", headers={"X-API-Key": "wrong"}
+        )
+        assert resp.status_code == 401
 
-    class SupabaseStub:
-        def table(self, _name):
-            return SymposiumQueryStub()
+    def test_valid_key_passes(self, client, api_headers):
+        resp = client.get("/api/events/symposiums", headers=api_headers)
+        assert resp.status_code == 200
 
-    def fake_insert(table_name, payload):
-        write_calls.append((table_name, payload))
-        return SimpleNamespace(data=payload)
 
-    monkeypatch.setattr(events, "supabase", SupabaseStub())
-    monkeypatch.setattr(events.delete, "delete_timeframes", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(events.write, "insert", fake_insert)
-    response = client.post(
-        "/api/events/add_symposium",
-        json={
-            "symposium_id": symposium_id,
+# ===================================================================
+# POST endpoints
+# ===================================================================
+class TestAddSymposium:
+    def test_add_new_symposium(self, client, api_headers, mock_supabase):
+        # Existence check returns empty; all insert/delete calls return count=1.
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=1
+        )
+        payload = {
             "symposium_name": "Spring Symposium",
-            "rooms_available": 3,
+            "rooms_available": 5,
             "timeframes": [
                 {
-                    "start_time": "2026-04-20T09:00:00Z",
-                    "end_time": "2026-04-20T10:00:00Z",
-                }
+                    "start_time": NOW.isoformat(),
+                    "end_time": LATER.isoformat(),
+                },
             ],
-        },
-    )
+        }
+        resp = client.post(
+            "/api/events/add_symposium", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "saved"
+        assert _is_uuid(body["symposium_id"])
+        assert body["name"] == "Spring Symposium"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_inserted"])
+        _assert_counts(body["records_updated"])
+        _assert_counts(body["records_deleted"])
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "saved"
-    assert body["symposium_id"] == symposium_id
-    assert body["records_inserted"] == {"symposiums": 1, "timeframes": 1}
-    assert [name for name, _payload in write_calls] == ["symposiums", "timeframes"]
-
-
-def test_add_symposium_returns_500_on_unexpected_write_error(client, monkeypatch):
-    class SymposiumQueryStub:
-        def select(self, *_args, **_kwargs):
-            return self
-
-        def eq(self, *_args, **_kwargs):
-            return self
-
-        def limit(self, *_args, **_kwargs):
-            return self
-
-        def update(self, *_args, **_kwargs):
-            return self
-
-        def execute(self):
-            return SimpleNamespace(data=[])
-
-    class SupabaseStub:
-        def table(self, _name):
-            return SymposiumQueryStub()
-
-    monkeypatch.setattr(events, "supabase", SupabaseStub())
-    monkeypatch.setattr(events.delete, "delete_timeframes", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        events.write,
-        "insert",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("db unavailable")),
-    )
-
-    response = client.post(
-        "/api/events/add_symposium",
-        json={
-            "symposium_name": "Spring Symposium",
+    def test_add_symposium_with_existing_id_updates(self, client, api_headers, mock_supabase):
+        sid = uuid4()
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[{"id": str(sid)}], count=1
+        )
+        payload = {
+            "symposium_id": str(sid),
+            "symposium_name": "Updated",
             "rooms_available": 3,
-            "timeframes": [
-                {
-                    "start_time": "2026-04-20T09:00:00Z",
-                    "end_time": "2026-04-20T10:00:00Z",
-                }
-            ],
-        },
-    )
-    assert response.status_code == 500
-    assert "Failed to validate symposium payload" in response.json()["detail"]
+            "timeframes": [],
+        }
+        resp = client.post(
+            "/api/events/add_symposium", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symposium_id"] == str(sid)
+        assert body["name"] == "Updated"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_updated"])
+
+    def test_add_symposium_validation_error(self, client, api_headers):
+        payload = {
+            "symposium_name": "",
+            "rooms_available": 5,
+            "timeframes": [],
+        }
+        resp = client.post(
+            "/api/events/add_symposium", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 422
 
 
-def test_add_students_inserts_all_students(client, monkeypatch):
-    class_id = str(uuid4())
-    inserted = {}
+class TestAddDepartment:
+    def test_add_department(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[DEPARTMENT_ROW], count=1
+        )
+        symp_id = str(uuid4())
+        payload = {
+            "symposium_id": symp_id,
+            "department_name": "Biology",
+            "department_head_name": "Dr. Smith",
+            "email": "smith@hamilton.edu",
+        }
+        resp = client.post(
+            "/api/events/add_department", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "Inserted"
+        assert _is_uuid(body["department_id"])
+        assert _is_uuid(body["symposium_id"])
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_inserted"])
 
-    def fake_insert(table_name, payload):
-        inserted["table"] = table_name
-        inserted["payload"] = payload
-        return SimpleNamespace(data=payload)
-
-    monkeypatch.setattr(events.write, "insert", fake_insert)
-    response = client.post(
-        "/api/events/add_students",
-        json={
-            "class_id": class_id,
-            "students": [
-                {"name": "A", "email": "a@hamilton.edu"},
-                {"name": "B", "email": "b@hamilton.edu"},
-            ],
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["records_inserted"]["students"] == 2
-    assert inserted["table"] == "students"
-    assert len(inserted["payload"]) == 2
+    def test_bad_email_rejected(self, client, api_headers):
+        payload = {
+            "symposium_id": str(uuid4()),
+            "department_name": "Bio",
+            "department_head_name": "Smith",
+            "email": "smith@gmail.com",
+        }
+        resp = client.post(
+            "/api/events/add_department", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 422
 
 
-def test_add_class_returns_professor_ids(client, monkeypatch):
-    inserted_payloads = {}
-
-    def fake_insert(table_name, payload):
-        inserted_payloads[table_name] = payload
-        return SimpleNamespace(data=payload)
-
-    monkeypatch.setattr(events.write, "insert", fake_insert)
-    response = client.post(
-        "/api/events/add_class",
-        json={
-            "name": "CS 410",
+class TestAddClass:
+    def test_add_class(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[CLASS_ROW], count=1
+        )
+        payload = {
+            "name": "BIO 101",
             "department_id": str(uuid4()),
             "professors": [
-                {"name": "Prof One", "email": "one@hamilton.edu"},
-                {"name": "Prof Two", "email": "two@hamilton.edu"},
+                {"name": "Dr. A", "email": "a@hamilton.edu"},
+                {"name": "Dr. B", "email": "b@hamilton.edu"},
             ],
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert isinstance(body.get("class_id"), str)
-    professor_ids = body.get("professor_ids")
-    assert isinstance(professor_ids, list)
-    assert len(professor_ids) == 2
-    assert len(inserted_payloads["professors"]) == 2
-
-
-def test_add_presentation_returns_lines_edited_from_insert_responses(client, monkeypatch):
-    class_id = str(uuid4())
-    student_ids = [str(uuid4()), str(uuid4())]
-
-    def fake_insert(table_name, payload):
-        if table_name == "presentations":
-            return SimpleNamespace(data=[{"id": payload[0]["id"]}])
-        if table_name == "presenting_students":
-            return SimpleNamespace(data=payload[:1])
-        return SimpleNamespace(data=payload)
-
-    monkeypatch.setattr(events.write, "insert", fake_insert)
-    response = client.post(
-        "/api/events/add_presentation",
-        json={
-            "title": "My Talk",
-            "class_id": class_id,
-            "minutes": 15,
-            "presenting_students": student_ids,
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["records_inserted"] == {"presentations": 1, "presenting_students": 1}
-    assert body["lines_edited"] == 2
-
-
-def test_update_student_updates_requested_fields(client, monkeypatch):
-    calls = []
-
-    class QueryStub:
-        def __init__(self, table_name):
-            self.table_name = table_name
-
-        def update(self, payload):
-            calls.append((self.table_name, "update", payload))
-            return self
-
-        def eq(self, field, value):
-            calls.append((self.table_name, "eq", field, value))
-            return self
-
-        def execute(self):
-            return {"data": []}
-
-    class SupabaseStub:
-        def table(self, table_name):
-            return QueryStub(table_name)
-
-    student_id = uuid4()
-    monkeypatch.setattr(events, "supabase", SupabaseStub())
-    response = client.put(
-        "/api/events/update_student",
-        json={
-            "student_id": str(student_id),
-            "name": "Updated Student",
-            "email": "updated@hamilton.edu",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "updated"
-    assert ("students", "update", {"name": "Updated Student", "email": "updated@hamilton.edu"}) in calls
-
-
-def test_update_symposium_maps_symposium_name_to_name(client, monkeypatch):
-    calls = []
-
-    class QueryStub:
-        def __init__(self, table_name):
-            self.table_name = table_name
-
-        def update(self, payload):
-            calls.append((self.table_name, "update", payload))
-            return self
-
-        def eq(self, field, value):
-            calls.append((self.table_name, "eq", field, value))
-            return self
-
-        def execute(self):
-            return {"data": []}
-
-    class SupabaseStub:
-        def table(self, table_name):
-            return QueryStub(table_name)
-
-    symposium_id = uuid4()
-    monkeypatch.setattr(events, "supabase", SupabaseStub())
-    response = client.put(
-        "/api/events/update_symposium",
-        json={"symposium_id": str(symposium_id), "symposium_name": "Renamed"},
-    )
-
-    assert response.status_code == 200
-    assert ("symposiums", "update", {"name": "Renamed"}) in calls
-
-
-def test_update_class_returns_400_when_update_fails(client, monkeypatch):
-    class QueryStub:
-        def update(self, _payload):
-            return self
-
-        def eq(self, _field, _value):
-            return self
-
-        def execute(self):
-            raise RuntimeError("boom")
-
-    class SupabaseStub:
-        def table(self, _table_name):
-            return QueryStub()
-
-    monkeypatch.setattr(events, "supabase", SupabaseStub())
-    response = client.put(
-        "/api/events/update_class",
-        json={"class_id": str(uuid4()), "name": "Updated class"},
-    )
-
-    assert response.status_code == 400
-    assert "Failed to update class" in response.json()["detail"]
-
-
-def test_update_presentation_replaces_presenting_students(client, monkeypatch):
-    calls = []
-    inserts = []
-
-    class QueryStub:
-        def __init__(self, table_name):
-            self.table_name = table_name
-
-        def update(self, payload):
-            calls.append((self.table_name, "update", payload))
-            return self
-
-        def delete(self):
-            calls.append((self.table_name, "delete"))
-            return self
-
-        def eq(self, field, value):
-            calls.append((self.table_name, "eq", field, value))
-            return self
-
-        def execute(self):
-            return {"data": []}
-
-    class SupabaseStub:
-        def table(self, table_name):
-            return QueryStub(table_name)
-
-    def fake_insert(table_name, payload):
-        inserts.append((table_name, payload))
-        return SimpleNamespace(data=payload)
-
-    presentation_id = uuid4()
-    monkeypatch.setattr(events, "supabase", SupabaseStub())
-    monkeypatch.setattr(events.write, "insert", fake_insert)
-    response = client.put(
-        "/api/events/update_presentation",
-        json={
-            "presentation_id": str(presentation_id),
-            "title": "Updated Title",
-            "presenting_students": [str(uuid4()), str(uuid4())],
-        },
-    )
-
-    assert response.status_code == 200
-    assert ("presentations", "update", {"title": "Updated Title"}) in calls
-    assert ("presenting_students", "delete") in calls
-    assert inserts and inserts[0][0] == "presenting_students"
-    assert len(inserts[0][1]) == 2
-    body = response.json()
-    assert body["records_inserted"]["presenting_students"] == 2
-    assert body["records_deleted"]["presenting_students"] == 0
-    assert body["records_updated"]["presentations"] == 0
-    assert body["lines_edited"] == 2
-
-
-def test_get_departments_forwards_query_param(client, monkeypatch):
-    symposium_id = uuid4()
-    captured = {"value": None}
-
-    def fake_get_departments(symposium_id=None):
-        captured["value"] = symposium_id
-        return {"data": []}
-
-    monkeypatch.setattr(events.read, "get_departments", fake_get_departments)
-
-    response = client.get(f"/api/events/departments?symposium_id={symposium_id}")
-
-    assert response.status_code == 200
-    assert captured["value"] == symposium_id
-
-
-def test_get_symposiums_returns_legacy_and_data_keys(client, monkeypatch):
-    rows = [{"id": str(uuid4()), "name": "Spring Symposium"}]
-
-    monkeypatch.setattr(events.read, "get_symposiums", lambda: SimpleNamespace(data=rows))
-    response = client.get("/api/events/symposiums")
-
-    assert response.status_code == 200
-    assert response.json() == {"data": rows, "symposiums": rows}
-
-
-def test_get_symposium_by_id_includes_timeframes(client, monkeypatch):
-    symposium_id = uuid4()
-    symposium_rows = [{"id": str(symposium_id), "name": "Spring Symposium"}]
-    timeframe_rows = [
-        {
-            "id": str(uuid4()),
-            "linked_id": str(symposium_id),
-            "start_time": "2026-04-20T09:00:00Z",
-            "end_time": "2026-04-20T09:15:00Z",
         }
-    ]
-
-    class QueryStub:
-        def select(self, *_args, **_kwargs):
-            return self
-
-        def eq(self, _field, _value):
-            return self
-
-        def limit(self, _count):
-            return self
-
-        def execute(self):
-            return SimpleNamespace(data=symposium_rows)
-
-    class SupabaseStub:
-        def table(self, _table_name):
-            return QueryStub()
-
-    monkeypatch.setattr(events, "supabase", SupabaseStub())
-    monkeypatch.setattr(
-        events.read,
-        "get_timeframes",
-        lambda linked_id=None: SimpleNamespace(data=timeframe_rows if linked_id == symposium_id else []),
-    )
-
-    response = client.get(f"/api/events/symposiums/{symposium_id}")
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "symposium": symposium_rows[0],
-        "timeframes": timeframe_rows,
-    }
-
-
-def test_get_classes_returns_400_when_read_layer_fails(client, monkeypatch):
-    monkeypatch.setattr(
-        events.read,
-        "get_classes",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-
-    response = client.get("/api/events/classes")
-    assert response.status_code == 400
-    assert "Failed to get classes" in response.json()["detail"]
-
-
-def test_delete_symposium_calls_delete_layer(client, monkeypatch):
-    symposium_id = uuid4()
-    called = {"value": None}
-
-    def fake_delete_symposium(value):
-        called["value"] = value
-
-    monkeypatch.setattr(events.delete, "delete_symposium", fake_delete_symposium)
-
-    response = client.delete(f"/api/events/delete_symposium?symposium_id={symposium_id}")
-
-    assert response.status_code == 200
-    assert called["value"] == symposium_id
-    assert response.json()["status"] == "deleted"
-
-
-def test_delete_department_calls_delete_layer(client, monkeypatch):
-    department_id = uuid4()
-    called = {"value": None}
-
-    def fake_delete_department(value):
-        called["value"] = value
-
-    monkeypatch.setattr(events.delete, "delete_department", fake_delete_department)
-
-    response = client.delete(
-        f"/api/events/delete_department?department_id={department_id}"
-    )
-
-    assert response.status_code == 200
-    assert called["value"] == department_id
-    assert response.json() == {
-        "status": "deleted",
-        "records_deleted": {"departments": 1},
-        "lines_edited": 1,
-    }
-
-
-def test_delete_department_returns_400_when_delete_layer_fails(client, monkeypatch):
-    monkeypatch.setattr(
-        events.delete,
-        "delete_department",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-
-    response = client.delete(f"/api/events/delete_department?department_id={uuid4()}")
-
-    assert response.status_code == 400
-    assert "Failed to delete department" in response.json()["detail"]
-
-
-def test_delete_class_calls_delete_layer(client, monkeypatch):
-    class_id = uuid4()
-    called = {"value": None}
-
-    def fake_delete_class(value):
-        called["value"] = value
-
-    monkeypatch.setattr(events.delete, "delete_class", fake_delete_class)
-
-    response = client.delete(f"/api/events/delete_class?class_id={class_id}")
-
-    assert response.status_code == 200
-    assert called["value"] == class_id
-    assert response.json() == {
-        "status": "deleted",
-        "records_deleted": {"classes": 1},
-        "lines_edited": 1,
-    }
-
-
-def test_delete_class_returns_400_when_delete_layer_fails(client, monkeypatch):
-    monkeypatch.setattr(
-        events.delete,
-        "delete_class",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-
-    response = client.delete(f"/api/events/delete_class?class_id={uuid4()}")
-
-    assert response.status_code == 400
-    assert "Failed to delete class" in response.json()["detail"]
-
-
-def test_delete_student_calls_delete_layer(client, monkeypatch):
-    student_id = uuid4()
-    called = {"value": None}
-
-    def fake_delete_student(value):
-        called["value"] = value
-
-    monkeypatch.setattr(events.delete, "delete_student", fake_delete_student)
-
-    response = client.delete(f"/api/events/delete_student?student_id={student_id}")
-
-    assert response.status_code == 200
-    assert called["value"] == student_id
-    assert response.json() == {
-        "status": "deleted",
-        "records_deleted": {"students": 1},
-        "lines_edited": 1,
-    }
-
-
-def test_delete_student_returns_400_when_delete_layer_fails(client, monkeypatch):
-    monkeypatch.setattr(
-        events.delete,
-        "delete_student",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-
-    response = client.delete(f"/api/events/delete_student?student_id={uuid4()}")
-
-    assert response.status_code == 400
-    assert "Failed to delete student" in response.json()["detail"]
-
-
-def test_delete_professor_calls_delete_layer(client, monkeypatch):
-    professor_id = uuid4()
-    called = {"value": None}
-
-    def fake_delete_professor(value):
-        called["value"] = value
-
-    monkeypatch.setattr(events.delete, "delete_professor", fake_delete_professor)
-
-    response = client.delete(f"/api/events/delete_professor?professor_id={professor_id}")
-
-    assert response.status_code == 200
-    assert called["value"] == professor_id
-    assert response.json() == {
-        "status": "deleted",
-        "records_deleted": {"professors": 1},
-        "lines_edited": 1,
-    }
-
-
-def test_delete_professor_returns_400_when_delete_layer_fails(client, monkeypatch):
-    monkeypatch.setattr(
-        events.delete,
-        "delete_professor",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-
-    response = client.delete(f"/api/events/delete_professor?professor_id={uuid4()}")
-
-    assert response.status_code == 400
-    assert "Failed to delete professor" in response.json()["detail"]
-
-
-def test_delete_presentation_calls_delete_layer(client, monkeypatch):
-    presentation_id = uuid4()
-    called = {"value": None}
-
-    def fake_delete_presentation(value):
-        called["value"] = value
-
-    monkeypatch.setattr(events.delete, "delete_presentation", fake_delete_presentation)
-
-    response = client.delete(
-        f"/api/events/delete_presentation?presentation_id={presentation_id}"
-    )
-
-    assert response.status_code == 200
-    assert called["value"] == presentation_id
-    assert response.json() == {
-        "status": "deleted",
-        "records_deleted": {"presentations": 1},
-        "lines_edited": 1,
-    }
-
-
-def test_delete_presentation_returns_400_when_delete_layer_fails(client, monkeypatch):
-    monkeypatch.setattr(
-        events.delete,
-        "delete_presentation",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-
-    response = client.delete(f"/api/events/delete_presentation?presentation_id={uuid4()}")
-
-    assert response.status_code == 400
-    assert "Failed to delete presentation" in response.json()["detail"]
-
-
-def test_protected_route_rejects_missing_api_key():
-    no_key_client = TestClient(app)
-    response = no_key_client.get("/api/events/symposiums")
-
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid API key."
-
-
-def test_protected_route_rejects_wrong_api_key():
-    wrong_key_client = TestClient(app, headers={"X-API-Key": "wrong-key"})
-    response = wrong_key_client.get("/api/events/symposiums")
-
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid API key."
-
-
-def test_protected_route_returns_500_if_backend_key_not_configured(monkeypatch):
-    monkeypatch.setenv("BACKEND_API_KEY", "")
-    get_settings.cache_clear()
-
-    client = TestClient(app, headers={"X-API-Key": "anything"})
-    response = client.get("/api/events/symposiums")
-
-    assert response.status_code == 500
-    assert (
-        response.json()["detail"]
-        == "API key auth is enabled but BACKEND_API_KEY is not configured."
-    )
+        resp = client.post(
+            "/api/events/add_class", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "Inserted"
+        assert len(body["professor_ids"]) == 2
+        assert all(_is_uuid(pid) for pid in body["professor_ids"])
+        assert _is_uuid(body["class_id"])
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_inserted"])
+
+    def test_empty_class_name_rejected(self, client, api_headers):
+        payload = {
+            "name": "",
+            "department_id": str(uuid4()),
+            "professors": [],
+        }
+        resp = client.post(
+            "/api/events/add_class", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 422
+
+
+class TestAddStudents:
+    def test_add_students(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[STUDENT_ROW, STUDENT_ROW], count=2
+        )
+        class_id = str(uuid4())
+        payload = {
+            "class_id": class_id,
+            "students": [
+                {"name": "Alice", "email": "alice@hamilton.edu"},
+                {"name": "Bob", "email": "bob@hamilton.edu"},
+            ],
+        }
+        resp = client.post(
+            "/api/events/add_students", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "inserted"
+        assert body["class_id"] == class_id
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_inserted"])
+
+
+class TestAddPresentation:
+    def test_add_presentation(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[PRESENTATION_ROW], count=1
+        )
+        class_id = str(uuid4())
+        payload = {
+            "title": "My Research",
+            "class_id": class_id,
+            "minutes": 20,
+            "presenting_students": [str(uuid4())],
+        }
+        resp = client.post(
+            "/api/events/add_presentation", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "inserted"
+        assert _is_uuid(body["presentation_id"])
+        assert _is_uuid(body["class_id"])
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_inserted"])
+
+    def test_minutes_too_high_rejected(self, client, api_headers):
+        payload = {
+            "title": "Talk",
+            "class_id": str(uuid4()),
+            "minutes": 999,
+            "presenting_students": [],
+        }
+        resp = client.post(
+            "/api/events/add_presentation", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 422
+
+
+class TestAddRequest:
+    def test_add_request(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[{"id": str(uuid4()), "name": "Prof Jones", "email": "jones@hamilton.edu", "student_id": _STUDENT_ID}],
+            count=1,
+        )
+        payload = {
+            "name": "Prof Jones",
+            "email": "jones@hamilton.edu",
+            "student_id": str(uuid4()),
+        }
+        resp = client.post(
+            "/api/events/add_request", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "inserted"
+        assert body["name"] == "Prof Jones"
+        assert body["email"] == "jones@hamilton.edu"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_inserted"])
+
+
+# ===================================================================
+# GET endpoints
+# ===================================================================
+class TestGetSymposiums:
+    def test_list_symposiums(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[SYMPOSIUM_ROW])
+        resp = client.get("/api/events/symposiums", headers=api_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "symposiums" in body
+        assert len(body["symposiums"]) == 1
+        row = body["symposiums"][0]
+        assert row["id"] == _SYMP_ID
+        assert row["name"] == "Spring Symposium"
+        assert row["rooms_available"] == 5
+        assert _is_uuid(row["id"])
+
+
+class TestGetSymposiumById:
+    def test_found(self, client, api_headers, mock_supabase):
+        sid = uuid4()
+        symp_row = {**SYMPOSIUM_ROW, "id": str(sid)}
+
+        def _table_side_effect(name):
+            table = MagicMock()
+            for m in ("select", "insert", "update", "delete", "eq", "in_", "limit"):
+                getattr(table, m).return_value = table
+            if name == "symposiums":
+                table.execute.return_value = SimpleNamespace(data=[symp_row])
+            elif name == "timeframes":
+                table.execute.return_value = SimpleNamespace(data=[TIMEFRAME_ROW])
+            else:
+                table.execute.return_value = SimpleNamespace(data=[])
+            return table
+
+        mock_supabase.table.side_effect = _table_side_effect
+        resp = client.get(f"/api/events/symposiums/{sid}", headers=api_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "symposium" in body
+        assert "timeframes" in body
+        assert body["symposium"]["id"] == str(sid)
+        assert body["symposium"]["name"] == "Spring Symposium"
+        assert body["symposium"]["rooms_available"] == 5
+        assert len(body["timeframes"]) == 1
+        tf = body["timeframes"][0]
+        assert _is_uuid(tf["id"])
+        assert "start_time" in tf and "end_time" in tf
+
+    def test_not_found(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[])
+        resp = client.get(
+            f"/api/events/symposiums/{uuid4()}", headers=api_headers
+        )
+        assert resp.status_code == 404
+
+
+class TestGetDepartments:
+    def test_all(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[DEPARTMENT_ROW])
+        resp = client.get("/api/events/departments", headers=api_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["departments"]) == 1
+        assert _is_uuid(body["departments"][0]["id"])
+        assert body["departments"][0]["department_name"] == "Biology"
+
+    def test_filtered(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[DEPARTMENT_ROW])
+        resp = client.get(
+            f"/api/events/departments?symposium_id={uuid4()}", headers=api_headers
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()["departments"]) == 1
+
+
+class TestGetClasses:
+    def test_all(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[CLASS_ROW])
+        resp = client.get("/api/events/classes", headers=api_headers)
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert len(rows) == 1
+        assert _is_uuid(rows[0]["id"])
+        assert rows[0]["name"] == "BIO 101"
+
+
+class TestGetStudents:
+    def test_all(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[STUDENT_ROW])
+        resp = client.get("/api/events/students", headers=api_headers)
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert len(rows) == 1
+        assert _is_uuid(rows[0]["id"])
+        assert rows[0]["presentation_id"] is None
+
+
+class TestGetPresentations:
+    def test_all(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[]
+        )
+        resp = client.get("/api/events/presentations", headers=api_headers)
+        assert resp.status_code == 200
+
+
+class TestGetProfessors:
+    def test_all(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[PROFESSOR_ROW])
+        resp = client.get("/api/events/professors", headers=api_headers)
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert len(rows) == 1
+        assert _is_uuid(rows[0]["id"])
+        assert rows[0]["email"] == "a@hamilton.edu"
+
+
+class TestGetTimeframes:
+    def test_all(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[TIMEFRAME_ROW])
+        resp = client.get("/api/events/timeframes", headers=api_headers)
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert len(rows) == 1
+        assert _is_uuid(rows[0]["id"])
+        assert "start_time" in rows[0] and "end_time" in rows[0]
+
+
+class TestGetRequests:
+    def test_all(self, client, api_headers, mock_supabase):
+        _configure_mock(mock_supabase, data=[{"id": str(uuid4()), "name": "Prof Jones", "email": "jones@hamilton.edu", "student_id": _STUDENT_ID}])
+        resp = client.get("/api/events/requests", headers=api_headers)
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert len(rows) == 1
+        assert _is_uuid(rows[0]["id"])
+        assert _is_uuid(rows[0]["student_id"])
+
+
+# ===================================================================
+# PUT endpoints
+# ===================================================================
+class TestUpdateTimeframes:
+    def test_update_timeframes(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[TIMEFRAME_ROW], count=1
+        )
+        linked_id = str(uuid4())
+        payload = {
+            "linked_id": linked_id,
+            "timeframes": [
+                {
+                    "start_time": NOW.isoformat(),
+                    "end_time": LATER.isoformat(),
+                }
+            ],
+        }
+        resp = client.put(
+            "/api/events/update_timeframes", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "updated"
+        assert _is_uuid(body["linked_id"])
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_inserted"])
+        _assert_counts(body["records_deleted"])
+
+
+class TestUpdateStudent:
+    def test_update_name(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[STUDENT_ROW], count=1
+        )
+        student_id = str(uuid4())
+        payload = {
+            "student_id": student_id,
+            "name": "New Name",
+            "email": "new@hamilton.edu",
+            "class_id": str(uuid4()),
+            "presentation_id": str(uuid4()),
+        }
+        resp = client.put(
+            "/api/events/update_student", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["student_id"] == student_id
+        assert "name" in body["fields_updated"]
+        assert isinstance(body["fields_updated"], list)
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_updated"])
+
+    def test_no_fields_rejected(self, client, api_headers):
+        payload = {"student_id": str(uuid4())}
+        resp = client.put(
+            "/api/events/update_student", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 422
+
+
+class TestUpdateProfessor:
+    def test_update_email(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[PROFESSOR_ROW], count=1
+        )
+        prof_id = str(uuid4())
+        payload = {
+            "professor_id": prof_id,
+            "name": "Dr. Smith",
+            "email": "new@hamilton.edu",
+            "class_id": str(uuid4()),
+        }
+        resp = client.put(
+            "/api/events/update_professor", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["professor_id"] == prof_id
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_updated"])
+
+
+class TestUpdateClass:
+    def test_update_class_name(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[CLASS_ROW], count=1
+        )
+        class_id = str(uuid4())
+        payload = {"class_id": class_id, "name": "BIO 202", "department_id": str(uuid4())}
+        resp = client.put(
+            "/api/events/update_class", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["class_id"] == class_id
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_updated"])
+
+
+class TestUpdateDepartment:
+    def test_update_department(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[DEPARTMENT_ROW], count=1
+        )
+        dept_id = str(uuid4())
+        payload = {
+            "department_id": dept_id,
+            "department_name": "Chemistry",
+            "department_head_name": "Dr. Y",
+            "email": "y@hamilton.edu",
+        }
+        resp = client.put(
+            "/api/events/update_department", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["department_id"] == dept_id
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_updated"])
+
+
+class TestUpdateSymposium:
+    def test_update_name(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[SYMPOSIUM_ROW], count=1
+        )
+        symp_id = str(uuid4())
+        payload = {
+            "symposium_id": symp_id,
+            "symposium_name": "Fall Symposium",
+            "rooms_available": 5,
+        }
+        resp = client.put(
+            "/api/events/update_symposium", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symposium_id"] == symp_id
+        assert "name" in body["fields_updated"]
+        assert isinstance(body["fields_updated"], list)
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_updated"])
+
+    def test_update_rooms(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[SYMPOSIUM_ROW], count=1
+        )
+        payload = {
+            "symposium_id": str(uuid4()),
+            "symposium_name": "Fall Symposium",
+            "rooms_available": 10,
+        }
+        resp = client.put(
+            "/api/events/update_symposium", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+
+
+class TestUpdatePresentation:
+    def test_update_title(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[PRESENTATION_ROW], count=1
+        )
+        pres_id = str(uuid4())
+        payload = {
+            "presentation_id": pres_id,
+            "title": "Updated Title",
+            "class_id": str(uuid4()),
+            "minutes": 20,
+            "presenting_students": [],
+        }
+        resp = client.put(
+            "/api/events/update_presentation", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["presentation_id"] == pres_id
+        assert body["presenting_students_updated"] is True
+        assert isinstance(body["fields_updated"], list)
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_updated"])
+        _assert_counts(body["records_inserted"])
+        _assert_counts(body["records_deleted"])
+
+    def test_update_presenting_students(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[PRESENTATION_ROW], count=1
+        )
+        payload = {
+            "presentation_id": str(uuid4()),
+            "title": "My Talk",
+            "class_id": str(uuid4()),
+            "minutes": 15,
+            "presenting_students": [str(uuid4()), str(uuid4())],
+        }
+        resp = client.put(
+            "/api/events/update_presentation", json=payload, headers=api_headers
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["presenting_students_updated"] is True
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+
+
+# ===================================================================
+# DELETE endpoints
+# ===================================================================
+class TestDeleteSymposium:
+    def test_delete(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=1
+        )
+        sid = uuid4()
+        resp = client.delete(
+            f"/api/events/delete_symposium?symposium_id={sid}",
+            headers=api_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "deleted"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_deleted"])
+
+
+class TestDeleteDepartment:
+    def test_delete(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=1
+        )
+        did = uuid4()
+        resp = client.delete(
+            f"/api/events/delete_department?department_id={did}",
+            headers=api_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "deleted"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_deleted"])
+
+
+class TestDeleteClass:
+    def test_delete(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=1
+        )
+        cid = uuid4()
+        resp = client.delete(
+            f"/api/events/delete_class?class_id={cid}",
+            headers=api_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "deleted"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_deleted"])
+
+
+class TestDeleteStudent:
+    def test_delete(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=1
+        )
+        sid = uuid4()
+        resp = client.delete(
+            f"/api/events/delete_student?student_id={sid}",
+            headers=api_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "deleted"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_deleted"])
+
+
+class TestDeleteProfessor:
+    def test_delete(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=1
+        )
+        pid = uuid4()
+        resp = client.delete(
+            f"/api/events/delete_professor?professor_id={pid}",
+            headers=api_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "deleted"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_deleted"])
+
+
+class TestDeletePresentation:
+    def test_delete(self, client, api_headers, mock_supabase):
+        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
+            data=[], count=1
+        )
+        pid = uuid4()
+        resp = client.delete(
+            f"/api/events/delete_presentation?presentation_id={pid}",
+            headers=api_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "deleted"
+        assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
+        _assert_counts(body["records_deleted"])

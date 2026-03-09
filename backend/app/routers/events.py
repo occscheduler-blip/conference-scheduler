@@ -1,9 +1,20 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4, UUID
+from postgrest.base_request_builder import APIResponse
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from app.supabase_io import delete, read, write
+from app.supabase_io.nested_read import (
+    CLASS_CHILDREN,
+    CLASS_ALLOWS,
+    DEPARTMENT_ALLOWS,
+    get_classes_nested,
+    get_departments_nested,
+    parse_include,
+)
 from app.supabase_io.client import supabase
 
 import app.routers.request_schemas as request_schemas
@@ -13,8 +24,12 @@ router = APIRouter(prefix="/events", tags=["events"])
 SYMPOSIUM_DATAFRAMES: dict[int, dict[str, pd.DataFrame]] = {}
 
 
-def _serialize_update_fields(fields: dict):
-    serialized: dict = {}
+def _serialize_update_fields(fields: dict[str, object]) -> dict[str, Any]:
+    """
+    Convert a dict of model fields into a JSON-serializable form for Supabase updates by
+    converting all UUID values to strings.
+    """
+    serialized: dict[str, Any] = {}
     for key, value in fields.items():
         if isinstance(value, UUID):
             serialized[key] = str(value)
@@ -23,31 +38,22 @@ def _serialize_update_fields(fields: dict):
     return serialized
 
 
-def _rows_affected(response, fallback: int = 0) -> int:
-    """Return rows affected from a Supabase response object."""
+def _rows_affected(response: APIResponse | dict[str, object] | None, fallback: int = 0) -> int:
+    """Return rows affected from a Supabase response object or dict."""
+    if response is None:
+        return fallback
     if isinstance(response, dict):
         count = response.get("count")
-        if isinstance(count, int) and count >= 0:
-            return count
-
         data = response.get("data")
-        if isinstance(data, list):
-            return len(data)
-        if isinstance(data, dict):
-            return 1
-
-        return fallback
-
-    count = getattr(response, "count", None)
+    else:
+        count = getattr(response, "count", None)
+        data = getattr(response, "data", None)
     if isinstance(count, int) and count >= 0:
         return count
-
-    data = getattr(response, "data", None)
     if isinstance(data, list):
         return len(data)
     if isinstance(data, dict):
         return 1
-
     return fallback
 
 
@@ -78,7 +84,9 @@ def _sum_counts(*groups: dict[str, int]) -> int:
 
 
 @router.post("/add_class")
-def add_class(payload: request_schemas.AddClassRequest):
+def add_class(
+    payload: request_schemas.AddClassRequest,
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     try:
         class_id = uuid4()
         class_def = supabase_schemas.Class(
@@ -123,7 +131,9 @@ def add_class(payload: request_schemas.AddClassRequest):
 
 
 @router.post("/add_department")
-def add_department(payload: request_schemas.AddDepartmentRequest):
+def add_department(
+    payload: request_schemas.AddDepartmentRequest,
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     try:
         department = supabase_schemas.Department(
             id=uuid4(),
@@ -155,7 +165,9 @@ def add_department(payload: request_schemas.AddDepartmentRequest):
 
 
 @router.post("/add_symposium")
-def add_symposium(payload: request_schemas.AddSymposiumRequest):
+def add_symposium(
+    payload: request_schemas.AddSymposiumRequest,
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     """Validate symposium + timeframe data and insert into Supabase tables.
 
     Args:
@@ -226,7 +238,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
 
         return {
             "status": "saved",
-            "symposium_id": str(symposium_id),
+            "symposium_id": symposium_id,
             "name": payload.symposium_name,
             "records_inserted": records_inserted,
             "records_updated": records_updated,
@@ -246,7 +258,7 @@ def add_symposium(payload: request_schemas.AddSymposiumRequest):
 
 
 @router.post("/add_students")
-def add_students(payload: request_schemas.AddStudentsRequest):
+def add_students(payload: request_schemas.AddStudentsRequest) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     """Adds a list of students to the students table in the database."""
     try:
         students: list[supabase_schemas.Student] = []
@@ -282,16 +294,20 @@ def add_students(payload: request_schemas.AddStudentsRequest):
 
 
 @router.post("/add_presentation")
-def add_presentation(payload: request_schemas.AddPresentationRequest):
+def add_presentation(
+    payload: request_schemas.AddPresentationRequest,
+) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         presentation_id = uuid4()
-        presentation_payload = {
-            "id": presentation_id,
-            "title": payload.title,
-            "class_id": payload.class_id,
-            "minutes": payload.minutes,
-        }
-        pres_resp = write.insert("presentations", [presentation_payload])
+        presentation = supabase_schemas.Presentation(
+            id=presentation_id,
+            title=payload.title,
+            class_id=payload.class_id,
+            minutes=payload.minutes,
+            start_time=None,
+            end_time=None,
+        )
+        pres_resp = write.insert("presentations", [presentation.model_dump()])
 
         students: list[supabase_schemas.PresentingStudents] = []
         for student in payload.presenting_students:
@@ -336,13 +352,13 @@ def add_presentation(payload: request_schemas.AddPresentationRequest):
 
 
 @router.post("/add_request")
-def add_prof_request(payload: request_schemas.AddReqRequest):
+def add_prof_request(payload: request_schemas.AddReqRequest) -> dict[str, str | int | dict[str, int]]:
     try:
         request = supabase_schemas.Request(
             id=uuid4(),
             name=payload.name,
             email=payload.email,
-            student_id=payload.student_id
+            student_id=payload.student_id,
         )
 
         response = write.insert("requests", [request.model_dump()])
@@ -367,7 +383,7 @@ def add_prof_request(payload: request_schemas.AddReqRequest):
 
 
 @router.put("/update_timeframes")
-def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
+def update_timeframes(payload: request_schemas.UpdateTimeframesRequest) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         deleted_timeframes = delete.delete_timeframes(payload.linked_id)
 
@@ -406,7 +422,7 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest):
 
 
 @router.put("/update_student")
-def update_student(payload: request_schemas.UpdateStudentRequest):
+def update_student(payload: request_schemas.UpdateStudentRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         updates = payload.model_dump(
             exclude_none=True,
@@ -441,7 +457,7 @@ def update_student(payload: request_schemas.UpdateStudentRequest):
 
 
 @router.put("/update_professor")
-def update_professor(payload: request_schemas.UpdateProfessorRequest):
+def update_professor(payload: request_schemas.UpdateProfessorRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         updates = payload.model_dump(
             exclude_none=True,
@@ -455,7 +471,9 @@ def update_professor(payload: request_schemas.UpdateProfessorRequest):
             .execute()
         )
         records_updated = {
-            "professors": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+            "professors": _rows_affected(
+                update_resp, fallback=1 if update_payload else 0
+            )
         }
 
         return {
@@ -476,7 +494,7 @@ def update_professor(payload: request_schemas.UpdateProfessorRequest):
 
 
 @router.put("/update_class")
-def update_class(payload: request_schemas.UpdateClassRequest):
+def update_class(payload: request_schemas.UpdateClassRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         updates = payload.model_dump(
             exclude_none=True,
@@ -511,7 +529,7 @@ def update_class(payload: request_schemas.UpdateClassRequest):
 
 
 @router.put("/update_department")
-def update_department(payload: request_schemas.UpdateDepartmentRequest):
+def update_department(payload: request_schemas.UpdateDepartmentRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         update_payload = {
             "department_name": payload.department_name,
@@ -525,7 +543,9 @@ def update_department(payload: request_schemas.UpdateDepartmentRequest):
             .execute()
         )
         records_updated = {
-            "departments": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+            "departments": _rows_affected(
+                update_resp, fallback=1 if update_payload else 0
+            )
         }
 
         return {
@@ -546,7 +566,7 @@ def update_department(payload: request_schemas.UpdateDepartmentRequest):
 
 
 @router.put("/update_symposium")
-def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
+def update_symposium(payload: request_schemas.UpdateSymposiumRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         updates = payload.model_dump(
             exclude_none=True,
@@ -585,7 +605,7 @@ def update_symposium(payload: request_schemas.UpdateSymposiumRequest):
 
 
 @router.put("/update_presentation")
-def update_presentation(payload: request_schemas.UpdatePresentationRequest):
+def update_presentation(payload: request_schemas.UpdatePresentationRequest) -> dict[str, str | int | bool | list[str] | dict[str, int]]:
     try:
         updates = payload.model_dump(
             exclude_none=True,
@@ -659,7 +679,7 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest):
 
 
 @router.get("/symposiums")
-def get_symposiums():
+def get_symposiums() -> dict[str, list[object]]:
     try:
         response = read.get_symposiums()
         rows = list(getattr(response, "data", None) or [])
@@ -673,7 +693,7 @@ def get_symposiums():
 
 
 @router.get("/symposiums/{symposium_id}")
-def get_symposium(symposium_id: UUID):
+def get_symposium(symposium_id: UUID) -> dict[str, object]:
     try:
         symposium_response = (
             supabase.table("symposiums")
@@ -700,9 +720,17 @@ def get_symposium(symposium_id: UUID):
         ) from exc
 
 
-@router.get("/departments")
-def get_departments(symposium_id: UUID | None = None):
+@router.get("/departments", response_model=None)
+def get_departments(
+    symposium_id: UUID | None = None,
+    include: str | None = None,
+) -> dict[str, list[object]] | list[dict[str, object]]:
     try:
+        includes = parse_include(include, allowed=DEPARTMENT_ALLOWS)
+        if includes:
+            if includes & CLASS_CHILDREN:
+                includes = includes | {"classes"}
+            return get_departments_nested(symposium_id=symposium_id, includes=includes)
         response = read.get_departments(symposium_id=symposium_id)
         rows = list(getattr(response, "data", None) or [])
         return {"data": rows, "departments": rows}
@@ -710,13 +738,19 @@ def get_departments(symposium_id: UUID | None = None):
         raise
     except Exception as exc:
         raise HTTPException(
-            status_code=400, detail=f"Failed to get symposiums: {exc}"
+            status_code=400, detail=f"Failed to get departments: {exc}"
         ) from exc
 
 
-@router.get("/classes")
-def get_classes(department_id: UUID | None = None):
+@router.get("/classes", response_model=None)
+def get_classes(
+    department_id: UUID | None = None,
+    include: str | None = None,
+) -> APIResponse | list[dict[str, object]]:
     try:
+        includes = parse_include(include, allowed=CLASS_ALLOWS)
+        if includes:
+            return get_classes_nested(department_id=department_id, includes=includes)
         return read.get_classes(department_id=department_id)
     except HTTPException:
         raise
@@ -727,7 +761,7 @@ def get_classes(department_id: UUID | None = None):
 
 
 @router.get("/students")
-def get_students(class_id: UUID | None = None):
+def get_students(class_id: UUID | None = None) -> APIResponse:
     try:
         return read.get_students(class_id=class_id)
     except HTTPException:
@@ -738,8 +772,8 @@ def get_students(class_id: UUID | None = None):
         ) from exc
 
 
-@router.get("/presentations")
-def get_presentations(class_id: UUID | None = None):
+@router.get("/presentations", response_model=None)
+def get_presentations(class_id: UUID | None = None) -> SimpleNamespace | APIResponse:
     try:
         return read.get_presentations(class_id=class_id)
     except HTTPException:
@@ -751,7 +785,7 @@ def get_presentations(class_id: UUID | None = None):
 
 
 @router.get("/professors")
-def get_professors(class_id: UUID | None = None):
+def get_professors(class_id: UUID | None = None) -> APIResponse:
     try:
         return read.get_professors(class_id=class_id)
     except HTTPException:
@@ -763,7 +797,7 @@ def get_professors(class_id: UUID | None = None):
 
 
 @router.get("/timeframes")
-def get_timeframes(linked_id: UUID | None = None):
+def get_timeframes(linked_id: UUID | None = None) -> APIResponse:
     try:
         return read.get_timeframes(linked_id=linked_id)
     except HTTPException:
@@ -775,19 +809,7 @@ def get_timeframes(linked_id: UUID | None = None):
 
 
 @router.get("/requests")
-def get_requests(student_id: UUID | None = None):
-    try:
-        return read.get_requests(student_id=student_id)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to get professor requests: {exc}"
-        ) from exc
-
-
-@router.get("/requests")
-def get_requests(student_id: UUID | None = None):
+def get_requests(student_id: UUID | None = None) -> APIResponse:
     try:
         return read.get_requests(student_id=student_id)
     except HTTPException:
@@ -799,7 +821,7 @@ def get_requests(student_id: UUID | None = None):
 
 
 @router.delete("/delete_symposium")
-def delete_symposium(symposium_id: UUID):
+def delete_symposium(symposium_id: UUID) -> dict[str, str | int | dict[str, int]]:
     try:
         counts = _normalize_counts(
             delete.delete_symposium(symposium_id), {"symposiums": 1}
@@ -818,7 +840,7 @@ def delete_symposium(symposium_id: UUID):
 
 
 @router.delete("/delete_department")
-def delete_department(department_id: UUID):
+def delete_department(department_id: UUID) -> dict[str, str | int | dict[str, int]]:
     try:
         counts = _normalize_counts(
             delete.delete_department(department_id), {"departments": 1}
@@ -837,7 +859,7 @@ def delete_department(department_id: UUID):
 
 
 @router.delete("/delete_class")
-def delete_class(class_id: UUID):
+def delete_class(class_id: UUID) -> dict[str, str | int | dict[str, int]]:
     try:
         counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
         return {
@@ -854,7 +876,7 @@ def delete_class(class_id: UUID):
 
 
 @router.delete("/delete_student")
-def delete_student(student_id: UUID):
+def delete_student(student_id: UUID) -> dict[str, str | int | dict[str, int]]:
     try:
         counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
         return {
@@ -871,7 +893,7 @@ def delete_student(student_id: UUID):
 
 
 @router.delete("/delete_professor")
-def delete_professor(professor_id: UUID):
+def delete_professor(professor_id: UUID) -> dict[str, str | int | dict[str, int]]:
     try:
         counts = _normalize_counts(
             delete.delete_professor(professor_id), {"professors": 1}
@@ -890,7 +912,7 @@ def delete_professor(professor_id: UUID):
 
 
 @router.delete("/delete_presentation")
-def delete_presentation(presentation_id: UUID):
+def delete_presentation(presentation_id: UUID) -> dict[str, str | int | dict[str, int]]:
     try:
         counts = _normalize_counts(
             delete.delete_presentation(presentation_id), {"presentations": 1}

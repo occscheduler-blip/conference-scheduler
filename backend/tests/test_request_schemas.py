@@ -1,106 +1,394 @@
-from datetime import datetime, timezone
+"""Tests for request_schemas – Pydantic validation rules."""
+
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from app.routers.request_schemas import (
-    AddClassRequest,
-    AddDepartmentRequest,
-    AddPresentationRequest,
-    AddStudentsRequest,
-    AddSymposiumRequest,
     MAX_PRESENTING_STUDENTS,
     MAX_ROOMS,
     MAX_TIME,
+    AddClassRequest,
+    AddDepartmentRequest,
+    AddPresentationRequest,
+    AddReqRequest,
+    AddStudentsRequest,
+    AddSymposiumRequest,
+    ProfessorInit,
+    StudentInit,
+    TimeframeWindow,
+    UpdateClassRequest,
+    UpdateDepartmentRequest,
+    UpdatePresentationRequest,
+    UpdateProfessorRequest,
+    UpdateStudentRequest,
+    UpdateSymposiumRequest,
+    UpdateTimeframesRequest,
 )
 
 
-def _window(start_hour: int, end_hour: int):
-    return {
-        "start_time": datetime(2026, 4, 20, start_hour, 0, tzinfo=timezone.utc),
-        "end_time": datetime(2026, 4, 20, end_hour, 0, tzinfo=timezone.utc),
-    }
+NOW = datetime.now(timezone.utc)
+LATER = NOW + timedelta(hours=3)
+UUID1 = uuid4()
+UUID2 = uuid4()
 
 
-def test_add_symposium_request_normalizes_name_and_accepts_valid_payload():
-    payload = AddSymposiumRequest(
-        symposium_name="  Spring Symposium  ",
-        rooms_available=5,
-        timeframes=[_window(9, 11)],
-    )
-    assert payload.symposium_name == "Spring Symposium"
+# ---------------------------------------------------------------------------
+# TimeframeWindow
+# ---------------------------------------------------------------------------
+class TestTimeframeWindow:
+    def test_valid(self):
+        tw = TimeframeWindow(start_time=NOW, end_time=LATER)
+        assert tw.start_time == NOW
+
+    def test_end_before_start_raises(self):
+        with pytest.raises(ValidationError, match="start time must come before"):
+            TimeframeWindow(start_time=LATER, end_time=NOW)
+
+    def test_equal_times_accepted(self):
+        # end == start should not raise (not strictly "before")
+        tw = TimeframeWindow(start_time=NOW, end_time=NOW)
+        assert tw.start_time == tw.end_time
 
 
-def test_add_symposium_request_rejects_blank_name():
-    with pytest.raises(ValidationError):
-        AddSymposiumRequest(
-            symposium_name="   ",
+# ---------------------------------------------------------------------------
+# AddSymposiumRequest
+# ---------------------------------------------------------------------------
+class TestAddSymposiumRequest:
+    def test_valid_minimal(self):
+        req = AddSymposiumRequest(
+            symposium_name="Spring",
             rooms_available=5,
-            timeframes=[_window(9, 11)],
+            timeframes=[{"start_time": NOW, "end_time": LATER}],
         )
+        assert req.symposium_name == "Spring"
+        assert req.symposium_id is None
 
-
-def test_add_symposium_request_rejects_too_many_rooms():
-    with pytest.raises(ValidationError):
-        AddSymposiumRequest(
-            symposium_name="Spring Symposium",
-            rooms_available=MAX_ROOMS + 1,
-            timeframes=[_window(9, 11)],
+    def test_with_optional_id(self):
+        req = AddSymposiumRequest(
+            symposium_id=UUID1,
+            symposium_name="Fall",
+            rooms_available=1,
+            timeframes=[],
         )
+        assert req.symposium_id == UUID1
 
+    def test_empty_name_raises(self):
+        with pytest.raises(ValidationError, match="empty"):
+            AddSymposiumRequest(
+                symposium_name="   ",
+                rooms_available=1,
+                timeframes=[],
+            )
 
-def test_add_symposium_request_rejects_end_before_start():
-    with pytest.raises(ValidationError):
-        AddSymposiumRequest(
-            symposium_name="Spring Symposium",
-            rooms_available=4,
-            timeframes=[_window(11, 10)],
+    def test_too_many_rooms_raises(self):
+        with pytest.raises(ValidationError, match="rooms"):
+            AddSymposiumRequest(
+                symposium_name="X",
+                rooms_available=MAX_ROOMS + 1,
+                timeframes=[],
+            )
+
+    def test_max_rooms_accepted(self):
+        req = AddSymposiumRequest(
+            symposium_name="X",
+            rooms_available=MAX_ROOMS,
+            timeframes=[],
         )
+        assert req.rooms_available == MAX_ROOMS
 
 
-def test_add_department_request_enforces_hamilton_email():
-    with pytest.raises(ValidationError):
-        AddDepartmentRequest(
-            symposium_id=uuid4(),
+# ---------------------------------------------------------------------------
+# AddDepartmentRequest
+# ---------------------------------------------------------------------------
+class TestAddDepartmentRequest:
+    def test_valid(self):
+        req = AddDepartmentRequest(
+            symposium_id=UUID1,
             department_name="Biology",
-            department_head_name="Prof. Smith",
-            email="prof@gmail.com",
+            department_head_name="Smith",
+            email="smith@hamilton.edu",
         )
+        assert req.email == "smith@hamilton.edu"
 
+    def test_empty_dept_name_raises(self):
+        with pytest.raises(ValidationError):
+            AddDepartmentRequest(
+                symposium_id=UUID1,
+                department_name="",
+                department_head_name="Smith",
+                email="s@hamilton.edu",
+            )
 
-def test_add_class_request_normalizes_professor_email():
-    req = AddClassRequest(
-        name="BIO101",
-        department_id=uuid4(),
-        professors=[{"name": "Prof", "email": "PROF@Hamilton.edu"}],
-    )
-    assert req.professors[0].email == "prof@hamilton.edu"
+    def test_empty_head_name_raises(self):
+        with pytest.raises(ValidationError):
+            AddDepartmentRequest(
+                symposium_id=UUID1,
+                department_name="Bio",
+                department_head_name="  ",
+                email="s@hamilton.edu",
+            )
 
+    def test_non_hamilton_email_raises(self):
+        with pytest.raises(ValidationError, match="hamilton.edu"):
+            AddDepartmentRequest(
+                symposium_id=UUID1,
+                department_name="Bio",
+                department_head_name="Smith",
+                email="smith@gmail.com",
+            )
 
-def test_add_students_request_validates_student_email_domain():
-    with pytest.raises(ValidationError):
-        AddStudentsRequest(
-            class_id=uuid4(),
-            students=[{"name": "Student", "email": "student@example.com"}],
+    def test_email_normalized_lowercase(self):
+        req = AddDepartmentRequest(
+            symposium_id=UUID1,
+            department_name="Bio",
+            department_head_name="Smith",
+            email="  SMITH@Hamilton.EDU  ",
         )
+        assert req.email == "smith@hamilton.edu"
 
 
-def test_add_presentation_request_validates_minutes_range():
-    with pytest.raises(ValidationError):
-        AddPresentationRequest(
-            title="Talk",
-            class_id=uuid4(),
-            minutes=MAX_TIME + 1,
-            presenting_students=[uuid4()],
+# ---------------------------------------------------------------------------
+# AddClassRequest
+# ---------------------------------------------------------------------------
+class TestAddClassRequest:
+    def test_valid(self):
+        req = AddClassRequest(
+            name="BIO101",
+            department_id=UUID1,
+            professors=[{"name": "Smith", "email": "s@hamilton.edu"}],
         )
+        assert req.name == "BIO101"
+
+    def test_empty_name_raises(self):
+        with pytest.raises(ValidationError):
+            AddClassRequest(name=" ", department_id=UUID1, professors=[])
 
 
-def test_add_presentation_request_validates_presenting_students_count():
-    with pytest.raises(ValidationError):
-        AddPresentationRequest(
-            title="Talk",
-            class_id=uuid4(),
+# ---------------------------------------------------------------------------
+# StudentInit
+# ---------------------------------------------------------------------------
+class TestStudentInit:
+    def test_valid(self):
+        s = StudentInit(name="Alice", email="alice@hamilton.edu")
+        assert s.name == "Alice"
+
+    def test_empty_name_raises(self):
+        with pytest.raises(ValidationError):
+            StudentInit(name="  ", email="a@hamilton.edu")
+
+    def test_bad_email_raises(self):
+        with pytest.raises(ValidationError, match="hamilton"):
+            StudentInit(name="Alice", email="alice@example.com")
+
+
+# ---------------------------------------------------------------------------
+# AddStudentsRequest
+# ---------------------------------------------------------------------------
+class TestAddStudentsRequest:
+    def test_valid(self):
+        req = AddStudentsRequest(
+            class_id=UUID1,
+            students=[{"name": "Bob", "email": "bob@hamilton.edu"}],
+        )
+        assert len(req.students) == 1
+
+
+# ---------------------------------------------------------------------------
+# AddPresentationRequest
+# ---------------------------------------------------------------------------
+class TestAddPresentationRequest:
+    def test_valid(self):
+        req = AddPresentationRequest(
+            title="My Talk",
+            class_id=UUID1,
             minutes=20,
-            presenting_students=[uuid4() for _ in range(MAX_PRESENTING_STUDENTS + 1)],
+            presenting_students=[UUID2],
         )
+        assert req.minutes == 20
+
+    def test_empty_title_raises(self):
+        with pytest.raises(ValidationError):
+            AddPresentationRequest(
+                title="", class_id=UUID1, minutes=10, presenting_students=[]
+            )
+
+    def test_minutes_too_low(self):
+        with pytest.raises(ValidationError):
+            AddPresentationRequest(
+                title="T", class_id=UUID1, minutes=0, presenting_students=[]
+            )
+
+    def test_minutes_too_high(self):
+        with pytest.raises(ValidationError):
+            AddPresentationRequest(
+                title="T", class_id=UUID1, minutes=MAX_TIME + 1, presenting_students=[]
+            )
+
+    def test_too_many_presenting_students(self):
+        ids = [uuid4() for _ in range(MAX_PRESENTING_STUDENTS + 1)]
+        with pytest.raises(ValidationError, match="present"):
+            AddPresentationRequest(
+                title="T", class_id=UUID1, minutes=10, presenting_students=ids
+            )
+
+
+# ---------------------------------------------------------------------------
+# AddReqRequest
+# ---------------------------------------------------------------------------
+class TestAddReqRequest:
+    def test_valid(self):
+        req = AddReqRequest(
+            name="Prof X", email="profx@hamilton.edu", student_id=UUID1
+        )
+        assert req.name == "Prof X"
+
+    def test_empty_name_raises(self):
+        with pytest.raises(ValidationError):
+            AddReqRequest(name="  ", email="a@hamilton.edu", student_id=UUID1)
+
+    def test_bad_email_raises(self):
+        with pytest.raises(ValidationError):
+            AddReqRequest(name="X", email="x@gmail.com", student_id=UUID1)
+
+
+# ---------------------------------------------------------------------------
+# Update schemas – must have at least one update field
+# ---------------------------------------------------------------------------
+class TestUpdateStudentRequest:
+    def test_valid(self):
+        req = UpdateStudentRequest(
+            student_id=UUID1,
+            name="New Name",
+            email="new@hamilton.edu",
+            class_id=UUID2,
+            presentation_id=uuid4(),
+        )
+        assert req.name == "New Name"
+
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
+            UpdateStudentRequest(student_id=UUID1)
+
+    def test_email_validation(self):
+        with pytest.raises(ValidationError, match="hamilton"):
+            UpdateStudentRequest(
+                student_id=UUID1,
+                name="Alice",
+                email="bad@gmail.com",
+                class_id=UUID2,
+                presentation_id=uuid4(),
+            )
+
+
+class TestUpdateProfessorRequest:
+    def test_valid(self):
+        req = UpdateProfessorRequest(
+            professor_id=UUID1,
+            name="Dr. New",
+            email="new@hamilton.edu",
+            class_id=UUID2,
+        )
+        assert req.name == "Dr. New"
+
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
+            UpdateProfessorRequest(professor_id=UUID1)
+
+
+class TestUpdateClassRequest:
+    def test_valid(self):
+        req = UpdateClassRequest(class_id=UUID1, name="NewClass", department_id=UUID2)
+        assert req.name == "NewClass"
+
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
+            UpdateClassRequest(class_id=UUID1)
+
+
+class TestUpdateSymposiumRequest:
+    def test_valid(self):
+        req = UpdateSymposiumRequest(
+            symposium_id=UUID1, symposium_name="New", rooms_available=5
+        )
+        assert req.symposium_name == "New"
+
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
+            UpdateSymposiumRequest(symposium_id=UUID1)
+
+    def test_rooms_over_max(self):
+        with pytest.raises(ValidationError, match="rooms"):
+            UpdateSymposiumRequest(
+                symposium_id=UUID1,
+                symposium_name="X",
+                rooms_available=MAX_ROOMS + 1,
+            )
+
+
+class TestUpdateDepartmentRequest:
+    def test_valid(self):
+        req = UpdateDepartmentRequest(
+            department_id=UUID1,
+            department_name="Physics",
+            department_head_name="Jones",
+            email="jones@hamilton.edu",
+        )
+        assert req.department_name == "Physics"
+
+    def test_empty_name_raises(self):
+        with pytest.raises(ValidationError):
+            UpdateDepartmentRequest(
+                department_id=UUID1,
+                department_name="",
+                department_head_name="J",
+                email="j@hamilton.edu",
+            )
+
+
+class TestUpdatePresentationRequest:
+    def test_valid(self):
+        req = UpdatePresentationRequest(
+            presentation_id=UUID1,
+            title="New Title",
+            class_id=UUID2,
+            minutes=20,
+            presenting_students=[],
+        )
+        assert req.title == "New Title"
+
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
+            UpdatePresentationRequest(presentation_id=UUID1)
+
+    def test_minutes_out_of_range(self):
+        with pytest.raises(ValidationError):
+            UpdatePresentationRequest(
+                presentation_id=UUID1,
+                title="T",
+                class_id=UUID2,
+                minutes=MAX_TIME + 1,
+                presenting_students=[],
+            )
+
+    def test_too_many_students(self):
+        ids = [uuid4() for _ in range(MAX_PRESENTING_STUDENTS + 1)]
+        with pytest.raises(ValidationError):
+            UpdatePresentationRequest(
+                presentation_id=UUID1,
+                title="T",
+                class_id=UUID2,
+                minutes=20,
+                presenting_students=ids,
+            )
+
+
+class TestUpdateTimeframesRequest:
+    def test_valid(self):
+        req = UpdateTimeframesRequest(
+            linked_id=UUID1,
+            timeframes=[{"start_time": NOW, "end_time": LATER}],
+        )
+        assert len(req.timeframes) == 1

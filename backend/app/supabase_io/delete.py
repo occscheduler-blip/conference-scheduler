@@ -1,35 +1,30 @@
 from app.supabase_io.client import supabase
 from uuid import UUID
 from app.supabase_io import read
+from postgrest.base_request_builder import APIResponse
+from postgrest.types import CountMethod
+from typing import cast
+from app.utils import force_uuid
 
 
-def _rows_affected(response, fallback: int = 0) -> int:
-    """Return rows affected from a Supabase response object."""
+def _rows_affected(response: APIResponse | dict[str, object], fallback: int = 0) -> int:
+    """Return rows affected from a Supabase response object or dict."""
     if isinstance(response, dict):
         count = response.get("count")
-        if isinstance(count, int) and count >= 0:
-            return count
         data = response.get("data")
-        if isinstance(data, list):
-            return len(data)
-        if isinstance(data, dict):
-            return 1
-        return fallback
-
-    count = getattr(response, "count", None)
+    else:
+        count = getattr(response, "count", None)
+        data = getattr(response, "data", None)
     if isinstance(count, int) and count >= 0:
         return count
-
-    data = getattr(response, "data", None)
     if isinstance(data, list):
         return len(data)
     if isinstance(data, dict):
         return 1
-
     return fallback
 
 
-def _merge_counts(target: dict[str, int], source: dict[str, int] | None):
+def _merge_counts(target: dict[str, int], source: dict[str, int] | None) -> None:
     if not source:
         return
     for table_name, count in source.items():
@@ -38,22 +33,24 @@ def _merge_counts(target: dict[str, int], source: dict[str, int] | None):
         target[table_name] = target.get(table_name, 0) + count
 
 
-def _safe_count(value) -> int:
+def _safe_count(value: object) -> int:
     if isinstance(value, int) and value >= 0:
         return value
     return 0
 
 
-def delete_timeframes(linked_id: UUID | list[UUID]):
+def delete_timeframes(linked_id: UUID | list[UUID]) -> int:
     del_timeframes_query = supabase.table("timeframes").delete()
 
     num_deleted = (
         supabase.table("timeframes")
-        .select("linked_id", count="exact")
+        .select("linked_id", count=CountMethod.exact)
         .eq("linked_id", linked_id)
         .execute()
         .count
     )
+    if num_deleted is None:
+        num_deleted = 0
 
     if isinstance(linked_id, UUID):
         del_timeframes_query = del_timeframes_query.eq("linked_id", linked_id)
@@ -65,7 +62,7 @@ def delete_timeframes(linked_id: UUID | list[UUID]):
     return num_deleted
 
 
-def delete_student(student_id: UUID | list[UUID]):
+def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
     # TODO: Make sure that if the last student is deleted from a presentation, the presentation is deleted as well.
     del_stu_query = supabase.table("students").delete()
     del_presenting_student_query = supabase.table("presenting_students").delete()
@@ -96,7 +93,7 @@ def delete_student(student_id: UUID | list[UUID]):
     }
 
 
-def delete_professor(prof_id: UUID | list[UUID]):
+def delete_professor(prof_id: UUID | list[UUID]) -> dict[str, int]:
     # TODO: What to do when the last professor in a class/presentation is removed?
     del_prof_query = supabase.table("professors").delete()
     del_prof_request_query = supabase.table("prof_requests").delete()
@@ -118,7 +115,7 @@ def delete_professor(prof_id: UUID | list[UUID]):
     }
 
 
-def delete_presentation(presentation_id: UUID | list[UUID]):
+def delete_presentation(presentation_id: UUID | list[UUID]) -> dict[str, int]:
     del_pres_query = supabase.table("presentations").delete()
     del_presenting_student_query = supabase.table("presenting_students").delete()
 
@@ -143,56 +140,68 @@ def delete_presentation(presentation_id: UUID | list[UUID]):
     }
 
 
-def delete_multiple_classes(class_ids: list[UUID]):
+def delete_multiple_classes(class_ids: list[UUID]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for class_id in class_ids:
         _merge_counts(counts, delete_class(class_id))
     return counts
 
 
-def delete_class(class_id: UUID | list[UUID]):
+def delete_class(class_id: UUID | list[UUID]) -> dict[str, int]:
     if isinstance(class_id, list):
         return delete_multiple_classes(class_id)
 
     counts: dict[str, int] = {}
 
-    student_list = read.get_students(class_id=class_id).data
+    student_list = cast(
+        list[dict[str, str | None]], read.get_students(class_id=class_id).data
+    )
     for student in student_list:
-        _merge_counts(counts, delete_student(student_id=UUID(student["id"])))
+        if student["id"] is None:
+            raise ValueError("Null value for student ID in students table.")
+        _merge_counts(counts, delete_student(student_id=force_uuid(student["id"])))
 
-    prof_list = read.get_professors(class_id=class_id).data
+    prof_list = cast(
+        list[dict[str, str | None]], read.get_professors(class_id=class_id).data
+    )
     for professor in prof_list:
-        _merge_counts(counts, delete_professor(UUID(professor["id"])))
-    pres_list = read.get_presentations(class_id=class_id).data
+        if professor["id"] is None:
+            raise ValueError("Null value for professor ID in professors table.")
+        _merge_counts(counts, delete_professor(prof_id=force_uuid(professor["id"])))
+    pres_list = cast(
+        list[dict[str, str | None]], read.get_presentations(class_id=class_id).data
+    )
     for presentation in pres_list:
-        _merge_counts(
-            counts, delete_presentation(presentation_id=UUID(presentation["id"]))
-        )
+        if presentation["id"] is None:
+            raise ValueError("Null value for presentation ID in presentations table.")
+        _merge_counts(counts, delete_presentation(presentation_id=force_uuid(presentation["id"])))
 
     del_class_resp = supabase.table("classes").delete().eq("id", class_id).execute()
     counts["classes"] = counts.get("classes", 0) + _rows_affected(del_class_resp)
     return counts
 
 
-def delete_multiple_departments(department_ids: list[UUID]):
+def delete_multiple_departments(department_ids: list[UUID]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for department in department_ids:
         _merge_counts(counts, delete_department(department))
     return counts
 
 
-def delete_department(department_id: UUID | list[UUID]):
+def delete_department(department_id: UUID | list[UUID]) -> dict[str, int]:
     if isinstance(department_id, list):
         return delete_multiple_departments(department_id)
 
     counts: dict[str, int] = {}
 
-    classes = read.get_classes(department_id).data
+    classes = cast(list[dict[str, object]], read.get_classes(department_id).data)
     for class_ in classes:
         class_id_raw = class_.get("id")
         if class_id_raw is None:
             continue
-        class_id = class_id_raw if isinstance(class_id_raw, UUID) else UUID(str(class_id_raw))
+        class_id = (
+            class_id_raw if isinstance(class_id_raw, UUID) else UUID(str(class_id_raw))
+        )
         _merge_counts(counts, delete_class(class_id))
 
     del_dept_resp = (
@@ -202,9 +211,9 @@ def delete_department(department_id: UUID | list[UUID]):
     return counts
 
 
-def delete_symposium(symposium_id: UUID):
+def delete_symposium(symposium_id: UUID) -> dict[str, int]:
     counts: dict[str, int] = {}
-    departments = read.get_departments(symposium_id).data
+    departments = cast(list[dict[str, str]], read.get_departments(symposium_id).data)
     for department in departments:
         _merge_counts(counts, delete_department(UUID(department["id"])))
 

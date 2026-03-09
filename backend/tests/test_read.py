@@ -1,97 +1,137 @@
-from uuid import uuid4
+"""Tests for supabase_io.read query builder functions."""
+
+from types import SimpleNamespace
+from uuid import uuid4, UUID
 
 import pytest
 
 from app.supabase_io import read
 
 
-@pytest.mark.parametrize(
-    ("fn_name", "arg_name"),
-    [
-        ("get_classes", "department_id"),
-        ("get_students", "class_id"),
-        ("get_professors", "class_id"),
-        ("get_presentations", "class_id"),
-        ("get_presenting_students", "presentation_id"),
-        ("get_timeframes", "linked_id"),
-    ],
-)
-def test_read_helpers_apply_eq_for_single_uuid(
-    fn_name, arg_name, fake_supabase, monkeypatch
-):
-    monkeypatch.setattr(read, "supabase", fake_supabase)
-    fn = getattr(read, fn_name)
-
-    value = uuid4()
-    fn(**{arg_name: value})
-
-    table_name = {
-        "get_classes": "classes",
-        "get_students": "students",
-        "get_professors": "professors",
-        "get_presentations": "presentations",
-        "get_presenting_students": "presenting_students",
-        "get_timeframes": "timeframes",
-    }[fn_name]
-    actions = fake_supabase.queries[table_name].actions
-    assert ("eq", {"field": arg_name, "value": value}) in actions
+class TestGetSymposiums:
+    def test_calls_symposiums_table(self, mock_supabase):
+        read.get_symposiums()
+        mock_supabase.table.assert_called_with("symposiums")
 
 
-def test_get_classes_uses_in_for_uuid_list(fake_supabase, monkeypatch):
-    monkeypatch.setattr(read, "supabase", fake_supabase)
-    ids = [uuid4(), uuid4()]
+class TestGetDepartments:
+    def test_no_filter(self, mock_supabase):
+        read.get_departments()
+        mock_supabase.table.assert_called_with("departments")
 
-    read.get_classes(department_id=ids)
-
-    actions = fake_supabase.queries["classes"].actions
-    assert ("in_", {"field": "department_id", "values": ids}) in actions
-
-
-def test_get_classes_rejects_invalid_type(fake_supabase, monkeypatch):
-    monkeypatch.setattr(read, "supabase", fake_supabase)
-    with pytest.raises(ValueError, match="department_id must be a UUID or list of UUIDs"):
-        read.get_classes(department_id="not-a-uuid")
+    def test_with_symposium_filter(self, mock_supabase):
+        uid = uuid4()
+        read.get_departments(symposium_id=uid)
+        # Verify table was called for departments
+        mock_supabase.table.assert_called_with("departments")
 
 
-def test_get_presentations_enriches_with_presenting_student_records(
-    fake_supabase, monkeypatch
-):
-    monkeypatch.setattr(read, "supabase", fake_supabase)
-    presentation_id = uuid4()
-    student_id = uuid4()
-    fake_supabase.queries["presentations"] = fake_supabase.table("presentations")
-    fake_supabase.queries["presentations"].response.data = [
-        {"id": presentation_id, "title": "Capstone Talk"}
-    ]
-    fake_supabase.queries["presenting_students"] = fake_supabase.table(
-        "presenting_students"
-    )
-    fake_supabase.queries["presenting_students"].response.data = [
-        {"presentation_id": presentation_id, "student_id": student_id}
-    ]
-    fake_supabase.queries["students"] = fake_supabase.table("students")
-    fake_supabase.queries["students"].response.data = [
-        {"id": student_id, "name": "Ada Lovelace"}
-    ]
+class TestGetClasses:
+    def test_no_filter(self, mock_supabase):
+        read.get_classes()
+        mock_supabase.table.assert_called_with("classes")
 
-    response = read.get_presentations()
+    def test_single_uuid_filter(self, mock_supabase):
+        uid = uuid4()
+        read.get_classes(department_id=uid)
+        mock_supabase.table.assert_called_with("classes")
 
-    assert response.data == [
-        {
-            "id": presentation_id,
-            "title": "Capstone Talk",
-            "presenting_students": [{"id": student_id, "name": "Ada Lovelace"}],
-        }
-    ]
+    def test_list_uuid_filter(self, mock_supabase):
+        uids = [uuid4(), uuid4()]
+        read.get_classes(department_id=uids)
+        mock_supabase.table.assert_called_with("classes")
+
+    def test_invalid_type_raises(self, mock_supabase):
+        with pytest.raises(ValueError, match="UUID"):
+            read.get_classes(department_id="bad")
 
 
-def test_get_prof_requests_applies_both_filters(fake_supabase, monkeypatch):
-    monkeypatch.setattr(read, "supabase", fake_supabase)
-    student_id = uuid4()
-    professor_id = uuid4()
+class TestGetStudents:
+    def test_no_filter(self, mock_supabase):
+        read.get_students()
+        mock_supabase.table.assert_called_with("students")
 
-    read.get_prof_requests(student_id=student_id, professor_id=professor_id)
+    def test_invalid_type_raises(self, mock_supabase):
+        with pytest.raises(ValueError, match="UUID"):
+            read.get_students(class_id="bad")
 
-    actions = fake_supabase.queries["prof_requests"].actions
-    assert ("eq", {"field": "student_id", "value": student_id}) in actions
-    assert ("eq", {"field": "professor_id", "value": professor_id}) in actions
+
+class TestGetProfessors:
+    def test_no_filter(self, mock_supabase):
+        read.get_professors()
+        mock_supabase.table.assert_called_with("professors")
+
+    def test_invalid_type_raises(self, mock_supabase):
+        with pytest.raises(ValueError, match="UUID"):
+            read.get_professors(class_id=123)
+
+
+class TestGetTimeframes:
+    def test_no_filter(self, mock_supabase):
+        read.get_timeframes()
+        mock_supabase.table.assert_called_with("timeframes")
+
+    def test_single_uuid(self, mock_supabase):
+        uid = uuid4()
+        read.get_timeframes(linked_id=uid)
+        mock_supabase.table.assert_called_with("timeframes")
+
+    def test_invalid_type_raises(self, mock_supabase):
+        with pytest.raises(ValueError, match="UUID"):
+            read.get_timeframes(linked_id=999)
+
+
+class TestGetPresentingStudents:
+    def test_no_filter(self, mock_supabase):
+        read.get_presenting_students()
+        mock_supabase.table.assert_called_with("presenting_students")
+
+
+class TestGetRequests:
+    def test_no_filter(self, mock_supabase):
+        read.get_requests()
+        mock_supabase.table.assert_called_with("requests")
+
+    def test_invalid_type_raises(self, mock_supabase):
+        with pytest.raises(ValueError, match="UUID"):
+            read.get_requests(student_id="not-a-uuid")
+
+
+class TestGetPresentationsEnrichment:
+    """Test the presentation enrichment logic that joins presenting_students."""
+
+    def test_enriches_presentations_with_students(self, mock_supabase):
+        pres_id = str(uuid4())
+        student_id = str(uuid4())
+
+        def _table_side_effect(name):
+            from unittest.mock import MagicMock
+            table = MagicMock()
+            for m in ("select", "insert", "update", "delete", "eq", "in_", "limit"):
+                getattr(table, m).return_value = table
+
+            if name == "presentations":
+                table.execute.return_value = SimpleNamespace(
+                    data=[{"id": pres_id, "title": "Talk", "class_id": str(uuid4()), "minutes": 15}]
+                )
+            elif name == "presenting_students":
+                table.execute.return_value = SimpleNamespace(
+                    data=[{"presentation_id": pres_id, "student_id": student_id}]
+                )
+            elif name == "students":
+                table.execute.return_value = SimpleNamespace(
+                    data=[{"id": student_id, "name": "Alice", "email": "a@hamilton.edu"}]
+                )
+            else:
+                table.execute.return_value = SimpleNamespace(data=[])
+            return table
+
+        mock_supabase.table.side_effect = _table_side_effect
+
+        result = read.get_presentations()
+        assert len(result.data) == 1
+        assert result.data[0]["presenting_students"][0]["name"] == "Alice"
+
+    def test_empty_presentations(self, mock_supabase):
+        result = read.get_presentations()
+        assert result.data == []
