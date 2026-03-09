@@ -16,6 +16,7 @@ type PresentationGroup = {
 };
 type ProfessorOption = { id: string; name: string; classId: string };
 
+// Converts a 15-minute slot index into a human-readable time label.
 function formatTimeLabel(slotIndex: number) {
   const totalMinutes = 9 * 60 + slotIndex * 15;
   const hour24 = Math.floor(totalMinutes / 60);
@@ -26,6 +27,7 @@ function formatTimeLabel(slotIndex: number) {
   return `${hour12}:${minutePart} ${suffix}`;
 }
 
+// Formats a date for calendar column headers.
 function formatCalendarDate(date: Date) {
   return date.toLocaleDateString(undefined, {
     weekday: "short",
@@ -34,11 +36,13 @@ function formatCalendarDate(date: Date) {
   });
 }
 
+// Parses backend date strings and defaults timezone-less values to UTC.
 function parseBackendDateTime(value: string) {
   const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
   return new Date(hasExplicitTimezone ? value : `${value}Z`);
 }
 
+// Extracts a readable error message from different API error payload shapes.
 function toMessage(detail: unknown, fallback: string): string {
   if (typeof detail === "string" && detail.trim()) return detail;
   if (Array.isArray(detail)) {
@@ -55,6 +59,7 @@ function toMessage(detail: unknown, fallback: string): string {
   return fallback;
 }
 
+// Splits a CSV line into cells while handling quoted values.
 function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
   let current = "";
@@ -82,6 +87,7 @@ function parseCsvLine(line: string): string[] {
   return cells;
 }
 
+// Builds API URL variants to handle optional /api duplication.
 function buildCandidateUrls(baseUrl: string, path: string): string[] {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -97,16 +103,19 @@ function buildCandidateUrls(baseUrl: string, path: string): string[] {
   return [direct];
 }
 
+// Normalizes IDs for consistent comparisons.
 function normalizeId(value: string) {
   return value.trim().toLowerCase();
 }
 
+// Checks whether a value is a valid UUID.
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value.trim()
   );
 }
 
+// Renders the professor page and manages its data and interactions.
 function ProfessorPageContent() {
   const [activeTab, setActiveTab] = useState<FacultyTab>("availability");
   const [professorOptions, setProfessorOptions] = useState<ProfessorOption[]>([]);
@@ -158,6 +167,7 @@ function ProfessorPageContent() {
     [backendApiKey]
   );
 
+  // Loads the students for a class from the backend.
   const fetchClassStudentNames = useCallback(
     async (targetClassId: string) => {
       if (!targetClassId) return [] as UploadedStudent[];
@@ -192,6 +202,7 @@ function ProfessorPageContent() {
   useEffect(() => {
     let ignore = false;
 
+    // Loads professor options and selects a valid default.
     const loadProfessorOptions = async () => {
       setLoadingProfessors(true);
       setIdentityMessage("");
@@ -261,11 +272,13 @@ function ProfessorPageContent() {
     }
 
     let ignore = false;
+    // Loads class/symposium identity data and existing availability/groups for the selected professor.
     const loadIdentity = async () => {
       setLoadingIdentity(true);
       setIdentityMessage("");
       setCalendarMessage("");
       try {
+        // Fetches from candidate URLs and falls through on 404.
         const fetchWithCandidates = async (path: string) => {
           let response: Response | null = null;
           for (const url of buildCandidateUrls(backendUrl, path)) {
@@ -578,6 +591,7 @@ function ProfessorPageContent() {
   }, [authHeaders, backendUrl, fetchClassStudentNames, loadingProfessors, professorOptions, selectedProfessorId]);
 
   useEffect(() => {
+    // Stops drag-edit mode when the mouse is released anywhere on the page.
     const stopDragging = () => {
       setIsDragging(false);
       setDragValue(null);
@@ -587,6 +601,7 @@ function ProfessorPageContent() {
     return () => window.removeEventListener("mouseup", stopDragging);
   }, []);
 
+  // Updates one availability cell in the grid.
   const setCell = (dayIndex: number, slotIndex: number, value: boolean) => {
     setAvailability((current) =>
       Array.from({ length: calendarDays.length }, (_, dIdx) =>
@@ -597,6 +612,7 @@ function ProfessorPageContent() {
     );
   };
 
+  // Starts drag-editing availability from the clicked cell.
   const handleCellMouseDown = (dayIndex: number, slotIndex: number) => {
     if (!editableSlots[dayIndex]?.[slotIndex]) return;
     const nextValue = !(availability[dayIndex]?.[slotIndex] ?? false);
@@ -605,12 +621,14 @@ function ProfessorPageContent() {
     setIsDragging(true);
   };
 
+  // Applies drag-editing to a cell while moving across the grid.
   const handleCellMouseEnter = (dayIndex: number, slotIndex: number) => {
     if (!isDragging || dragValue === null) return;
     if (!editableSlots[dayIndex]?.[slotIndex]) return;
     setCell(dayIndex, slotIndex, dragValue);
   };
 
+  // Saves selected availability slots to backend timeframes.
   const handleSaveAvailability = async () => {
     setAvailabilityMessage("");
     if (!selectedProfessorId) {
@@ -676,6 +694,7 @@ function ProfessorPageContent() {
     }
   };
 
+  // Parses and uploads a CSV file of students for this class.
   async function handleCsvUpload(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!classId) {
@@ -787,6 +806,7 @@ function ProfessorPageContent() {
     }
   }
 
+  // Adds one student manually to the selected class.
   const handleManualStudentAdd = async () => {
     setManualStudentMessage(null);
     if (!classId) {
@@ -847,12 +867,14 @@ function ProfessorPageContent() {
     }
   };
 
+  // Toggles whether a student is selected for grouping.
   const toggleUploadedStudent = (studentKey: string) => {
     setSelectedUploadedStudentKeys((current) =>
       current.includes(studentKey) ? current.filter((key) => key !== studentKey) : [...current, studentKey]
     );
   };
 
+  // Deletes a student after confirmation and updates the local list.
   const deleteUploadedStudent = async (studentId: string, studentName: string) => {
     const confirmed = window.confirm(`Delete ${studentName}?`);
     if (!confirmed) return;
@@ -890,6 +912,7 @@ function ProfessorPageContent() {
     }
   };
 
+  // Creates a draft presentation group from selected students.
   const handleMakePresentationGroup = () => {
     const selectedEntries = uploadedStudents.filter((student) => selectedUploadedStudentKeys.includes(student.id));
     const selectedNames = selectedEntries.map((entry) => entry.name);
@@ -913,18 +936,21 @@ function ProfessorPageContent() {
     setGroupMessage("");
   };
 
+  // Updates the name of a draft presentation group.
   const setPresentationGroupName = (groupId: string, value: string) => {
     setPresentationGroups((current) =>
       current.map((group) => (group.id === groupId ? { ...group, presentationName: value } : group))
     );
   };
 
+  // Updates the duration of a draft presentation group.
   const setPresentationGroupDuration = (groupId: string, value: string) => {
     setPresentationGroups((current) =>
       current.map((group) => (group.id === groupId ? { ...group, durationMinutes: value } : group))
     );
   };
 
+  // Returns students from a removed group back to the available student list.
   const restoreStudentsFromGroup = (target: PresentationGroup) => {
     setUploadedStudents((students) => {
       const existing = new Set(students.map((student) => normalizeId(student.id)));
@@ -942,6 +968,7 @@ function ProfessorPageContent() {
     });
   };
 
+  // Removes a presentation group from the UI and restores its students.
   const removePresentationGroupFromUi = (groupId: string, source: "draft" | "deployed" = "draft") => {
     if (source === "deployed") {
       setDeployedPresentationGroups((current) => {
@@ -958,6 +985,7 @@ function ProfessorPageContent() {
     });
   };
 
+  // Deletes a presentation group from backend when saved, otherwise removes it locally.
   const handleDeletePresentationGroup = async (
     group: PresentationGroup,
     source: "draft" | "deployed" = "draft"
@@ -1006,6 +1034,7 @@ function ProfessorPageContent() {
     }
   };
 
+  // Validates and deploys draft presentation groups to the backend.
   const handleDeployPresentations = async () => {
     setDeployMessage("");
     if (!classId) {
@@ -1110,7 +1139,7 @@ function ProfessorPageContent() {
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
           <Link
-            href="/"
+            href="/pages?view=home"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Home
@@ -1536,6 +1565,7 @@ function ProfessorPageContent() {
   );
 }
 
+// Wraps the professor page content in a suspense boundary.
 export default function ProfessorPage() {
   return (
     <Suspense fallback={<main className="min-h-screen bg-[#f5f5f5] px-4 py-8">Loading...</main>}>

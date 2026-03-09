@@ -43,3 +43,7 @@ sequenceDiagram
     end
 
 ```
+
+## Citations
+
+Diagram conventions and project references are listed in [../CITATIONS.md](../CITATIONS.md).

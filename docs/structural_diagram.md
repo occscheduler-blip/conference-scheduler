@@ -4,11 +4,11 @@
 flowchart LR
 
   subgraph FE["Next.js Frontend (/app)"]
-    Home["Home / Attendee View<br/>app/page.tsx"]
-    Admin["Admin UI<br/>app/admin/page.tsx"]
-    DeptHead["Department Head UI<br/>app/department-head/page.tsx"]
-    Faculty["Faculty UI<br/>app/faculty/page.tsx"]
-    Student["Student UI (local-only today)<br/>app/student/page.tsx"]
+    Home["Home / Attendee View<br/>app/pages/home.tsx"]
+    Admin["Admin UI<br/>app/pages/admin.tsx"]
+    DeptHead["Department Head UI<br/>app/pages/department-head.tsx"]
+    Professor["Professor UI<br/>app/pages/professor.tsx"]
+    Student["Student UI (local-only today)<br/>app/pages/student.tsx"]
     HealthWidget["Backend Status Widget (defined, not mounted)<br/>app/components/backend-status.tsx"]
   end
 
@@ -49,10 +49,10 @@ flowchart LR
   DeptHead --> PAdd
   DeptHead --> PGet
   DeptHead --> PDel
-  Faculty --> PAdd
-  Faculty --> PUpd
-  Faculty --> PGet
-  Faculty --> PDel
+  Professor --> PAdd
+  Professor --> PUpd
+  Professor --> PGet
+  Professor --> PDel
   Student --> PGet
   Student --> PAdd
   Student --> PDel
@@ -111,3 +111,7 @@ No direct `GET /symposiums/{id}` or `PUT /departments/{id}` route exists right n
 2. `events.py` validates request models using `request_schemas.py`.
 3. `events.py` uses `read.py`, `write.py`, and `delete.py`, and also performs direct `supabase.table(...)` calls for some operations.
 4. `timeframes.linked_id` is reused for symposium windows and person/entity availability records, not only symposium records.
+
+## Citations
+
+Diagram conventions and project references are listed in [../CITATIONS.md](../CITATIONS.md).

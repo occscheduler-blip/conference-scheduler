@@ -44,3 +44,7 @@ Required backend env values in `backend/.env`:
   - Required CSV columns: `Student Name`, `Student ID`, `Class Level`, `Preferred Email`
 
 `/api/events` reads from the Supabase table in `SUPABASE_EVENTS_TABLE` (default: `events`).
+
+## Citations
+
+Project-wide citations are listed in [CITATIONS.md](CITATIONS.md).

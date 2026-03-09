@@ -92,3 +92,7 @@ Base URL: `http://127.0.0.1:8000`
 - `GET /api/events/get_timeframes`
 - `GET /api/events/get_prof_requests`
 - `DELETE /api/events/delete_symposium`
+
+## Citations
+
+Project-wide citations are listed in [../CITATIONS.md](../CITATIONS.md).

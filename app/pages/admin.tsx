@@ -742,7 +742,7 @@ export default function AdminPage() {
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
           <Link
-            href="/"
+            href="/pages?view=home"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Home

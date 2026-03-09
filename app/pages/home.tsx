@@ -377,25 +377,25 @@ function HomeContent() {
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-4 flex flex-wrap justify-center gap-2">
           <Link
-            href="/admin"
+            href="/pages?view=admin"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Admin Page
           </Link>
           <Link
-            href="/department-head"
+            href="/pages?view=department-head"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
           >
             Department Head Page
           </Link>
           <Link
-            href="/professor"
+            href="/pages?view=professor"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Professor Page
           </Link>
           <Link
-            href="/student"
+            href="/pages?view=student"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Student Page

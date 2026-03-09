@@ -10,6 +10,7 @@ type StudentOption = { id: string; name: string };
 
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
 
+// Converts a 15-minute slot index into a human-readable time label.
 function formatTimeLabel(slotIndex: number) {
   const totalMinutes = 9 * 60 + slotIndex * 15;
   const hour24 = Math.floor(totalMinutes / 60);
@@ -20,6 +21,7 @@ function formatTimeLabel(slotIndex: number) {
   return `${hour12}:${minutePart} ${suffix}`;
 }
 
+// Formats a date for calendar column headers.
 function formatCalendarDate(date: Date) {
   return date.toLocaleDateString(undefined, {
     weekday: "short",
@@ -28,11 +30,13 @@ function formatCalendarDate(date: Date) {
   });
 }
 
+// Parses backend date strings and defaults timezone-less values to UTC.
 function parseBackendDateTime(value: string) {
   const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
   return new Date(hasExplicitTimezone ? value : `${value}Z`);
 }
 
+// Renders the student page and manages its data and interactions.
 export default function StudentPage() {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
@@ -63,6 +67,7 @@ export default function StudentPage() {
   const isAvailabilityTab = activeTab === "availability";
 
   useEffect(() => {
+    // Stops drag-edit mode when the mouse is released anywhere on the page.
     const stopDragging = () => {
       setIsDragging(false);
       setDragValue(null);
@@ -74,6 +79,7 @@ export default function StudentPage() {
 
   useEffect(() => {
     let ignore = false;
+    // Loads student options and selects a valid default.
     const loadStudentOptions = async () => {
       setLoadingStudents(true);
       setIdentityMessage("");
@@ -141,6 +147,7 @@ export default function StudentPage() {
     }
 
     let ignore = false;
+    // Loads identity data, schedule data, and saved requests for the selected student.
     const loadStudent = async () => {
       setLoadingIdentity(true);
       setIdentityMessage("");
@@ -390,6 +397,7 @@ export default function StudentPage() {
     };
   }, [backendApiKey, backendUrl, loadingStudents, selectedStudentId]);
 
+  // Updates one availability cell in the grid.
   const setCell = (dayIndex: number, slotIndex: number, value: boolean) => {
     setAvailability((current) =>
       Array.from({ length: calendarDays.length }, (_, dIdx) =>
@@ -400,6 +408,7 @@ export default function StudentPage() {
     );
   };
 
+  // Saves one preferred professor request for the selected student.
   const handleSavePreferences = async () => {
     setPreferencesMessage("");
     if (!selectedStudentId) {
@@ -474,6 +483,7 @@ export default function StudentPage() {
     }
   };
 
+  // Starts drag-editing availability from the clicked cell.
   const handleCellMouseDown = (dayIndex: number, slotIndex: number) => {
     if (!editableSlots[dayIndex]?.[slotIndex]) return;
     const nextValue = !(availability[dayIndex]?.[slotIndex] ?? false);
@@ -482,6 +492,7 @@ export default function StudentPage() {
     setIsDragging(true);
   };
 
+  // Applies drag-editing to a cell while moving across the grid.
   const handleCellMouseEnter = (dayIndex: number, slotIndex: number) => {
     if (!isDragging || dragValue === null) return;
     if (!editableSlots[dayIndex]?.[slotIndex]) return;
@@ -493,7 +504,7 @@ export default function StudentPage() {
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
           <Link
-            href="/"
+            href="/pages?view=home"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Home

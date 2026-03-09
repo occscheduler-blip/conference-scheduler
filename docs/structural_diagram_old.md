@@ -4,11 +4,11 @@
 flowchart LR
 
   subgraph FE["Next.js Frontend (/app)"]
-    User["Landing Page and Symposium Attendee view <br/>app/page.tsx"]
-    Admin["Admin UI<br/>app/admin/page.tsx"]
-    DeptHead["Department Head UI<br/>app/department-head/page.tsx"]
-    Professor["Professor UI<br/>app/faculty/page.tsx"]
-    Student["Student UI<br/>app/student/page.tsx"]
+    User["Landing Page and Symposium Attendee view <br/>app/pages/home.tsx"]
+    Admin["Admin UI<br/>app/pages/admin.tsx"]
+    DeptHead["Department Head UI<br/>app/pages/department-head.tsx"]
+    Professor["Professor UI<br/>app/pages/professor.tsx"]
+    Student["Student UI<br/>app/pages/student.tsx"]
     HealthWidget["Backend Status Widget<br/>app/components/backend-status.tsx"]
   end
 
@@ -107,3 +107,6 @@ flowchart LR
    - `supabase_io/delete.py` for recursive/cascading deletes
 4. Data is persisted in Supabase tables, with `symposiums -> departments -> classes -> (professors, students, presentations)` and join-like helper tables (`presenting_students`, `prof_requests`).
  
+## Citations
+
+Diagram conventions and project references are listed in [../CITATIONS.md](../CITATIONS.md).
