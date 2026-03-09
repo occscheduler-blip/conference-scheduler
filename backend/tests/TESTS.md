@@ -1,6 +1,11 @@
 # Test Suite Documentation
 
-All tests live under `tests/` and are run with `make test`, which executes mypy followed by pytest. Every test module patches the Supabase client via a `mock_supabase` fixture so no real database connection is required.
+All tests live under `tests/` and are run with `make test`, which executes mypy followed by pytest.
+
+There are two categories of test:
+
+- **Unit / mock tests** (`test_*.py` except `test_integration.py`) — patch the Supabase client with a generic `MagicMock` via the `mock_supabase` fixture. Fast and isolated; no real database connection required.
+- **Integration tests** (`test_integration.py`) — patch the Supabase client with a fully in-memory `FakeSupabaseClient` (see `fake_supabase.py`) via the `fake_supabase` and `integration_client` fixtures. Real data flows through the router → supabase_io → in-memory storage, catching bugs that mocks cannot.
 
 ---
 
@@ -137,6 +142,7 @@ Converts a single value to a JSON-safe scalar before sending it to Supabase.
 |---|---|
 | `test_calls_supabase_table` | Calling `insert("my_table", data)` passes `"my_table"` to `supabase.table()`. |
 | `test_serializes_uuid_and_datetime` | UUIDs and datetimes in the data dict are serialized before being passed to Supabase. |
+| `test_no_raw_uuids_or_datetimes_sent_to_supabase` | Captures the actual rows passed to `.insert()` via a wrapping side-effect and asserts that no `UUID`, `datetime`, `date`, or `pd.Timestamp` objects remain — every value is a JSON-safe scalar. |
 
 ---
 
@@ -390,3 +396,78 @@ Each delete test verifies status 200 and `{"status": "deleted"}` in the response
 | `TestDeleteStudent` | `DELETE /api/events/delete_student?student_id=...` |
 | `TestDeleteProfessor` | `DELETE /api/events/delete_professor?professor_id=...` |
 | `TestDeletePresentation` | `DELETE /api/events/delete_presentation?presentation_id=...` |
+
+---
+
+## `fake_supabase.py` — In-Memory Supabase Client
+
+Not a test file itself, but a support module used by the integration test fixtures. Provides a drop-in replacement for the real `supabase-py` client that stores all data in Python `list[dict]` objects.
+
+### `FakeQueryBuilder`
+
+Accumulates filter calls (`eq`, `in_`, `limit`) and executes them against an in-memory list on `.execute()`. All ID comparisons are normalised to strings so UUID objects and string UUIDs match correctly.
+
+| Operation | Behaviour |
+|---|---|
+| `select` | Returns matching rows; if `count=` was passed to `select()`, sets `.count` on the response. |
+| `insert` | Appends rows to the list, auto-assigning an `id` if absent; returns inserted rows. |
+| `update` | Applies the payload dict to all matching rows in-place; returns updated rows. |
+| `delete` | Removes matching rows from the list; returns deleted rows. |
+
+### `FakeTable`
+
+Returned by `FakeSupabaseClient.table(name)`. Has `select`, `insert`, `update`, and `delete` methods, each returning a `FakeQueryBuilder`.
+
+### `FakeSupabaseClient`
+
+| Method | Purpose |
+|---|---|
+| `table(name)` | Returns a `FakeTable` backed by the named list (auto-created if missing). |
+| `seed(table, rows)` | Appends pre-built rows to a table before a test. |
+| `rows(table)` | Returns a snapshot of current rows for assertion. |
+| `count(table)` | Returns the number of rows currently in the table. |
+| `reset()` | Wipes all tables (called implicitly by the fixture between tests). |
+
+---
+
+## `test_integration.py` — End-to-End Integration Tests
+
+Uses the `integration_client` and `fake_supabase` fixtures. HTTP requests travel through the full router → supabase_io → `FakeSupabaseClient` stack so that real insertion, retrieval, enrichment, and cascade logic is exercised.
+
+### `TestSymposiumLifecycle`
+
+| Test | What it checks |
+|---|---|
+| `test_post_and_get_all` | POST a symposium then GET `/symposiums` — the row is present with the correct name and room count. |
+| `test_get_by_id_returns_symposium_and_timeframes` | POST with two timeframe windows, then GET by ID — the response includes the symposium row and both timeframe rows. |
+| `test_get_by_id_not_found` | GET with an unknown ID returns 404. |
+| `test_upsert_same_id_updates_not_duplicates` | POST the same `symposium_id` twice — only one row exists after the second call, and its `name` and `rooms_available` reflect the update. |
+| `test_post_inserts_timeframes` | POSTing with two timeframe windows results in exactly two rows in the `timeframes` table. |
+
+### `TestTimeframeReplacement`
+
+| Test | What it checks |
+|---|---|
+| `test_put_replaces_all_timeframes` | Seeds two existing timeframe rows, then PUT update_timeframes with one new slot — the two old rows are deleted and the new row is inserted, leaving exactly one row linked to the correct ID. |
+
+### `TestCascadeDeleteClass`
+
+| Test | What it checks |
+|---|---|
+| `test_delete_class_removes_class_row` | After deleting a class, the `classes` table is empty. |
+| `test_delete_class_removes_professors` | After deleting a class, the `professors` table is empty. |
+| `test_delete_class_removes_students` | After adding two students to a class and deleting the class, the `students` table is empty. |
+| `test_delete_class_count_response` | The `records_deleted` dict includes `classes ≥ 1` and `professors ≥ 1`; `lines_edited` is an integer ≥ 2. |
+
+### `TestPresentationEnrichment`
+
+| Test | What it checks |
+|---|---|
+| `test_presentations_include_presenting_students` | Creates a class, adds two students, creates a presentation referencing both student IDs, then GET `/presentations` — the single presentation row contains a `presenting_students` list with both students' names. |
+| `test_presentations_empty_when_no_data` | GET `/presentations` on an empty database returns `{"data": []}`. |
+
+### `TestStudentUpdate`
+
+| Test | What it checks |
+|---|---|
+| `test_update_student_persists_to_db` | Creates a student via POST, then PUT update_student with a new name and email — the in-memory row is mutated and reflects the new values. |

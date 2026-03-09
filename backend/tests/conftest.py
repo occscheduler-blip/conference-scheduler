@@ -58,6 +58,27 @@ def client(mock_supabase):
     return TestClient(app)
 
 
+@pytest.fixture()
+def fake_supabase():
+    """Fully in-memory Supabase client — real data flows through supabase_io."""
+    from tests.fake_supabase import FakeSupabaseClient
+    db = FakeSupabaseClient()
+    with patch("app.supabase_io.client.supabase", db), \
+         patch("app.supabase_io.read.supabase", db), \
+         patch("app.supabase_io.write.supabase", db), \
+         patch("app.supabase_io.delete.supabase", db), \
+         patch("app.routers.events.supabase", db):
+        yield db
+
+
+@pytest.fixture()
+def integration_client(fake_supabase):
+    """FastAPI TestClient backed by the in-memory Supabase."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    return TestClient(app)
+
+
 # ---------------------------------------------------------------------------
 # Reusable UUID constants
 # ---------------------------------------------------------------------------
