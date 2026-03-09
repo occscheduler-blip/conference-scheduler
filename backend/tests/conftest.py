@@ -58,9 +58,9 @@ def _is_supabase_running() -> bool:
 
 
 if not _is_supabase_running():
-    pytest.skip(
+    pytest.fail(
         "Local Supabase is not running. Start it with: ~/.local/bin/supabase start",
-        allow_module_level=True,
+        pytrace=False,
     )
 
 
