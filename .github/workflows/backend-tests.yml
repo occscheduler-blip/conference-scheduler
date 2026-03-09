@@ -27,6 +27,13 @@ jobs:
         with:
           version: latest
 
+      - name: Cache Supabase Docker images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/supabase-docker-cache
+          key: supabase-docker-${{ runner.os }}-${{ hashFiles('supabase/config.toml') }}
+          restore-keys: supabase-docker-${{ runner.os }}-
+
       - name: Start local Supabase
         working-directory: .
         run: supabase start
@@ -36,9 +43,18 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Cache venv
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: backend/.venv
+          key: venv-${{ runner.os }}-py3.14-${{ hashFiles('backend/requirements.txt') }}
+
       - name: Create venv and install dependencies
+        if: steps.cache-venv.outputs.cache-hit != 'true'
         run: |
           python -m venv .venv
+          .venv/bin/pip install --upgrade pip
           .venv/bin/pip install -r requirements.txt
 
       - name: Run backend tests
