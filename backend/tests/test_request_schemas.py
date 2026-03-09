@@ -259,53 +259,72 @@ class TestAddReqRequest:
 # ---------------------------------------------------------------------------
 class TestUpdateStudentRequest:
     def test_valid(self):
-        req = UpdateStudentRequest(student_id=UUID1, name="New Name")
+        req = UpdateStudentRequest(
+            student_id=UUID1,
+            name="New Name",
+            email="new@hamilton.edu",
+            class_id=UUID2,
+            presentation_id=uuid4(),
+        )
         assert req.name == "New Name"
 
-    def test_no_updates_raises(self):
-        with pytest.raises(ValidationError, match="At least one"):
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
             UpdateStudentRequest(student_id=UUID1)
 
     def test_email_validation(self):
         with pytest.raises(ValidationError, match="hamilton"):
             UpdateStudentRequest(
-                student_id=UUID1, email="bad@gmail.com"
+                student_id=UUID1,
+                name="Alice",
+                email="bad@gmail.com",
+                class_id=UUID2,
+                presentation_id=uuid4(),
             )
 
 
 class TestUpdateProfessorRequest:
     def test_valid(self):
-        req = UpdateProfessorRequest(professor_id=UUID1, name="Dr. New")
+        req = UpdateProfessorRequest(
+            professor_id=UUID1,
+            name="Dr. New",
+            email="new@hamilton.edu",
+            class_id=UUID2,
+        )
         assert req.name == "Dr. New"
 
-    def test_no_updates_raises(self):
-        with pytest.raises(ValidationError, match="At least one"):
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
             UpdateProfessorRequest(professor_id=UUID1)
 
 
 class TestUpdateClassRequest:
     def test_valid(self):
-        req = UpdateClassRequest(class_id=UUID1, name="NewClass")
+        req = UpdateClassRequest(class_id=UUID1, name="NewClass", department_id=UUID2)
         assert req.name == "NewClass"
 
-    def test_no_updates_raises(self):
-        with pytest.raises(ValidationError, match="At least one"):
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
             UpdateClassRequest(class_id=UUID1)
 
 
 class TestUpdateSymposiumRequest:
     def test_valid(self):
-        req = UpdateSymposiumRequest(symposium_id=UUID1, symposium_name="New")
+        req = UpdateSymposiumRequest(
+            symposium_id=UUID1, symposium_name="New", rooms_available=5
+        )
         assert req.symposium_name == "New"
 
-    def test_no_updates_raises(self):
-        with pytest.raises(ValidationError, match="At least one"):
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
             UpdateSymposiumRequest(symposium_id=UUID1)
 
     def test_rooms_over_max(self):
         with pytest.raises(ValidationError, match="rooms"):
             UpdateSymposiumRequest(
-                symposium_id=UUID1, rooms_available=MAX_ROOMS + 1
+                symposium_id=UUID1,
+                symposium_name="X",
+                rooms_available=MAX_ROOMS + 1,
             )
 
 
@@ -330,27 +349,39 @@ class TestUpdateDepartmentRequest:
 
 
 class TestUpdatePresentationRequest:
-    def test_valid_title_only(self):
+    def test_valid(self):
         req = UpdatePresentationRequest(
-            presentation_id=UUID1, title="New Title"
+            presentation_id=UUID1,
+            title="New Title",
+            class_id=UUID2,
+            minutes=20,
+            presenting_students=[],
         )
         assert req.title == "New Title"
 
-    def test_no_updates_raises(self):
-        with pytest.raises(ValidationError, match="At least one"):
+    def test_missing_fields_raises(self):
+        with pytest.raises(ValidationError):
             UpdatePresentationRequest(presentation_id=UUID1)
 
     def test_minutes_out_of_range(self):
         with pytest.raises(ValidationError):
             UpdatePresentationRequest(
-                presentation_id=UUID1, minutes=MAX_TIME + 1
+                presentation_id=UUID1,
+                title="T",
+                class_id=UUID2,
+                minutes=MAX_TIME + 1,
+                presenting_students=[],
             )
 
     def test_too_many_students(self):
         ids = [uuid4() for _ in range(MAX_PRESENTING_STUDENTS + 1)]
         with pytest.raises(ValidationError):
             UpdatePresentationRequest(
-                presentation_id=UUID1, presenting_students=ids
+                presentation_id=UUID1,
+                title="T",
+                class_id=UUID2,
+                minutes=20,
+                presenting_students=ids,
             )
 
 

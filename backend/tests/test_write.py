@@ -55,6 +55,50 @@ class TestInsert:
         dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
         data = [{"id": uid, "ts": dt, "label": "ok"}]
         insert("t", data)
-        # The function should have called table("t").insert(...).execute()
-        # We can verify table was called correctly
         mock_supabase.table.assert_called_with("t")
+
+    def test_no_raw_uuids_or_datetimes_sent_to_supabase(self, mock_supabase):
+        """
+        The rows passed to supabase.insert() must contain only JSON-safe scalars.
+        Any UUID or datetime object left unconverted would cause a runtime error
+        when Supabase serializes the request.
+        """
+        # Capture the table mock returned by the side_effect (table.return_value is bypassed)
+        captured: dict[str, object] = {}
+        original_se = mock_supabase.table.side_effect
+
+        def _capturing(name: str) -> object:
+            table = original_se(name)
+            captured[name] = table
+            return table
+
+        mock_supabase.table.side_effect = _capturing
+
+        uid = uuid4()
+        dt = datetime(2026, 4, 20, 9, 0, 0, tzinfo=timezone.utc)
+        d = date(2026, 4, 20)
+        ts = pd.Timestamp("2026-04-20 09:00:00")
+        data = [{"id": uid, "created_at": dt, "day": d, "ts": ts, "label": "ok", "count": 5, "empty": None}]
+        insert("t", data)
+
+        # Retrieve the actual table mock used during insert
+        assert "t" in captured, "insert() never called supabase.table('t')"
+        insert_call = captured["t"].insert  # type: ignore[union-attr]
+        assert insert_call.called
+        sent_rows = insert_call.call_args[0][0]
+        assert len(sent_rows) == 1
+        row = sent_rows[0]
+
+        for key, val in row.items():
+            assert not isinstance(val, UUID), f"Field '{key}' is still a UUID object"
+            assert not isinstance(val, (datetime, date, pd.Timestamp)), (
+                f"Field '{key}' is still a datetime/date/Timestamp object"
+            )
+        # Spot-check expected converted values
+        assert row["id"] == str(uid)
+        assert row["created_at"] == dt.isoformat()
+        assert row["day"] == "2026-04-20"
+        assert row["ts"] == ts.isoformat()
+        assert row["label"] == "ok"
+        assert row["count"] == 5
+        assert row["empty"] is None

@@ -1,4 +1,5 @@
 PYTEST := .venv/bin/pytest
+MYPY  := .venv/bin/mypy
 
 .PHONY: test
 test:
@@ -7,4 +8,5 @@ test:
 		echo "Create backend venv and install dependencies first."; \
 		exit 1; \
 	fi
+	$(MYPY) app
 	$(PYTEST) -q tests
