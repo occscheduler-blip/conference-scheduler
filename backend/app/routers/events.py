@@ -7,6 +7,14 @@ from postgrest.base_request_builder import APIResponse
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from app.supabase_io import delete, read, write
+from app.supabase_io.nested_read import (
+    CLASS_CHILDREN,
+    CLASS_ALLOWS,
+    DEPARTMENT_ALLOWS,
+    get_classes_nested,
+    get_departments_nested,
+    parse_include,
+)
 from app.supabase_io.client import supabase
 
 import app.routers.request_schemas as request_schemas
@@ -712,9 +720,17 @@ def get_symposium(symposium_id: UUID) -> dict[str, object]:
         ) from exc
 
 
-@router.get("/departments")
-def get_departments(symposium_id: UUID | None = None) -> dict[str, list[object]]:
+@router.get("/departments", response_model=None)
+def get_departments(
+    symposium_id: UUID | None = None,
+    include: str | None = None,
+) -> dict[str, list[object]] | list[dict[str, object]]:
     try:
+        includes = parse_include(include, allowed=DEPARTMENT_ALLOWS)
+        if includes:
+            if includes & CLASS_CHILDREN:
+                includes = includes | {"classes"}
+            return get_departments_nested(symposium_id=symposium_id, includes=includes)
         response = read.get_departments(symposium_id=symposium_id)
         rows = list(getattr(response, "data", None) or [])
         return {"data": rows, "departments": rows}
@@ -722,13 +738,19 @@ def get_departments(symposium_id: UUID | None = None) -> dict[str, list[object]]
         raise
     except Exception as exc:
         raise HTTPException(
-            status_code=400, detail=f"Failed to get symposiums: {exc}"
+            status_code=400, detail=f"Failed to get departments: {exc}"
         ) from exc
 
 
-@router.get("/classes")
-def get_classes(department_id: UUID | None = None) -> APIResponse:
+@router.get("/classes", response_model=None)
+def get_classes(
+    department_id: UUID | None = None,
+    include: str | None = None,
+) -> APIResponse | list[dict[str, object]]:
     try:
+        includes = parse_include(include, allowed=CLASS_ALLOWS)
+        if includes:
+            return get_classes_nested(department_id=department_id, includes=includes)
         return read.get_classes(department_id=department_id)
     except HTTPException:
         raise
