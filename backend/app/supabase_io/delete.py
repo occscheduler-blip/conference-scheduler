@@ -66,7 +66,7 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
     # TODO: Make sure that if the last student is deleted from a presentation, the presentation is deleted as well.
     del_stu_query = supabase.table("students").delete()
     del_presenting_student_query = supabase.table("presenting_students").delete()
-    del_prof_request_query = supabase.table("prof_requests").delete()
+    del_prof_request_query = supabase.table("requests").delete()
 
     if isinstance(student_id, UUID):
         del_stu_query = del_stu_query.eq("id", student_id)
@@ -82,35 +82,32 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
         del_prof_request_query = del_prof_request_query.in_("student_id", student_id)
 
     deleted_timeframes = _safe_count(delete_timeframes(student_id))
-    del_stu_resp = del_stu_query.execute()
+    # presenting_students and requests FK → students: must delete child rows before parent
     del_presenting_student_resp = del_presenting_student_query.execute()
     del_prof_request_resp = del_prof_request_query.execute()
+    del_stu_resp = del_stu_query.execute()
     return {
         "students": _rows_affected(del_stu_resp),
         "presenting_students": _rows_affected(del_presenting_student_resp),
-        "prof_requests": _rows_affected(del_prof_request_resp),
+        "requests": _rows_affected(del_prof_request_resp),
         "timeframes": deleted_timeframes,
     }
 
 
 def delete_professor(prof_id: UUID | list[UUID]) -> dict[str, int]:
     # TODO: What to do when the last professor in a class/presentation is removed?
+    # Note: requests are linked to students (not professors) — no requests cleanup needed here.
     del_prof_query = supabase.table("professors").delete()
-    del_prof_request_query = supabase.table("prof_requests").delete()
 
     if isinstance(prof_id, UUID):
         del_prof_query = del_prof_query.eq("id", prof_id)
-        del_prof_request_query = del_prof_request_query.eq("professor_id", prof_id)
     elif isinstance(prof_id, list):
         del_prof_query = del_prof_query.in_("id", prof_id)
-        del_prof_request_query = del_prof_request_query.in_("professor_id", prof_id)
 
     deleted_timeframes = _safe_count(delete_timeframes(prof_id))
     del_prof_resp = del_prof_query.execute()
-    del_prof_request_resp = del_prof_request_query.execute()
     return {
         "professors": _rows_affected(del_prof_resp),
-        "prof_requests": _rows_affected(del_prof_request_resp),
         "timeframes": deleted_timeframes,
     }
 
@@ -131,8 +128,9 @@ def delete_presentation(presentation_id: UUID | list[UUID]) -> dict[str, int]:
         )
 
     deleted_timeframes = _safe_count(delete_timeframes(presentation_id))
-    del_pres_resp = del_pres_query.execute()
+    # presenting_students FK → presentations: must delete child rows before parent
     del_presenting_student_resp = del_presenting_student_query.execute()
+    del_pres_resp = del_pres_query.execute()
     return {
         "presentations": _rows_affected(del_pres_resp),
         "presenting_students": _rows_affected(del_presenting_student_resp),

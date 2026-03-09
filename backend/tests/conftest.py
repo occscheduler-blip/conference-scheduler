@@ -1,93 +1,91 @@
-"""Shared fixtures for backend tests.
-
-Mocks the Supabase client so tests run without a live database.
-"""
-
+"""conftest.py — fixtures for Docker-backed integration tests."""
 import os
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
+import socket
+import subprocess
+from pathlib import Path
 
 import pytest
 
-# Set required env vars BEFORE any app module is imported.
-os.environ.setdefault("SUPABASE_URL", "https://fake.supabase.co")
-os.environ.setdefault("SUPABASE_KEY", "fake-key")
+# --- Force-set local Supabase credentials before any app module is imported ---
+# We MUST override (not just setdefault) because production env vars may already
+# be set in the shell, and client.py reads SUPABASE_URL/SUPABASE_KEY at import time.
+
+_PROJECT_ROOT = Path(__file__).parent.parent.parent  # tests/ → backend/ → project/
+_CLI = os.path.expanduser("~/.local/bin/supabase")
+
+_LOCAL_URL = "http://127.0.0.1:54321"
+# Hardcoded SERVICE_ROLE_KEY JWT for this project's local Supabase Docker instance.
+# Refresh by running: ~/.local/bin/supabase status
+_LOCAL_SERVICE_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0"
+    ".EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+)
+
+
+def _get_local_service_key() -> str:
+    """Try to read SERVICE_ROLE_KEY from 'supabase status -o env'; fall back to hardcoded."""
+    try:
+        result = subprocess.run(
+            [_CLI, "status", "-o", "env"],
+            capture_output=True, text=True, timeout=10,
+            cwd=_PROJECT_ROOT,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if line.strip().startswith("SERVICE_ROLE_KEY="):
+                    _, _, value = line.partition("=")
+                    return value.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return _LOCAL_SERVICE_KEY
+
+
+_service_key = _get_local_service_key()
+
+# Force-set — override any production values already in the environment.
+os.environ["SUPABASE_URL"] = _LOCAL_URL
+os.environ["SUPABASE_KEY"] = _service_key
 os.environ.setdefault("BACKEND_API_KEY", "test-api-key")
 
 
-def _make_response(data=None, count=None):
-    """Build a lightweight object that looks like a Supabase response."""
-    return SimpleNamespace(data=data or [], count=count)
+def _is_supabase_running() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", 54321), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+if not _is_supabase_running():
+    pytest.skip(
+        "Local Supabase is not running. Start it with: ~/.local/bin/supabase start",
+        allow_module_level=True,
+    )
+
+
+@pytest.fixture(scope="session")
+def db():
+    from tests.db_helper import DbHelper
+    helper = DbHelper()
+    yield helper
+    helper.close()
+
+
+@pytest.fixture(autouse=True)
+def clean_db(db):
+    """Truncate all tables before every test — guaranteed clean slate."""
+    db.truncate_all()
+
+
+@pytest.fixture(scope="session")
+def client():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    return TestClient(app)
 
 
 @pytest.fixture()
-def mock_supabase():
-    """Patch the global supabase client used by the I/O layer."""
-    fake_client = MagicMock(name="supabase_client")
-
-    def _table(name):
-        table_mock = MagicMock(name=f"table:{name}")
-        # Default chaining returns an empty response
-        for method in ("select", "insert", "update", "delete", "eq", "in_", "limit"):
-            getattr(table_mock, method).return_value = table_mock
-        table_mock.execute.return_value = _make_response()
-        return table_mock
-
-    fake_client.table.side_effect = _table
-
-    with patch("app.supabase_io.client.supabase", fake_client), \
-         patch("app.supabase_io.read.supabase", fake_client), \
-         patch("app.supabase_io.write.supabase", fake_client), \
-         patch("app.supabase_io.delete.supabase", fake_client), \
-         patch("app.supabase_io.nested_read.supabase", fake_client), \
-         patch("app.routers.events.supabase", fake_client):
-        yield fake_client
-
-
-@pytest.fixture()
-def api_headers():
-    """Return headers dict with a valid API key."""
+def h():
+    """Valid API key headers shorthand."""
     return {"X-API-Key": "test-api-key"}
-
-
-@pytest.fixture()
-def client(mock_supabase):
-    """FastAPI TestClient with Supabase mocked out."""
-    from fastapi.testclient import TestClient
-    from app.main import app
-    return TestClient(app)
-
-
-@pytest.fixture()
-def fake_supabase():
-    """Fully in-memory Supabase client — real data flows through supabase_io."""
-    from tests.fake_supabase import FakeSupabaseClient
-    db = FakeSupabaseClient()
-    with patch("app.supabase_io.client.supabase", db), \
-         patch("app.supabase_io.read.supabase", db), \
-         patch("app.supabase_io.write.supabase", db), \
-         patch("app.supabase_io.delete.supabase", db), \
-         patch("app.supabase_io.nested_read.supabase", db), \
-         patch("app.routers.events.supabase", db):
-        yield db
-
-
-@pytest.fixture()
-def integration_client(fake_supabase):
-    """FastAPI TestClient backed by the in-memory Supabase."""
-    from fastapi.testclient import TestClient
-    from app.main import app
-    return TestClient(app)
-
-
-# ---------------------------------------------------------------------------
-# Reusable UUID constants
-# ---------------------------------------------------------------------------
-SYMPOSIUM_ID = uuid4()
-DEPARTMENT_ID = uuid4()
-CLASS_ID = uuid4()
-PROFESSOR_ID = uuid4()
-STUDENT_ID = uuid4()
-PRESENTATION_ID = uuid4()
-TIMEFRAME_ID = uuid4()
