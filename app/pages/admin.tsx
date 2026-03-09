@@ -213,12 +213,12 @@ export default function AdminPage() {
     setSymposiumLoadError(null);
     try {
       const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-      const payload = (await response.json()) as { detail?: string; symposiums?: SymposiumOption[] };
+      const payload = (await response.json()) as { detail?: string; data?: SymposiumOption[] };
       if (!response.ok) {
         setSymposiumLoadError(payload.detail ?? "Failed to load symposiums.");
         return;
       }
-      setSymposiumOptions(payload.symposiums ?? []);
+      setSymposiumOptions(payload.data ?? []);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumLoadError(`Load failed: ${message}`);
