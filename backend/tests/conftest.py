@@ -40,6 +40,7 @@ def mock_supabase():
          patch("app.supabase_io.read.supabase", fake_client), \
          patch("app.supabase_io.write.supabase", fake_client), \
          patch("app.supabase_io.delete.supabase", fake_client), \
+         patch("app.supabase_io.nested_read.supabase", fake_client), \
          patch("app.routers.events.supabase", fake_client):
         yield fake_client
 
@@ -67,6 +68,7 @@ def fake_supabase():
          patch("app.supabase_io.read.supabase", db), \
          patch("app.supabase_io.write.supabase", db), \
          patch("app.supabase_io.delete.supabase", db), \
+         patch("app.supabase_io.nested_read.supabase", db), \
          patch("app.routers.events.supabase", db):
         yield db
 
