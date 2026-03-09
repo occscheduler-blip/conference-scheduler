@@ -28,15 +28,26 @@ jobs:
           version: latest
 
       - name: Cache Supabase Docker images
+        id: cache-supabase-images
         uses: actions/cache@v4
         with:
-          path: /tmp/supabase-docker-cache
-          key: supabase-docker-${{ runner.os }}-${{ hashFiles('supabase/config.toml') }}
-          restore-keys: supabase-docker-${{ runner.os }}-
+          path: /tmp/supabase-images.tar
+          key: supabase-images-${{ hashFiles('supabase/config.toml') }}
+
+      - name: Load Docker images from cache
+        if: steps.cache-supabase-images.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/supabase-images.tar
 
       - name: Start local Supabase
         working-directory: .
         run: supabase start
+
+      - name: Save Supabase Docker images to cache
+        if: steps.cache-supabase-images.outputs.cache-hit != 'true'
+        run: |
+          docker images --format "{{.Repository}}:{{.Tag}}" \
+            | grep -v "^<none>" \
+            | xargs docker save -o /tmp/supabase-images.tar
 
       - name: Set up Python
         uses: actions/setup-python@v5
