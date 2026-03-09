@@ -92,9 +92,9 @@ function HomeContent() {
     async function loadSymposiums() {
       try {
         const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-        const payload = (await response.json().catch(() => ({}))) as { detail?: string; symposiums?: SymposiumOption[] };
+        const payload = (await response.json().catch(() => ({}))) as { detail?: string; data?: SymposiumOption[] };
         if (!response.ok) throw new Error(payload.detail ?? "Failed to load symposiums.");
-        const list = payload.symposiums ?? [];
+        const list = payload.data ?? [];
         setSymposiums(list);
         setSelectedSymposiumId(list[0]?.id ?? "");
       } catch (error) {
