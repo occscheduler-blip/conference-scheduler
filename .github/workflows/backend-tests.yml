@@ -22,14 +22,57 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Cache Supabase Docker images
+        id: cache-supabase-images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/supabase-images.tar
+          key: supabase-images-${{ hashFiles('supabase/config.toml') }}
+
+      - name: Load Docker images from cache
+        if: steps.cache-supabase-images.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/supabase-images.tar
+
+      - name: Start local Supabase
+        working-directory: .
+        run: supabase start
+
+      - name: Save Supabase Docker images to cache
+        if: steps.cache-supabase-images.outputs.cache-hit != 'true'
+        run: |
+          docker images --format "{{.Repository}}:{{.Tag}}" \
+            | grep -v "^<none>" \
+            | xargs docker save -o /tmp/supabase-images.tar
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
+      - name: Cache venv
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: backend/.venv
+          key: venv-${{ runner.os }}-py3.14-${{ hashFiles('backend/requirements.txt') }}
+
       - name: Create venv and install dependencies
+        if: steps.cache-venv.outputs.cache-hit != 'true'
         run: |
           python -m venv .venv
+          .venv/bin/pip install --upgrade pip
           .venv/bin/pip install -r requirements.txt
 
       - name: Run backend tests

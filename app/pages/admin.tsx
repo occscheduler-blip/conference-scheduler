@@ -206,7 +206,7 @@ export default function AdminPage() {
         setSymposiumLoadError(payload.detail ?? "Failed to load symposia.");
         return;
       }
-      setSymposiumOptions(payload.symposia ?? payload.symposiums ?? payload.data ?? []);
+      setSymposiumOptions(payload.symposiums ?? []);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumLoadError(`Load failed: ${message}`);

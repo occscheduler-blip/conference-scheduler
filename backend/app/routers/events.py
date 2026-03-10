@@ -677,11 +677,9 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest) -> d
 
 
 @router.get("/symposiums")
-def get_symposiums() -> dict[str, list[object]]:
+def get_symposiums() -> APIResponse:
     try:
-        response = read.get_symposiums()
-        rows = list(getattr(response, "data", None) or [])
-        return {"data": rows, "symposiums": rows}
+        return read.get_symposiums()
     except HTTPException:
         raise
     except Exception as exc:
@@ -722,16 +720,14 @@ def get_symposium(symposium_id: UUID) -> dict[str, object]:
 def get_departments(
     symposium_id: UUID | None = None,
     include: str | None = None,
-) -> dict[str, list[object]] | list[dict[str, object]]:
+) -> APIResponse | list[dict[str, object]]:
     try:
         includes = parse_include(include, allowed=DEPARTMENT_ALLOWS)
         if includes:
             if includes & CLASS_CHILDREN:
                 includes = includes | {"classes"}
             return get_departments_nested(symposium_id=symposium_id, includes=includes)
-        response = read.get_departments(symposium_id=symposium_id)
-        rows = list(getattr(response, "data", None) or [])
-        return {"data": rows, "departments": rows}
+        return read.get_departments(symposium_id=symposium_id)
     except HTTPException:
         raise
     except Exception as exc:
