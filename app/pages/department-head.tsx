@@ -3,18 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
-
-type DepartmentOption = { id: string; name: string };
-type ProfessorRow = { id?: string; name: string; email: string };
-type SavedClass = {
-  localId: string;
-  classId: string;
-  professorIds: string[];
-  departmentId: string;
-  departmentName: string;
-  className: string;
-  professors: ProfessorRow[];
-};
+import type { DepartmentOption, ProfessorRow, SavedClass } from "./types";
 
 function toMessage(detail: unknown, fallback: string): string {
   if (typeof detail === "string" && detail.trim()) return detail;
@@ -76,24 +65,24 @@ function DepartmentHeadPageContent() {
   useEffect(() => {
     let ignore = false;
 
-    const loadSymposiums = async () => {
+    const loadSymposia = async () => {
       setLoading(true);
       setMessage("");
       try {
-        const [symposiumsRes, allDepartmentsRes] = await Promise.all([
+        const [symposiaRes, allDepartmentsRes] = await Promise.all([
           fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
           fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
         ]);
 
-        const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
+        const symposiaPayload = (await symposiaRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
           | Array<{ id?: string; name?: string; symposium_name?: string }>;
         const allDepartmentsPayload = (await allDepartmentsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
           | Array<{ id?: string; department_name?: string; symposium_id?: string }>;
 
-        if (!symposiumsRes.ok) {
-          throw new Error(toMessage((symposiumsPayload as { detail?: unknown }).detail, "Failed to load symposium."));
+        if (!symposiaRes.ok) {
+          throw new Error(toMessage((symposiaPayload as { detail?: unknown }).detail, "Failed to load symposium."));
         }
         if (!allDepartmentsRes.ok) {
           throw new Error(
@@ -104,7 +93,7 @@ function DepartmentHeadPageContent() {
         const departmentRows = Array.isArray(allDepartmentsPayload)
           ? allDepartmentsPayload
           : (allDepartmentsPayload.data ?? []);
-        const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
+        const symposiumRows = Array.isArray(symposiaPayload) ? symposiaPayload : (symposiaPayload.data ?? []);
         const nextSymposiumOptions = symposiumRows
           .filter((row) => row.id)
           .map((row) => ({
@@ -136,7 +125,7 @@ function DepartmentHeadPageContent() {
       }
     };
 
-    void loadSymposiums();
+    void loadSymposia();
     return () => {
       ignore = true;
     };

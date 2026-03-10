@@ -135,9 +135,9 @@ Main state groups:
 
 Data flow summary:
 
-1. On mount: load symposium options (`/api/events/symposiums`)
+1. On mount: load symposium options (`/api/events/symposia`)
 2. On selected symposium change:
-- load symposium details/timeframes (`/api/events/symposiums/{id}`)
+- load symposium details/timeframes (`/api/events/symposia/{id}`)
 - load departments (`/api/events/departments?symposium_id=...`)
 - for each department, load classes
 - for each class, load presentations and students
@@ -181,7 +181,7 @@ Key state groups:
 Backend interactions:
 
 - Load students: `GET /api/events/students`
-- Resolve identity context: classes/departments/symposiums/presentations
+- Resolve identity context: classes/departments/symposia/presentations
 - Load timeframe windows:
 - symposium window: `GET /api/events/timeframes?linked_id={symposiumId}`
 - student saved slots: `GET /api/events/timeframes?linked_id={studentId}`
@@ -324,8 +324,8 @@ Core actions:
 - `POST /api/events/add_symposium`
 
 2. Edit event
-- Load selected symposium details: `GET /api/events/symposiums/{id}`
-- Update event: `PUT /api/events/symposiums/{id}`
+- Load selected symposium details: `GET /api/events/symposia/{id}`
+- Update event: `PUT /api/events/symposia/{id}`
 - Delete event: `DELETE /api/events/delete_symposium?symposium_id=...`
 
 3. Department CRUD
@@ -359,11 +359,11 @@ Current usage note:
 
 Grouped by feature:
 
-- Symposiums/events:
-- `GET /api/events/symposiums`
-- `GET /api/events/symposiums/{id}`
+- Symposia/events:
+- `GET /api/events/symposia`
+- `GET /api/events/symposia/{id}`
 - `POST /api/events/add_symposium`
-- `PUT /api/events/symposiums/{id}`
+- `PUT /api/events/symposia/{id}`
 - `DELETE /api/events/delete_symposium`
 
 - Departments:

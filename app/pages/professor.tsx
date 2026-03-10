@@ -2,19 +2,14 @@
 
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-type FacultyTab = "availability" | "students";
+import type {
+  CalendarDay,
+  FacultyTab,
+  PresentationGroup,
+  ProfessorOption,
+  UploadedStudent,
+} from "./types";
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
-type CalendarDay = { key: string; label: string };
-type UploadedStudent = { id: string; name: string };
-type PresentationGroup = {
-  id: string;
-  studentIds: string[];
-  studentNames: string[];
-  presentationName: string;
-  durationMinutes: string;
-};
-type ProfessorOption = { id: string; name: string; classId: string };
 
 // Converts a 15-minute slot index into a human-readable time label.
 function formatTimeLabel(slotIndex: number) {
@@ -147,6 +142,10 @@ function ProfessorPageContent() {
   const [deployMessage, setDeployMessage] = useState<string>("");
   const [deployingPresentations, setDeployingPresentations] = useState<boolean>(false);
   const [deletingPresentationGroupIds, setDeletingPresentationGroupIds] = useState<string[]>([]);
+  const [editingDeployedPresentationId, setEditingDeployedPresentationId] = useState<string | null>(null);
+  const [editingPresentationName, setEditingPresentationName] = useState<string>("");
+  const [editingPresentationDuration, setEditingPresentationDuration] = useState<string>("");
+  const [savingEditedPresentationId, setSavingEditedPresentationId] = useState<string | null>(null);
   const [defaultPresentationDuration, setDefaultPresentationDuration] = useState<string>("");
   const [usePerPresentationDuration, setUsePerPresentationDuration] = useState<boolean>(false);
   const [professorName, setProfessorName] = useState<string>("");
@@ -288,13 +287,13 @@ function ProfessorPageContent() {
           return response;
         };
 
-        const [classesRes, departmentsRes, symposiumsRes] = await Promise.all([
+        const [classesRes, departmentsRes, symposiaRes] = await Promise.all([
           fetchWithCandidates("/api/events/classes"),
           fetchWithCandidates("/api/events/departments"),
           fetchWithCandidates("/api/events/symposiums"),
         ]);
 
-        if (!classesRes || !departmentsRes || !symposiumsRes) {
+        if (!classesRes || !departmentsRes || !symposiaRes) {
           throw new Error("Failed to load page data.");
         }
 
@@ -304,7 +303,7 @@ function ProfessorPageContent() {
         const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; symposium_id?: string }> }
           | Array<{ id?: string; symposium_id?: string }>;
-        const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
+        const symposiaPayload = (await symposiaRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
           | Array<{ id?: string; name?: string; symposium_name?: string }>;
 
@@ -314,13 +313,13 @@ function ProfessorPageContent() {
         if (!departmentsRes.ok) {
           throw new Error(toMessage((departmentsPayload as { detail?: unknown }).detail, "Failed to load departments."));
         }
-        if (!symposiumsRes.ok) {
-          throw new Error(toMessage((symposiumsPayload as { detail?: unknown }).detail, "Failed to load symposium."));
+        if (!symposiaRes.ok) {
+          throw new Error(toMessage((symposiaPayload as { detail?: unknown }).detail, "Failed to load symposium."));
         }
 
         const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
         const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
-        const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
+        const symposiumRows = Array.isArray(symposiaPayload) ? symposiaPayload : (symposiaPayload.data ?? []);
         const professor = professorOptions.find((row) => row.id === selectedProfessorId);
         if (!professor) {
           throw new Error("Select a professor to load data.");
@@ -878,6 +877,11 @@ function ProfessorPageContent() {
   const deleteUploadedStudent = async (studentId: string, studentName: string) => {
     const confirmed = window.confirm(`Delete ${studentName}?`);
     if (!confirmed) return;
+    const previousStudents = uploadedStudents;
+    const previousSelectedKeys = selectedUploadedStudentKeys;
+    // Optimistic UI update: remove immediately so the student disappears on click.
+    setUploadedStudents((current) => current.filter((student) => student.id !== studentId));
+    setSelectedUploadedStudentKeys((current) => current.filter((key) => key !== studentId));
     setDeletingStudentIds((current) => [...current, studentId]);
     try {
       let response: Response | null = null;
@@ -894,13 +898,15 @@ function ProfessorPageContent() {
         if (response.status !== 404) break;
       }
       if (!response || !response.ok) {
+        setUploadedStudents(previousStudents);
+        setSelectedUploadedStudentKeys(previousSelectedKeys);
         setCsvMessage(`Delete failed: ${toMessage(payload.detail, "Unable to delete student.")}`);
         return;
       }
-      setUploadedStudents((current) => current.filter((student) => student.id !== studentId));
-      setSelectedUploadedStudentKeys((current) => current.filter((key) => key !== studentId));
       setCsvMessage(`Deleted ${studentName}.`);
     } catch (error) {
+      setUploadedStudents(previousStudents);
+      setSelectedUploadedStudentKeys(previousSelectedKeys);
       const message = error instanceof Error ? error.message : "Unknown error";
       if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
         setCsvMessage(`Delete failed: backend is unreachable at ${backendUrl}.`);
@@ -993,9 +999,13 @@ function ProfessorPageContent() {
     const confirmed = window.confirm(`Delete presentation "${group.presentationName || "Untitled"}"?`);
     if (!confirmed) return;
 
-    if (!isUuid(group.id)) {
+    if (source === "draft" && !isUuid(group.id)) {
       removePresentationGroupFromUi(group.id, source);
       setDeployMessage("Removed unsaved presentation group.");
+      return;
+    }
+    if (!isUuid(group.id)) {
+      setDeployMessage("Delete failed: deployed presentation is missing a valid ID.");
       return;
     }
 
@@ -1031,6 +1041,96 @@ function ProfessorPageContent() {
       }
     } finally {
       setDeletingPresentationGroupIds((current) => current.filter((id) => id !== group.id));
+    }
+  };
+
+  const startEditDeployedPresentation = (group: PresentationGroup) => {
+    setEditingDeployedPresentationId(group.id);
+    setEditingPresentationName(group.presentationName);
+    setEditingPresentationDuration(group.durationMinutes);
+    setDeployMessage("");
+  };
+
+  const cancelEditDeployedPresentation = () => {
+    setEditingDeployedPresentationId(null);
+    setEditingPresentationName("");
+    setEditingPresentationDuration("");
+  };
+
+  const handleSaveEditedPresentation = async (group: PresentationGroup) => {
+    if (!isUuid(group.id)) {
+      setDeployMessage("Save failed: deployed presentation is missing a valid ID.");
+      return;
+    }
+    const title = editingPresentationName.trim();
+    const minutes = Number.parseInt(editingPresentationDuration.trim(), 10);
+    if (!title) {
+      setDeployMessage("Save failed: presentation title cannot be empty.");
+      return;
+    }
+    if (!Number.isFinite(minutes) || minutes < 1) {
+      setDeployMessage("Save failed: duration must be at least 1 minute.");
+      return;
+    }
+    const studentIds = group.studentIds.filter((id) => isUuid(id));
+    if (studentIds.length !== group.studentIds.length) {
+      setDeployMessage("Save failed: one or more presenting students have invalid IDs.");
+      return;
+    }
+    if (!classId || !isUuid(classId)) {
+      setDeployMessage("Save failed: class ID is missing or invalid.");
+      return;
+    }
+
+    setSavingEditedPresentationId(group.id);
+    try {
+      let response: Response | null = null;
+      let payload: { detail?: unknown } = {};
+      for (const url of buildCandidateUrls(backendUrl, "/api/events/update_presentation")) {
+        response = await fetch(url, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...(authHeaders ?? {}),
+          },
+          body: JSON.stringify({
+            presentation_id: group.id,
+            title,
+            class_id: classId,
+            minutes,
+            presenting_students: studentIds,
+          }),
+        });
+        payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (response.status !== 404) break;
+      }
+      if (!response || !response.ok) {
+        setDeployMessage(`Save failed: ${toMessage(payload.detail, "Unable to update presentation.")}`);
+        return;
+      }
+
+      setDeployedPresentationGroups((current) =>
+        current.map((candidate) =>
+          candidate.id === group.id
+            ? {
+                ...candidate,
+                presentationName: title,
+                durationMinutes: String(minutes),
+              }
+            : candidate
+        )
+      );
+      setDeployMessage("Presentation updated.");
+      cancelEditDeployedPresentation();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
+        setDeployMessage(`Save failed: backend is unreachable at ${backendUrl}.`);
+      } else {
+        setDeployMessage(`Save failed: ${message}`);
+      }
+    } finally {
+      setSavingEditedPresentationId(null);
     }
   };
 
@@ -1172,14 +1272,18 @@ function ProfessorPageContent() {
         </p>
         {identityReady ? (
           <div className="mb-3 overflow-hidden rounded-xl border border-[#d7e0ff] bg-white text-sm text-[#2d3d7a] md:grid md:grid-cols-2">
-            <p className="px-3 py-2.5 font-semibold md:border-r md:border-[#e4ebff]">
-              <span className="mr-1 font-bold">Symposium:</span>
-              <span>{symposiumName || "Unknown"}</span>
-            </p>
-            <p className="border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0">
-              <span className="mr-1 font-bold">Class:</span>
-              <span>{className || "Unknown"}</span>
-            </p>
+            <div className="grid grid-cols-[auto_1fr] px-3 py-2.5 font-semibold md:border-r md:border-[#e4ebff]">
+              <span className="border-r border-[#e4ebff] bg-[#eef3ff] px-3 py-2 text-sm font-bold uppercase tracking-wide text-[#1e3a8a]">
+                Symposium
+              </span>
+              <span className="px-4 py-2 text-base font-semibold">{symposiumName || "Unknown"}</span>
+            </div>
+            <div className="grid grid-cols-[auto_1fr] border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0">
+              <span className="border-r border-[#e4ebff] bg-[#eef3ff] px-3 py-2 text-sm font-bold uppercase tracking-wide text-[#1e3a8a]">
+                Class
+              </span>
+              <span className="px-4 py-2 text-base font-semibold">{className || "Unknown"}</span>
+            </div>
           </div>
         ) : null}
 
@@ -1532,23 +1636,83 @@ function ProfessorPageContent() {
                         {deployedPresentationGroups.map((group, index) => (
                           <div key={`deployed-${group.id}`} className="rounded border border-[#cfd8ff] bg-[#fdfdff] p-2">
                             <div className="flex items-start justify-between gap-2">
-                              <p className="text-sm font-semibold text-[#111]">
-                                {group.presentationName.trim() || `Presentation ${index + 1}`}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => void handleDeletePresentationGroup(group, "deployed")}
-                                disabled={deletingPresentationGroupIds.includes(group.id)}
-                                className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {deletingPresentationGroupIds.includes(group.id) ? "..." : "Delete"}
-                              </button>
+                              <p className="text-sm font-semibold text-[#111]">{`Presentation ${index + 1}`}</p>
+                              <div className="flex items-center gap-1">
+                                {editingDeployedPresentationId === group.id ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleSaveEditedPresentation(group)}
+                                      disabled={savingEditedPresentationId === group.id}
+                                      className="rounded border border-[#1b6e2b] bg-white px-2 py-0.5 text-xs font-bold text-[#1b6e2b] transition hover:bg-[#edf8f0] disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      {savingEditedPresentationId === group.id ? "Saving..." : "Save"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={cancelEditDeployedPresentation}
+                                      disabled={savingEditedPresentationId === group.id}
+                                      className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#666]"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditDeployedPresentation(group)}
+                                    className="rounded border border-[#0f33a8] bg-white px-2 py-0.5 text-xs font-bold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+                                  >
+                                    Edit
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeletePresentationGroup(group, "deployed")}
+                                  disabled={deletingPresentationGroupIds.includes(group.id) || savingEditedPresentationId === group.id}
+                                  className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {deletingPresentationGroupIds.includes(group.id) ? "..." : "Delete"}
+                                </button>
+                              </div>
                             </div>
-                            <p className="text-xs text-[#444]">
-                              {group.durationMinutes.trim()
-                                ? `${group.durationMinutes.trim()} minutes`
-                                : "Duration not set"}
-                            </p>
+                            {editingDeployedPresentationId === group.id ? (
+                              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                                <label className="flex flex-col gap-1">
+                                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                                    Presentation Name
+                                  </span>
+                                  <input
+                                    value={editingPresentationName}
+                                    onChange={(event) => setEditingPresentationName(event.target.value)}
+                                    className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                                  />
+                                </label>
+                                <label className="flex flex-col gap-1">
+                                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                                    Duration (Minutes)
+                                  </span>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={editingPresentationDuration}
+                                    onChange={(event) => setEditingPresentationDuration(event.target.value)}
+                                    className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                                  />
+                                </label>
+                              </div>
+                            ) : (
+                              <>
+                                <p className="text-sm font-semibold text-[#111]">
+                                  {group.presentationName.trim() || `Presentation ${index + 1}`}
+                                </p>
+                                <p className="text-xs text-[#444]">
+                                  {group.durationMinutes.trim()
+                                    ? `${group.durationMinutes.trim()} minutes`
+                                    : "Duration not set"}
+                                </p>
+                              </>
+                            )}
                             <p className="text-xs text-[#444]">{group.studentNames.join(", ")}</p>
                           </div>
                         ))}

@@ -99,7 +99,7 @@ Unit tests for `app.supabase_io.read`. Each test verifies that the correct Supab
 
 | Class | Table | Tests |
 |---|---|---|
-| `TestGetSymposiums` | `symposiums` | Calls the table with no filter. |
+| `TestGetSymposia` | `symposia` | Calls the table with no filter. |
 | `TestGetDepartments` | `departments` | No filter; filtered by `symposium_id`. |
 | `TestGetClasses` | `classes` | No filter; single UUID filter; list UUID filter; invalid type raises `ValueError`. |
 | `TestGetStudents` | `students` | No filter; invalid type raises `ValueError`. |
@@ -194,7 +194,7 @@ Each cascade function is tested with a mocked Supabase client that returns empty
 | `TestDeletePresentation` | `delete_presentation` | Returns a dict with keys `presentations`, `presenting_students`, `timeframes`. |
 | `TestDeleteClass` | `delete_class` | Cascades through an empty class (no students/professors/presentations) and includes `classes` key; dispatches to `delete_multiple_classes` when given a list. |
 | `TestDeleteDepartment` | `delete_department` | Cascades through an empty department and includes `departments` key; dispatches to `delete_multiple_departments` when given a list. |
-| `TestDeleteSymposium` | `delete_symposium` | Cascades through an empty symposium and includes both `symposiums` and `timeframes` keys. |
+| `TestDeleteSymposium` | `delete_symposium` | Cascades through an empty symposium and includes both `symposia` and `timeframes` keys. |
 
 ---
 
@@ -362,8 +362,8 @@ Each GET test verifies that a 200 is returned. Filtered variants pass a query pa
 
 | Class | Endpoint | Tests |
 |---|---|---|
-| `TestGetSymposiums` | `GET /api/events/symposiums` | Returns 200 with `"symposiums"` key. |
-| `TestGetSymposiumById` | `GET /api/events/symposiums/{id}` | Found: returns 200 with `"symposium"` and `"timeframes"` keys. Not found: returns 404. |
+| `TestGetSymposia` | `GET /api/events/symposia` | Returns 200 with `"symposia"` key. |
+| `TestGetSymposiumById` | `GET /api/events/symposia/{id}` | Found: returns 200 with `"symposium"` and `"timeframes"` keys. Not found: returns 404. |
 | `TestGetDepartments` | `GET /api/events/departments` | Unfiltered and filtered by `symposium_id` both return 200. |
 | `TestGetClasses` | `GET /api/events/classes` | Returns 200. |
 | `TestGetStudents` | `GET /api/events/students` | Returns 200. |
@@ -438,7 +438,7 @@ Uses the `integration_client` and `fake_supabase` fixtures. HTTP requests travel
 
 | Test | What it checks |
 |---|---|
-| `test_post_and_get_all` | POST a symposium then GET `/symposiums` — the row is present with the correct name and room count. |
+| `test_post_and_get_all` | POST a symposium then GET `/symposia` — the row is present with the correct name and room count. |
 | `test_get_by_id_returns_symposium_and_timeframes` | POST with two timeframe windows, then GET by ID — the response includes the symposium row and both timeframe rows. |
 | `test_get_by_id_not_found` | GET with an unknown ID returns 404. |
 | `test_upsert_same_id_updates_not_duplicates` | POST the same `symposium_id` twice — only one row exists after the second call, and its `name` and `rooms_available` reflect the update. |

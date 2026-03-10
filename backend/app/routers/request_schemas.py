@@ -16,7 +16,7 @@ class TimeframeWindow(BaseModel):
     end_time: datetime
 
     @model_validator(mode="after")
-    def end_after_start(self) -> TimeframeWindow:
+    def end_after_start(self) -> "TimeframeWindow":
         if self.end_time < self.start_time:
             raise ValueError(
                 "Timeframe start time must come before timeframe end time."

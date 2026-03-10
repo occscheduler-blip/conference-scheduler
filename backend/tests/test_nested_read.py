@@ -44,9 +44,9 @@ class TestParseInclude:
 
     def test_invalid_token_raises_422(self):
         with pytest.raises(HTTPException) as exc_info:
-            parse_include("symposiums", DEPARTMENT_ALLOWS)
+            parse_include("symposia", DEPARTMENT_ALLOWS)
         assert exc_info.value.status_code == 422
-        assert "symposiums" in exc_info.value.detail
+        assert "symposia" in exc_info.value.detail
 
     def test_disallowed_for_endpoint_raises_422(self):
         # "classes" is not in CLASS_ALLOWS (it's the starting level for that endpoint)
@@ -266,7 +266,7 @@ class TestDepartmentsRouteInclude:
 
     def test_invalid_include_returns_422(self, client, api_headers):
         resp = client.get(
-            "/api/events/departments?include=symposiums", headers=api_headers
+            "/api/events/departments?include=symposia", headers=api_headers
         )
         assert resp.status_code == 422
 

@@ -82,9 +82,10 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
         del_prof_request_query = del_prof_request_query.in_("student_id", student_id)
 
     deleted_timeframes = _safe_count(delete_timeframes(student_id))
-    del_stu_resp = del_stu_query.execute()
+    # Delete child rows first to satisfy FK constraints, then delete the student row(s).
     del_presenting_student_resp = del_presenting_student_query.execute()
     del_prof_request_resp = del_prof_request_query.execute()
+    del_stu_resp = del_stu_query.execute()
     return {
         "students": _rows_affected(del_stu_resp),
         "presenting_students": _rows_affected(del_presenting_student_resp),
@@ -131,8 +132,9 @@ def delete_presentation(presentation_id: UUID | list[UUID]) -> dict[str, int]:
         )
 
     deleted_timeframes = _safe_count(delete_timeframes(presentation_id))
-    del_pres_resp = del_pres_query.execute()
+    # Delete child rows first to satisfy FK constraints, then delete presentation row(s).
     del_presenting_student_resp = del_presenting_student_query.execute()
+    del_pres_resp = del_pres_query.execute()
     return {
         "presentations": _rows_affected(del_pres_resp),
         "presenting_students": _rows_affected(del_presenting_student_resp),

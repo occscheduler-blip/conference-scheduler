@@ -299,15 +299,13 @@ def add_presentation(
 ) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         presentation_id = uuid4()
-        presentation = supabase_schemas.Presentation(
-            id=presentation_id,
-            title=payload.title,
-            class_id=payload.class_id,
-            minutes=payload.minutes,
-            start_time=None,
-            end_time=None,
-        )
-        pres_resp = write.insert("presentations", [presentation.model_dump()])
+        presentation_payload = {
+            "id": presentation_id,
+            "title": payload.title,
+            "class_id": payload.class_id,
+            "minutes": payload.minutes,
+        }
+        pres_resp = write.insert("presentations", [presentation_payload])
 
         students: list[supabase_schemas.PresentingStudents] = []
         for student in payload.presenting_students:

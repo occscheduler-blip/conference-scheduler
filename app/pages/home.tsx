@@ -3,29 +3,14 @@
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-
-type SymposiumOption = { id: string; name: string };
-type Timeframe = { id: string; start_time: string; end_time: string };
-type DepartmentRecord = {
-  id: string;
-  department_name: string;
-  department_head_name: string;
-};
-type ClassRecord = {
-  id: string;
-  department_id: string;
-};
-type PresentationRecord = {
-  id: string;
-  class_id: string;
-  title: string;
-  presenterNames: string[];
-};
-type SymposiumDetails = {
-  id: string;
-  name: string;
-  rooms_available?: number | null;
-};
+import type {
+  ClassRecord,
+  DepartmentRecord,
+  PresentationRecord,
+  SymposiumDetails,
+  SymposiumOption,
+  Timeframe,
+} from "./types";
 
 function parseBackendDateTime(value: string) {
   const normalized = value.includes(" ") ? value.replace(" ", "T") : value;
@@ -67,7 +52,7 @@ function HomeContent() {
   const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
   const authHeaders = useMemo(() => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined), [backendApiKey]);
 
-  const [symposiums, setSymposiums] = useState<SymposiumOption[]>([]);
+  const [symposia, setSymposia] = useState<SymposiumOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
   const [timeframes, setTimeframes] = useState<Timeframe[]>([]);
   const [departments, setDepartments] = useState<DepartmentRecord[]>([]);
@@ -89,20 +74,25 @@ function HomeContent() {
   );
 
   useEffect(() => {
-    async function loadSymposiums() {
+    async function loadSymposia() {
       try {
         const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-        const payload = (await response.json().catch(() => ({}))) as { detail?: string; symposiums?: SymposiumOption[] };
-        if (!response.ok) throw new Error(payload.detail ?? "Failed to load symposiums.");
-        const list = payload.symposiums ?? [];
-        setSymposiums(list);
+        const payload = (await response.json().catch(() => ({}))) as {
+          detail?: string;
+          symposia?: SymposiumOption[];
+          symposiums?: SymposiumOption[];
+          data?: SymposiumOption[];
+        };
+        if (!response.ok) throw new Error(payload.detail ?? "Failed to load symposia.");
+        const list = payload.symposia ?? payload.symposiums ?? payload.data ?? [];
+        setSymposia(list);
         setSelectedSymposiumId(list[0]?.id ?? "");
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         setMessage(msg);
       }
     }
-    void loadSymposiums();
+    void loadSymposia();
   }, [authHeaders, backendUrl]);
 
   useEffect(() => {
@@ -411,8 +401,8 @@ function HomeContent() {
             onChange={(event) => setSelectedSymposiumId(event.target.value)}
             className="mt-2 w-full rounded-lg border-2 border-[#1635a7] bg-white px-3 py-2.5 text-xl text-black"
           >
-            {symposiums.length === 0 ? <option value="">Select an event...</option> : null}
-            {symposiums.map((symposium) => (
+            {symposia.length === 0 ? <option value="">Select an event...</option> : null}
+            {symposia.map((symposium) => (
               <option key={symposium.id} value={symposium.id}>
                 {symposium.name}
               </option>

@@ -2,11 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-
-type StudentTab = "availability" | "preferences";
-type CalendarDay = { key: string; label: string };
-type SavedProfessorRequest = { id: string; professorId: string; professorName: string; professorEmail: string };
-type StudentOption = { id: string; name: string };
+import type { CalendarDay, SavedProfessorRequest, StudentOption, StudentTab } from "./types";
 
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
 
@@ -153,7 +149,7 @@ export default function StudentPage() {
       setIdentityMessage("");
       setCalendarMessage("");
       try {
-        const [studentsRes, classesRes, departmentsRes, symposiumsRes] = await Promise.all([
+        const [studentsRes, classesRes, departmentsRes, symposiaRes] = await Promise.all([
           fetch(`${backendUrl}/api/events/students`, {
             headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
           }),
@@ -177,18 +173,18 @@ export default function StudentPage() {
         const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; symposium_id?: string }> }
           | Array<{ id?: string; symposium_id?: string }>;
-        const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
+        const symposiaPayload = (await symposiaRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
           | Array<{ id?: string; name?: string; symposium_name?: string }>;
 
-        if (!studentsRes.ok || !classesRes.ok || !departmentsRes.ok || !symposiumsRes.ok) {
+        if (!studentsRes.ok || !classesRes.ok || !departmentsRes.ok || !symposiaRes.ok) {
           throw new Error("Failed to load student.");
         }
 
         const studentRows = Array.isArray(studentsPayload) ? studentsPayload : (studentsPayload.data ?? []);
         const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
         const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
-        const symposiumInfoRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
+        const symposiumInfoRows = Array.isArray(symposiaPayload) ? symposiaPayload : (symposiaPayload.data ?? []);
 
         const student = studentRows.find((row) => row.id === selectedStudentId);
         if (!student) {
@@ -537,18 +533,24 @@ export default function StudentPage() {
         </p>
         {identityReady ? (
           <div className="mb-3 overflow-hidden rounded-xl border border-[#d7e0ff] bg-white text-sm text-[#2d3d7a] md:grid md:grid-cols-3">
-            <p className="px-3 py-2.5 font-semibold md:border-r md:border-[#e4ebff]">
-              <span className="mr-1 font-bold">Symposium:</span>
-              <span>{symposiumName || "Unknown"}</span>
-            </p>
-            <p className="border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0 md:border-r md:border-[#e4ebff]">
-              <span className="mr-1 font-bold">Class:</span>
-              <span>{className || "Unknown"}</span>
-            </p>
-            <p className="border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0">
-              <span className="mr-1 font-bold">Presentation:</span>
-              <span>{presentationName || "Unknown"}</span>
-            </p>
+            <div className="grid grid-cols-[auto_1fr] px-3 py-2.5 font-semibold md:border-r md:border-[#e4ebff]">
+              <span className="border-r border-[#e4ebff] bg-[#eef3ff] px-3 py-2 text-sm font-bold uppercase tracking-wide text-[#1e3a8a]">
+                Symposium
+              </span>
+              <span className="px-4 py-2 text-base font-semibold">{symposiumName || "Unknown"}</span>
+            </div>
+            <div className="grid grid-cols-[auto_1fr] border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0 md:border-r md:border-[#e4ebff]">
+              <span className="border-r border-[#e4ebff] bg-[#eef3ff] px-3 py-2 text-sm font-bold uppercase tracking-wide text-[#1e3a8a]">
+                Class
+              </span>
+              <span className="px-4 py-2 text-base font-semibold">{className || "Unknown"}</span>
+            </div>
+            <div className="grid grid-cols-[auto_1fr] border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0">
+              <span className="border-r border-[#e4ebff] bg-[#eef3ff] px-3 py-2 text-sm font-bold uppercase tracking-wide text-[#1e3a8a]">
+                Presentation
+              </span>
+              <span className="px-4 py-2 text-base font-semibold">{presentationName || "Unknown"}</span>
+            </div>
           </div>
         ) : null}
 

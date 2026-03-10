@@ -26,7 +26,7 @@ TF_2 = {"start_time": "2026-04-21T13:00:00Z", "end_time": "2026-04-21T16:00:00Z"
 
 class TestSymposiumLifecycle:
     def test_post_and_get_all(self, integration_client, fake_supabase):
-        """POST a symposium then GET /symposiums — row must be present."""
+        """POST a symposium then GET /symposia — row must be present."""
         resp = integration_client.post(
             "/api/events/add_symposium",
             json={
@@ -39,16 +39,16 @@ class TestSymposiumLifecycle:
         assert resp.status_code == 200, resp.text
         symp_id = resp.json()["symposium_id"]
 
-        resp = integration_client.get("/api/events/symposiums", headers=HEADERS)
+        resp = integration_client.get("/api/events/symposia", headers=HEADERS)
         assert resp.status_code == 200
-        symposiums = resp.json()["symposiums"]
-        assert len(symposiums) == 1
-        assert symposiums[0]["id"] == symp_id
-        assert symposiums[0]["name"] == "Spring Symposium"
-        assert symposiums[0]["rooms_available"] == 5
+        symposia = resp.json()["symposia"]
+        assert len(symposia) == 1
+        assert symposia[0]["id"] == symp_id
+        assert symposia[0]["name"] == "Spring Symposium"
+        assert symposia[0]["rooms_available"] == 5
 
     def test_get_by_id_returns_symposium_and_timeframes(self, integration_client, fake_supabase):
-        """GET /symposiums/{id} returns the symposium row plus its timeframes."""
+        """GET /symposia/{id} returns the symposium row plus its timeframes."""
         resp = integration_client.post(
             "/api/events/add_symposium",
             json={
@@ -60,7 +60,7 @@ class TestSymposiumLifecycle:
         )
         symp_id = resp.json()["symposium_id"]
 
-        resp = integration_client.get(f"/api/events/symposiums/{symp_id}", headers=HEADERS)
+        resp = integration_client.get(f"/api/events/symposia/{symp_id}", headers=HEADERS)
         assert resp.status_code == 200
         body = resp.json()
         assert body["symposium"]["id"] == symp_id
@@ -68,7 +68,7 @@ class TestSymposiumLifecycle:
 
     def test_get_by_id_not_found(self, integration_client, fake_supabase):
         resp = integration_client.get(
-            f"/api/events/symposiums/{uuid4()}", headers=HEADERS
+            f"/api/events/symposia/{uuid4()}", headers=HEADERS
         )
         assert resp.status_code == 404
 
@@ -85,7 +85,7 @@ class TestSymposiumLifecycle:
             },
             headers=HEADERS,
         )
-        assert fake_supabase.count("symposiums") == 1
+        assert fake_supabase.count("symposia") == 1
 
         resp = integration_client.post(
             "/api/events/add_symposium",
@@ -99,8 +99,8 @@ class TestSymposiumLifecycle:
         )
         assert resp.status_code == 200
         # Still only one symposium row — not a duplicate
-        assert fake_supabase.count("symposiums") == 1
-        row = fake_supabase.rows("symposiums")[0]
+        assert fake_supabase.count("symposia") == 1
+        row = fake_supabase.rows("symposia")[0]
         assert row["name"] == "Updated Name"
         assert row["rooms_available"] == 10
 

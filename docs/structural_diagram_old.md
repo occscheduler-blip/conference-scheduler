@@ -31,7 +31,7 @@ flowchart LR
   end
 
   subgraph DB["Supabase Tables (Postgres)"]
-    Symposiums["symposiums"]
+    Symposia["symposia"]
     Timeframes["timeframes"]
     Departments["departments"]
     Classes["classes"]
@@ -86,7 +86,7 @@ flowchart LR
   IOWrite --> SBClient
   IODelete --> SBClient
 
-  SBClient --> Symposiums
+  SBClient --> Symposia
   SBClient --> Timeframes
   SBClient --> Departments
   SBClient --> Classes
@@ -105,7 +105,7 @@ flowchart LR
    - `supabase_io/write.py` for inserts
    - `supabase_io/read.py` for queries
    - `supabase_io/delete.py` for recursive/cascading deletes
-4. Data is persisted in Supabase tables, with `symposiums -> departments -> classes -> (professors, students, presentations)` and join-like helper tables (`presenting_students`, `prof_requests`).
+4. Data is persisted in Supabase tables, with `symposia -> departments -> classes -> (professors, students, presentations)` and join-like helper tables (`presenting_students`, `prof_requests`).
  
 ## Citations
 

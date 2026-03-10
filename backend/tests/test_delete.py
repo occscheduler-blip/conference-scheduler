@@ -165,5 +165,5 @@ class TestDeleteSymposium:
             data=[], count=0
         )
         result = delete.delete_symposium(uid)
-        assert "symposiums" in result
+        assert "symposia" in result
         assert "timeframes" in result

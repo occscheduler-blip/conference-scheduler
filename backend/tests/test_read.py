@@ -8,10 +8,10 @@ import pytest
 from app.supabase_io import read
 
 
-class TestGetSymposiums:
-    def test_calls_symposiums_table(self, mock_supabase):
-        read.get_symposiums()
-        mock_supabase.table.assert_called_with("symposiums")
+class TestGetSymposia:
+    def test_calls_symposia_table(self, mock_supabase):
+        read.get_symposia()
+        mock_supabase.table.assert_called_with("symposia")
 
 
 class TestGetDepartments:

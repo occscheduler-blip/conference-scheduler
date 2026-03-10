@@ -119,17 +119,17 @@ class TestHealthCheck:
 # ===================================================================
 class TestAuth:
     def test_missing_key_returns_401(self, client):
-        resp = client.get("/api/events/symposiums")
+        resp = client.get("/api/events/symposia")
         assert resp.status_code == 401
 
     def test_wrong_key_returns_401(self, client):
         resp = client.get(
-            "/api/events/symposiums", headers={"X-API-Key": "wrong"}
+            "/api/events/symposia", headers={"X-API-Key": "wrong"}
         )
         assert resp.status_code == 401
 
     def test_valid_key_passes(self, client, api_headers):
-        resp = client.get("/api/events/symposiums", headers=api_headers)
+        resp = client.get("/api/events/symposia", headers=api_headers)
         assert resp.status_code == 200
 
 
@@ -357,15 +357,15 @@ class TestAddRequest:
 # ===================================================================
 # GET endpoints
 # ===================================================================
-class TestGetSymposiums:
-    def test_list_symposiums(self, client, api_headers, mock_supabase):
+class TestGetSymposia:
+    def test_list_symposia(self, client, api_headers, mock_supabase):
         _configure_mock(mock_supabase, data=[SYMPOSIUM_ROW])
-        resp = client.get("/api/events/symposiums", headers=api_headers)
+        resp = client.get("/api/events/symposia", headers=api_headers)
         assert resp.status_code == 200
         body = resp.json()
-        assert "symposiums" in body
-        assert len(body["symposiums"]) == 1
-        row = body["symposiums"][0]
+        assert "symposia" in body
+        assert len(body["symposia"]) == 1
+        row = body["symposia"][0]
         assert row["id"] == _SYMP_ID
         assert row["name"] == "Spring Symposium"
         assert row["rooms_available"] == 5
@@ -381,7 +381,7 @@ class TestGetSymposiumById:
             table = MagicMock()
             for m in ("select", "insert", "update", "delete", "eq", "in_", "limit"):
                 getattr(table, m).return_value = table
-            if name == "symposiums":
+            if name == "symposia":
                 table.execute.return_value = SimpleNamespace(data=[symp_row])
             elif name == "timeframes":
                 table.execute.return_value = SimpleNamespace(data=[TIMEFRAME_ROW])
@@ -390,7 +390,7 @@ class TestGetSymposiumById:
             return table
 
         mock_supabase.table.side_effect = _table_side_effect
-        resp = client.get(f"/api/events/symposiums/{sid}", headers=api_headers)
+        resp = client.get(f"/api/events/symposia/{sid}", headers=api_headers)
         assert resp.status_code == 200
         body = resp.json()
         assert "symposium" in body
@@ -406,7 +406,7 @@ class TestGetSymposiumById:
     def test_not_found(self, client, api_headers, mock_supabase):
         _configure_mock(mock_supabase, data=[])
         resp = client.get(
-            f"/api/events/symposiums/{uuid4()}", headers=api_headers
+            f"/api/events/symposia/{uuid4()}", headers=api_headers
         )
         assert resp.status_code == 404
 

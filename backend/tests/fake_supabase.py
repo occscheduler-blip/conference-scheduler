@@ -32,7 +32,7 @@ from uuid import uuid4
 # ---------------------------------------------------------------------------
 
 FK_MAP: dict[tuple[str, str], tuple[str, str]] = {
-    ("symposiums", "departments"):          ("id", "symposium_id"),
+    ("symposia", "departments"):          ("id", "symposium_id"),
     ("departments", "classes"):             ("id", "department_id"),
     ("classes", "professors"):              ("id", "class_id"),
     ("classes", "students"):               ("id", "class_id"),

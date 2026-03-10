@@ -36,7 +36,7 @@ Symposium
             └── Presentations (groups of students)
 ```
 
-Timeframes (available time windows) attach polymorphically to Symposiums, Professors, and Students via a shared `linked_id` foreign key.
+Timeframes (available time windows) attach polymorphically to Symposia, Professors, and Students via a shared `linked_id` foreign key.
 
 ---
 
@@ -63,7 +63,7 @@ The frontend lives in `/app` and uses the **Next.js 16 App Router** with file-ba
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 const apiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
 
-const res = await fetch(`${backendUrl}/api/events/symposiums`, {
+const res = await fetch(`${backendUrl}/api/events/symposia`, {
   headers: { "X-API-Key": apiKey }
 });
 ```
@@ -114,7 +114,7 @@ The public-facing page where anyone can browse scheduled presentations.
 
 | Variable | Type | Purpose |
 |---|---|---|
-| `symposiums` | `{id, name}[]` | Dropdown options |
+| `symposia` | `{id, name}[]` | Dropdown options |
 | `selectedSymposiumId` | `string` | Currently viewed symposium |
 | `timeframes` | `{id, start_time, end_time}[]` | Available days/slots |
 | `departments` | `object[]` | Departments in symposium |
@@ -131,7 +131,7 @@ The public-facing page where anyone can browse scheduled presentations.
 
 #### Functions
 
-- `loadSymposiums()` — on mount, fetches all symposiums and pre-selects the first one
+- `loadSymposia()` — on mount, fetches all symposia and pre-selects the first one
 - `loadSymposiumDetails(id)` — on symposium change, runs parallel fetches for departments, classes, presentations, students, and timeframes; merges them into state
 - `parseBackendDateTime()`, `dayKey()`, `dayLabel()`, `timeLabel()` — date/time formatting helpers
 - `normalizeId()` — used when matching department/class IDs across API responses
@@ -145,8 +145,8 @@ The public-facing page where anyone can browse scheduled presentations.
 
 | Endpoint | When |
 |---|---|
-| `GET /api/events/symposiums` | On mount |
-| `GET /api/events/symposiums/{id}` | On symposium select (gets rooms + timeframes) |
+| `GET /api/events/symposia` | On mount |
+| `GET /api/events/symposia/{id}` | On symposium select (gets rooms + timeframes) |
 | `GET /api/events/departments?symposium_id={id}` | On symposium select |
 | `GET /api/events/classes?department_id={id}` | After departments load (one call per department) |
 | `GET /api/events/presentations?class_id={id}` | After classes load (one call per class) |
@@ -213,7 +213,7 @@ Two-tab interface: **Create** (new symposium) and **Edit** (existing symposium).
 
 #### Functions
 
-- `fetchSymposiums()` — loads symposium list for dropdown
+- `fetchSymposia()` — loads symposium list for dropdown
 - `fetchSymposiumDetails(id)` — loads fields + timeframes, converts timeframes back to grid via `gridFromTimeframes()`
 - `fetchDepartments(id)` — loads departments for selected symposium
 - `handleCreateEventSubmit()` — POSTs new symposium with timeframes built from grid; resets form on success
@@ -229,8 +229,8 @@ Two-tab interface: **Create** (new symposium) and **Edit** (existing symposium).
 
 | Endpoint | When |
 |---|---|
-| `GET /api/events/symposiums` | On mount, after create/delete |
-| `GET /api/events/symposiums/{id}` | On symposium select in Edit tab |
+| `GET /api/events/symposia` | On mount, after create/delete |
+| `GET /api/events/symposia/{id}` | On symposium select in Edit tab |
 | `POST /api/events/add_symposium` | Create tab submit; also used to replace timeframes on edit |
 | `PUT /api/events/update_symposium?symposium_id=` | Edit tab save (name/rooms) |
 | `DELETE /api/events/delete_symposium?symposium_id=` | Delete button |
@@ -273,7 +273,7 @@ Manages classes and professor assignments for a department.
 
 #### Functions
 
-- `loadSymposiums()` — fetches symposiums and departments on mount
+- `loadSymposia()` — fetches symposia and departments on mount
 - `loadSymposiumData(symposiumId, departmentId)` — fetches departments, classes, and professors; merges professors into class objects as `savedClasses`
 - `setProfessorField(localId, field, value)` — updates a single field in the professor add-form rows
 - `addProfessorRow()` — appends a blank `{localId, name:"", email:""}` row
@@ -288,7 +288,7 @@ Manages classes and professor assignments for a department.
 
 | Endpoint | When |
 |---|---|
-| `GET /api/events/symposiums` | On mount |
+| `GET /api/events/symposia` | On mount |
 | `GET /api/events/departments` | On mount and on symposium select |
 | `GET /api/events/classes?department_id=` | On department select |
 | `GET /api/events/professors?class_id=` | After loading classes |
@@ -369,7 +369,7 @@ Two-tab interface for professors: **Availability** (calendar grid) and **Student
 | `GET /api/events/professors` | On mount |
 | `GET /api/events/classes` | On professor select (resolves class) |
 | `GET /api/events/departments` | On professor select (resolves department) |
-| `GET /api/events/symposiums` | On professor select (resolves symposium) |
+| `GET /api/events/symposia` | On professor select (resolves symposium) |
 | `GET /api/events/timeframes?linked_id={symposium_id}` | On professor select (builds editable slots) |
 | `GET /api/events/timeframes?linked_id={professor_id}` | On professor select (loads saved availability) |
 | `GET /api/events/students?class_id=` | On professor select |
@@ -435,7 +435,7 @@ Two-tab interface: **Availability** (calendar grid) and **Preferences** (profess
 | `GET /api/events/students` | On mount |
 | `GET /api/events/classes` | On student select |
 | `GET /api/events/departments` | On student select |
-| `GET /api/events/symposiums` | On student select |
+| `GET /api/events/symposia` | On student select |
 | `GET /api/events/timeframes?linked_id={symposium_id}` | On student select (editable slots) |
 | `GET /api/events/timeframes?linked_id={student_id}` | On student select (saved availability) |
 | `GET /api/events/presentations?class_id=` | On student select (find presentation name) |
@@ -558,7 +558,7 @@ A Pydantic `BaseSettings` class that reads from environment variables (case-inse
 | `supabase_db_url` | `SUPABASE_DB_URL` | `""` | Direct DB URL (for migrations) |
 | `log_level` | `LOG_LEVEL` | `"INFO"` | Logging verbosity |
 | `supabase_events_table` | `SUPABASE_EVENTS_TABLE` | `"events"` | Table name overrides |
-| `supabase_symposiums_table` | — | `"symposiums"` | — |
+| `supabase_symposia_table` | — | `"symposia"` | — |
 | `supabase_departments_table` | — | `"departments"` | — |
 | `supabase_timeframes_table` | — | `"timeframes"` | — |
 | `supabase_students_table` | — | `"students"` | — |
@@ -708,7 +708,7 @@ All SELECT queries. Each function accepts optional filter IDs and returns the ra
 
 | Function | Filters | Notes |
 |---|---|---|
-| `get_symposiums()` | none | Returns all symposiums |
+| `get_symposia()` | none | Returns all symposia |
 | `get_departments(symposium_id)` | optional `symposium_id` | |
 | `get_classes(department_id)` | optional `department_id` (single or list) | |
 | `get_students(class_id)` | optional `class_id` (single or list) | |
@@ -867,12 +867,12 @@ All endpoints below are prefixed with `/api/events` and require `X-API-Key` head
 
 ---
 
-#### Symposiums
+#### Symposia
 
 | Method | Path | Body | Description |
 |---|---|---|---|
-| `GET` | `/symposiums` | — | List all symposiums |
-| `GET` | `/symposiums/{symposium_id}` | — | Single symposium with its timeframes |
+| `GET` | `/symposia` | — | List all symposia |
+| `GET` | `/symposia/{symposium_id}` | — | Single symposium with its timeframes |
 | `POST` | `/add_symposium` | `AddSymposiumRequest` | Create symposium + timeframes. If `symposium_id` is provided, replaces that symposium's timeframes instead of creating new |
 | `PUT` | `/update_symposium` | `UpdateSymposiumRequest` + `?symposium_id=` | Update name or room count |
 | `DELETE` | `/delete_symposium` | — + `?symposium_id=` | Cascade delete entire symposium hierarchy |

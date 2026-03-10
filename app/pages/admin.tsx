@@ -2,30 +2,13 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-type AdminTab = "create" | "edit";
-type DepartmentAction = "add" | "edit";
-
-type SymposiumOption = {
-  id: string;
-  name: string;
-  created_at?: string;
-};
-
-type TimeframeRecord = {
-  id: string;
-  start_time: string;
-  end_time: string;
-  symposium_id: string;
-};
-
-type DepartmentRecord = {
-  id: string;
-  symposium: string;
-  department_name: string;
-  department_head_name: string;
-  email: string;
-};
+import type {
+  AdminTab,
+  DepartmentAction,
+  DepartmentRecord,
+  SymposiumOption,
+  TimeframeRecord,
+} from "./types";
 
 const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
@@ -163,7 +146,7 @@ export default function AdminPage() {
   // Edit event selection + details
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
   const [symposiumOptions, setSymposiumOptions] = useState<SymposiumOption[]>([]);
-  const [isLoadingSymposiums, setIsLoadingSymposiums] = useState(false);
+  const [isLoadingSymposia, setIsLoadingSymposia] = useState(false);
   const [symposiumLoadError, setSymposiumLoadError] = useState<string | null>(null);
 
   const [editSymposiumName, setEditSymposiumName] = useState("");
@@ -208,22 +191,27 @@ export default function AdminPage() {
   );
   const editCalendarDates = useMemo(() => buildCalendarDates(editStartDate, editEndDate), [editStartDate, editEndDate]);
 
-  const fetchSymposiums = useCallback(async () => {
-    setIsLoadingSymposiums(true);
+  const fetchSymposia = useCallback(async () => {
+    setIsLoadingSymposia(true);
     setSymposiumLoadError(null);
     try {
       const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-      const payload = (await response.json()) as { detail?: string; symposiums?: SymposiumOption[] };
+      const payload = (await response.json().catch(() => ({}))) as {
+        detail?: string;
+        symposia?: SymposiumOption[];
+        symposiums?: SymposiumOption[];
+        data?: SymposiumOption[];
+      };
       if (!response.ok) {
-        setSymposiumLoadError(payload.detail ?? "Failed to load symposiums.");
+        setSymposiumLoadError(payload.detail ?? "Failed to load symposia.");
         return;
       }
-      setSymposiumOptions(payload.symposiums ?? []);
+      setSymposiumOptions(payload.symposia ?? payload.symposiums ?? payload.data ?? []);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumLoadError(`Load failed: ${message}`);
     } finally {
-      setIsLoadingSymposiums(false);
+      setIsLoadingSymposia(false);
     }
   }, [authHeaders, backendUrl]);
 
@@ -307,8 +295,8 @@ export default function AdminPage() {
   );
 
   useEffect(() => {
-    void fetchSymposiums();
-  }, [fetchSymposiums]);
+    void fetchSymposia();
+  }, [fetchSymposia]);
 
   useEffect(() => {
     if (createCalendarDates.length === 0) {
@@ -433,7 +421,7 @@ export default function AdminPage() {
       }
 
       setCreateSaveMessage("Event created successfully.");
-      await fetchSymposiums();
+      await fetchSymposia();
       if (payload.symposium_id) setSelectedSymposiumId(payload.symposium_id);
       setActiveTab("edit");
     } catch (error) {
@@ -490,7 +478,7 @@ export default function AdminPage() {
       }
 
       setSymposiumEditMessage("Event updated successfully.");
-      await fetchSymposiums();
+      await fetchSymposia();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumEditMessage(`Update failed: ${message}`);
@@ -522,7 +510,7 @@ export default function AdminPage() {
 
       setSymposiumEditMessage("Event deleted.");
       setSelectedSymposiumId("");
-      await fetchSymposiums();
+      await fetchSymposia();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumEditMessage(`Delete failed: ${message}`);
@@ -734,7 +722,7 @@ export default function AdminPage() {
       return;
     }
     resetEditTabState();
-    void fetchSymposiums();
+    void fetchSymposia();
   };
 
   return (
@@ -913,7 +901,7 @@ export default function AdminPage() {
                   className={fieldClass}
                   value={selectedSymposiumId}
                   onChange={(event) => setSelectedSymposiumId(event.target.value)}
-                  disabled={isLoadingSymposiums}
+                  disabled={isLoadingSymposia}
                 >
                   <option value="">Select an event...</option>
                   {symposiumOptions.map((option) => (
@@ -927,11 +915,11 @@ export default function AdminPage() {
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => void fetchSymposiums()}
-                  disabled={isLoadingSymposiums}
+                  onClick={() => void fetchSymposia()}
+                  disabled={isLoadingSymposia}
                   className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isLoadingSymposiums ? "Loading..." : "Refresh Symposium List"}
+                  {isLoadingSymposia ? "Loading..." : "Refresh Symposium List"}
                 </button>
                 <button
                   type="button"
