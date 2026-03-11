@@ -7,7 +7,7 @@ type HealthResponse = {
   environment: string;
 };
 
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+const backendUrl = "/api/backend";
 
 export function BackendStatus() {
   const [health, setHealth] = useState<HealthResponse | null>(null);

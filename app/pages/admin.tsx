@@ -14,8 +14,6 @@ const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
 
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
-const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
 function formatTimeLabel(slotIndex: number) {
   const totalMinutes = 9 * 60 + slotIndex * 15;
   const hour24 = Math.floor(totalMinutes / 60);
@@ -130,7 +128,7 @@ function gridFromTimeframes(timeframes: TimeframeRecord[]) {
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  const backendUrl = "/api/backend";
 
   // Create event state
   const [createSymposiumName, setCreateSymposiumName] = useState("");
@@ -179,11 +177,7 @@ export default function AdminPage() {
 
   const isCreateTab = activeTab === "create";
   const hasSelectedSymposium = Boolean(selectedSymposiumId.trim());
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(
-    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
-    [backendApiKey]
-  );
+  const authHeaders = undefined;
 
   const createCalendarDates = useMemo(
     () => buildCalendarDates(createStartDate, createEndDate),
@@ -206,7 +200,7 @@ export default function AdminPage() {
         setSymposiumLoadError(payload.detail ?? "Failed to load symposia.");
         return;
       }
-      setSymposiumOptions(payload.symposiums ?? []);
+      setSymposiumOptions(payload.symposiums ?? payload.symposia ?? payload.data ?? []);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumLoadError(`Load failed: ${message}`);
@@ -230,13 +224,17 @@ export default function AdminPage() {
         const response = await fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`, {
           headers: authHeaders,
         });
-        const payload = (await response.json()) as { detail?: string; departments?: DepartmentRecord[] };
+        const payload = (await response.json()) as {
+          detail?: string;
+          departments?: DepartmentRecord[];
+          data?: DepartmentRecord[];
+        };
         if (!response.ok) {
           setDepartmentLoadError(payload.detail ?? "Failed to load departments.");
           setDepartments([]);
           return;
         }
-        const loaded = payload.departments ?? [];
+        const loaded = payload.departments ?? payload.data ?? [];
         setDepartments(loaded);
         setDepartmentToEditId((current) =>
           loaded.some((department) => department.id === current) ? current : loaded[0]?.id ?? ""
@@ -361,7 +359,7 @@ export default function AdminPage() {
 
     setDepartmentName(selectedDepartment.department_name);
     setDepartmentHeadName(selectedDepartment.department_head_name);
-    setDepartmentHeadEmail(selectedDepartment.email);
+    setDepartmentHeadEmail(selectedDepartment.email ?? "");
   }, [departmentAction, departmentToEditId, departments]);
 
   const setCreateCell = (dayIndex: number, slotIndex: number, value: boolean) => {
@@ -461,10 +459,11 @@ export default function AdminPage() {
 
     setIsSavingSymposiumEdit(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/symposiums/${selectedSymposiumId}`, {
-        method: "PUT",
+      const response = await fetch(`${backendUrl}/api/events/add_symposium`, {
+        method: "POST",
         headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
         body: JSON.stringify({
+          symposium_id: selectedSymposiumId,
           symposium_name: trimmedName,
           rooms_available: parsedRooms,
           timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
@@ -658,7 +657,7 @@ export default function AdminPage() {
     setDepartmentToEditId(department.id);
     setDepartmentName(department.department_name);
     setDepartmentHeadName(department.department_head_name);
-    setDepartmentHeadEmail(department.email);
+    setDepartmentHeadEmail(department.email ?? "");
     setDepartmentMessage(null);
     setDepartmentMessageKind(null);
   };

@@ -25,12 +25,8 @@ function DepartmentHeadPageContent() {
   const searchParams = useSearchParams();
   const symposiumIdFromLink = searchParams.get("symposium_id") ?? "";
   const departmentIdFromLink = searchParams.get("department_id") ?? "";
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(
-    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
-    [backendApiKey]
-  );
+  const backendUrl = "/api/backend";
+  const authHeaders = undefined;
 
   const [symposiumOptions, setSymposiumOptions] = useState<DepartmentOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState<string>("");
