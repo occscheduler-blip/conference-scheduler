@@ -1,10 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4, UUID
 from postgrest.base_request_builder import APIResponse
 
-import pandas as pd
 from fastapi import APIRouter, HTTPException
 from app.supabase_io import delete, read, write
 from app.supabase_io.nested_read import (
@@ -21,7 +20,6 @@ import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
 
 router = APIRouter(prefix="/events", tags=["events"])
-SYMPOSIUM_DATAFRAMES: dict[int, dict[str, pd.DataFrame]] = {}
 
 
 def _serialize_update_fields(fields: dict[str, object]) -> dict[str, Any]:
@@ -299,15 +297,13 @@ def add_presentation(
 ) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         presentation_id = uuid4()
-        presentation = supabase_schemas.Presentation(
-            id=presentation_id,
-            title=payload.title,
-            class_id=payload.class_id,
-            minutes=payload.minutes,
-            start_time=None,
-            end_time=None,
-        )
-        pres_resp = write.insert("presentations", [presentation.model_dump()])
+        presentation_payload = {
+            "id": presentation_id,
+            "title": payload.title,
+            "class_id": payload.class_id,
+            "minutes": payload.minutes,
+        }
+        pres_resp = write.insert("presentations", [presentation_payload])
 
         students: list[supabase_schemas.PresentingStudents] = []
         for student in payload.presenting_students:
