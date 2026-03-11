@@ -47,6 +47,7 @@ _service_key = _get_local_service_key()
 os.environ["SUPABASE_URL"] = _LOCAL_URL
 os.environ["SUPABASE_KEY"] = _service_key
 os.environ.setdefault("BACKEND_API_KEY", "test-api-key")
+os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-key-for-testing-only")
 
 
 def _is_supabase_running() -> bool:
