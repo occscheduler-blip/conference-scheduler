@@ -11,6 +11,7 @@ _TRUNCATE_ORDER = [
     "requests", "presenting_students", "timeframes",
     "students", "professors", "presentations",
     "classes", "departments", "symposiums",
+    "admins",
 ]
 
 

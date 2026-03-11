@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     supabase_timeframes_table: str = "timeframes"
     supabase_students_table: str = "students"
 
+    jwt_secret_key: str = ""
+    jwt_ttl_hours: int = 24
+
     @property
     def cors_origins(self) -> list[str]:
         return [
