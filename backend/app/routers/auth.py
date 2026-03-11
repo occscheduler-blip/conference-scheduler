@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import cast
 
-from app.auth.dependencies import require_jwt
+from app.auth.dependencies import require_admin_jwt
 from app.auth.jwt_utils import JWTClaims, encode_jwt
 from app.auth.password import hash_password, verify_password
 from app.supabase_io.client import supabase
@@ -20,6 +20,7 @@ class CreateAdminRequest(BaseModel):
 
 
 @router.post("/admin/login")
+# TODO: Make sure password is sent over a secure connection, if not hash it first.
 def admin_login(body: LoginRequest) -> dict[str, str]:
     resp = supabase.table("admins").select("*").eq("email", body.email).execute()
     rows = cast(list[dict[str,object]], resp.data or [])
@@ -43,7 +44,7 @@ def admin_login(body: LoginRequest) -> dict[str, str]:
 @router.post("/admin/create", status_code=status.HTTP_200_OK)
 def admin_create(
     body: CreateAdminRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+    _claims: JWTClaims = Depends(require_admin_jwt),
 ) -> dict[str, str]:
     password_hash = hash_password(body.password)
     resp = (

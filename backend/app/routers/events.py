@@ -4,7 +4,9 @@ from typing import Any
 from uuid import uuid4, UUID
 from postgrest.base_request_builder import APIResponse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from app.auth.dependencies import require_admin_jwt
+from app.auth.jwt_utils import JWTClaims
 from app.supabase_io import delete, read, write
 from app.supabase_io.nested_read import (
     CLASS_CHILDREN,
@@ -131,6 +133,7 @@ def add_class(
 @router.post("/add_department")
 def add_department(
     payload: request_schemas.AddDepartmentRequest,
+    _claims: JWTClaims = Depends(require_admin_jwt),
 ) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     try:
         department = supabase_schemas.Department(
@@ -165,6 +168,7 @@ def add_department(
 @router.post("/add_symposium")
 def add_symposium(
     payload: request_schemas.AddSymposiumRequest,
+    _claims: JWTClaims = Depends(require_admin_jwt),
 ) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     """Validate symposium + timeframe data and insert into Supabase tables.
 
@@ -813,7 +817,10 @@ def get_requests(student_id: UUID | None = None) -> APIResponse:
 
 
 @router.delete("/delete_symposium")
-def delete_symposium(symposium_id: UUID) -> dict[str, str | int | dict[str, int]]:
+def delete_symposium(
+    symposium_id: UUID,
+    _claims: JWTClaims = Depends(require_admin_jwt),
+) -> dict[str, str | int | dict[str, int]]:
     try:
         counts = _normalize_counts(
             delete.delete_symposium(symposium_id), {"symposiums": 1}
@@ -832,7 +839,10 @@ def delete_symposium(symposium_id: UUID) -> dict[str, str | int | dict[str, int]
 
 
 @router.delete("/delete_department")
-def delete_department(department_id: UUID) -> dict[str, str | int | dict[str, int]]:
+def delete_department(
+    department_id: UUID,
+    _claims: JWTClaims = Depends(require_admin_jwt),
+) -> dict[str, str | int | dict[str, int]]:
     try:
         counts = _normalize_counts(
             delete.delete_department(department_id), {"departments": 1}

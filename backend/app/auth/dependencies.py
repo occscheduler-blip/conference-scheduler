@@ -25,3 +25,7 @@ def require_jwt(required_roles: list[str] | None = None) -> Callable[..., object
         return claims
 
     return dependency
+
+
+# Stable module-level instance so tests can override it via app.dependency_overrides.
+require_admin_jwt = require_jwt(required_roles=["admin"])

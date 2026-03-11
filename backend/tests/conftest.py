@@ -90,3 +90,27 @@ def client():
 def h():
     """Valid API key headers shorthand."""
     return {"X-API-Key": "test-api-key"}
+
+
+@pytest.fixture()
+def api_headers():
+    """X-API-Key headers for event routes."""
+    return {"X-API-Key": "test-api-key"}
+
+
+@pytest.fixture()
+def admin_token(client) -> str:
+    """Insert a test admin directly and return a valid JWT."""
+    from app.auth.password import hash_password
+    from app.supabase_io.client import supabase
+    email, password = "testadmin@hamilton.edu", "test-password"
+    hash_ = hash_password(password)
+    supabase.table("admins").insert({"email": email, "password_hash": hash_}).execute()
+    resp = client.post("/api/auth/admin/login", json={"email": email, "password": password})
+    return resp.json()["access_token"]
+
+
+@pytest.fixture()
+def admin_headers(admin_token: str) -> dict[str, str]:
+    """X-API-Key + Bearer JWT — for admin-gated event routes."""
+    return {"X-API-Key": "test-api-key", "Authorization": f"Bearer {admin_token}"}

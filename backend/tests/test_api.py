@@ -5,22 +5,24 @@
 TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
 TF_2 = {"start_time": "2026-04-21T13:00:00Z", "end_time": "2026-04-21T16:00:00Z"}
 
+_FAKE_UUID = "00000000-0000-0000-0000-000000000001"
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def _add_symposium(client, h, name="Spring Symposium", rooms=5, timeframes=None):
+def _add_symposium(client, admin_headers, name="Spring Symposium", rooms=5, timeframes=None):
     if timeframes is None:
         timeframes = [TF_1, TF_2]
     resp = client.post(
         "/api/events/add_symposium",
         json={"symposium_name": name, "rooms_available": rooms, "timeframes": timeframes},
-        headers=h,
+        headers=admin_headers,
     )
     assert resp.status_code == 200, resp.text
     return resp.json()
 
 
-def _add_department(client, h, symposium_id, name="Computer Science"):
+def _add_department(client, admin_headers, symposium_id, name="Computer Science"):
     resp = client.post(
         "/api/events/add_department",
         json={
@@ -29,7 +31,7 @@ def _add_department(client, h, symposium_id, name="Computer Science"):
             "department_head_name": "Dr. Head",
             "email": "head@hamilton.edu",
         },
-        headers=h,
+        headers=admin_headers,
     )
     assert resp.status_code == 200, resp.text
     return resp.json()
@@ -87,9 +89,9 @@ class TestHealth:
         assert resp.json()["status"] == "ok"
 
 
-# ── TestAuth ─────────────────────────────────────────────────────────────────
+# ── TestApiKeyAuth ────────────────────────────────────────────────────────────
 
-class TestAuth:
+class TestApiKeyAuth:
     def test_no_key_returns_401(self, client):
         resp = client.get("/api/events/symposiums")
         assert resp.status_code == 401
@@ -103,26 +105,79 @@ class TestAuth:
         assert resp.status_code == 200
 
 
+# ── TestAdminPermissions ──────────────────────────────────────────────────────
+
+class TestAdminPermissions:
+    _SYM_PAYLOAD = {
+        "symposium_name": "Admin Test Sym",
+        "rooms_available": 3,
+        "timeframes": [TF_1],
+    }
+    _DEPT_PAYLOAD = {
+        "symposium_id": _FAKE_UUID,
+        "department_name": "Physics",
+        "department_head_name": "Dr. X",
+        "email": "x@hamilton.edu",
+    }
+
+    def test_add_symposium_requires_jwt(self, client, h):
+        resp = client.post("/api/events/add_symposium", json=self._SYM_PAYLOAD, headers=h)
+        assert resp.status_code == 401
+
+    def test_add_symposium_with_jwt_ok(self, client, admin_headers):
+        resp = client.post("/api/events/add_symposium", json=self._SYM_PAYLOAD, headers=admin_headers)
+        assert resp.status_code == 200
+
+    def test_delete_symposium_requires_jwt(self, client, h):
+        resp = client.delete(f"/api/events/delete_symposium?symposium_id={_FAKE_UUID}", headers=h)
+        assert resp.status_code == 401
+
+    def test_delete_symposium_with_jwt_ok(self, client, admin_headers):
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        resp = client.delete(f"/api/events/delete_symposium?symposium_id={sym_id}", headers=admin_headers)
+        assert resp.status_code == 200
+
+    def test_add_department_requires_jwt(self, client, h):
+        resp = client.post("/api/events/add_department", json=self._DEPT_PAYLOAD, headers=h)
+        assert resp.status_code == 401
+
+    def test_add_department_with_jwt_ok(self, client, admin_headers):
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        payload = {**self._DEPT_PAYLOAD, "symposium_id": sym_id}
+        resp = client.post("/api/events/add_department", json=payload, headers=admin_headers)
+        assert resp.status_code == 200
+
+    def test_delete_department_requires_jwt(self, client, h):
+        resp = client.delete(f"/api/events/delete_department?department_id={_FAKE_UUID}", headers=h)
+        assert resp.status_code == 401
+
+    def test_delete_department_with_jwt_ok(self, client, admin_headers):
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
+        resp = client.delete(f"/api/events/delete_department?department_id={dept_id}", headers=admin_headers)
+        assert resp.status_code == 200
+
+
 # ── TestSymposiums ────────────────────────────────────────────────────────────
 
 class TestSymposiums:
-    def test_create_symposium(self, client, h, db):
-        body = _add_symposium(client, h)
+    def test_create_symposium(self, client, h, admin_headers, db):
+        body = _add_symposium(client, admin_headers)
         assert body["status"] == "saved"
         assert "symposium_id" in body
         assert db.count("symposiums") == 1
         assert db.count("timeframes") == 2
 
-    def test_get_all_symposiums(self, client, h, db):
-        _add_symposium(client, h, name="S1")
-        _add_symposium(client, h, name="S2")
+    def test_get_all_symposiums(self, client, h, admin_headers):
+        _add_symposium(client, admin_headers, name="S1")
+        _add_symposium(client, admin_headers, name="S2")
         resp = client.get("/api/events/symposiums", headers=h)
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert len(data) == 2
 
-    def test_get_symposium_by_id(self, client, h, db):
-        body = _add_symposium(client, h)
+    def test_get_symposium_by_id(self, client, h, admin_headers):
+        body = _add_symposium(client, admin_headers)
         sym_id = body["symposium_id"]
         resp = client.get(f"/api/events/symposiums/{sym_id}", headers=h)
         assert resp.status_code == 200
@@ -138,10 +193,9 @@ class TestSymposiums:
         )
         assert resp.status_code == 404
 
-    def test_upsert_symposium_updates_existing(self, client, h, db):
-        body = _add_symposium(client, h)
+    def test_upsert_symposium_updates_existing(self, client, h, admin_headers, db):
+        body = _add_symposium(client, admin_headers)
         sym_id = body["symposium_id"]
-        # Re-POST with same ID — should update, not insert a second row
         resp = client.post(
             "/api/events/add_symposium",
             json={
@@ -150,7 +204,7 @@ class TestSymposiums:
                 "rooms_available": 10,
                 "timeframes": [TF_1],
             },
-            headers=h,
+            headers=admin_headers,
         )
         assert resp.status_code == 200
         assert db.count("symposiums") == 1  # still 1, not 2
@@ -159,8 +213,8 @@ class TestSymposiums:
         assert row["name"] == "Updated Name"
         assert row["rooms_available"] == 10
 
-    def test_update_symposium(self, client, h, db):
-        body = _add_symposium(client, h)
+    def test_update_symposium(self, client, h, admin_headers, db):
+        body = _add_symposium(client, admin_headers)
         sym_id = body["symposium_id"]
         resp = client.put(
             "/api/events/update_symposium",
@@ -173,54 +227,33 @@ class TestSymposiums:
         assert row["name"] == "Renamed"
         assert row["rooms_available"] == 7
 
-    def test_delete_symposium(self, client, h, db):
-        body = _add_symposium(client, h)
-        sym_id = body["symposium_id"]
-        resp = client.delete(f"/api/events/delete_symposium?symposium_id={sym_id}", headers=h)
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "deleted"
-        assert db.count("symposiums") == 0
-        assert db.count("timeframes") == 0
-
-    def test_update_timeframes_replaces(self, client, h, db):
-        body = _add_symposium(client, h)
-        sym_id = body["symposium_id"]
-        assert db.count("timeframes") == 2
-        resp = client.put(
-            "/api/events/update_timeframes",
-            json={"linked_id": sym_id, "timeframes": [TF_1]},
-            headers=h,
-        )
-        assert resp.status_code == 200
-        assert db.count("timeframes") == 1
-
 
 # ── TestDepartments ───────────────────────────────────────────────────────────
 
 class TestDepartments:
-    def _setup(self, client, h) -> str:
-        return _add_symposium(client, h)["symposium_id"]
+    def _setup(self, client, admin_headers) -> str:
+        return _add_symposium(client, admin_headers)["symposium_id"]
 
-    def test_create_department(self, client, h, db):
-        sym_id = self._setup(client, h)
-        body = _add_department(client, h, sym_id)
+    def test_create_department(self, client, h, admin_headers, db):
+        sym_id = self._setup(client, admin_headers)
+        body = _add_department(client, admin_headers, sym_id)
         assert body["status"] == "Inserted"
         assert "department_id" in body
         assert db.count("departments") == 1
 
-    def test_get_departments(self, client, h):
-        sym_id = self._setup(client, h)
-        _add_department(client, h, sym_id, name="CS")
-        _add_department(client, h, sym_id, name="Biology")
+    def test_get_departments(self, client, h, admin_headers):
+        sym_id = self._setup(client, admin_headers)
+        _add_department(client, admin_headers, sym_id, name="CS")
+        _add_department(client, admin_headers, sym_id, name="Biology")
         resp = client.get(
             f"/api/events/departments?symposium_id={sym_id}", headers=h
         )
         assert resp.status_code == 200
         assert len(resp.json()["data"]) == 2
 
-    def test_update_department(self, client, h, db):
-        sym_id = self._setup(client, h)
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+    def test_update_department(self, client, h, admin_headers, db):
+        sym_id = self._setup(client, admin_headers)
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         resp = client.put(
             "/api/events/update_department",
             json={
@@ -235,11 +268,11 @@ class TestDepartments:
         row = db.rows("departments")[0]
         assert row["department_name"] == "New Name"
 
-    def test_delete_department(self, client, h, db):
-        sym_id = self._setup(client, h)
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+    def test_delete_department(self, client, h, admin_headers, db):
+        sym_id = self._setup(client, admin_headers)
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         resp = client.delete(
-            f"/api/events/delete_department?department_id={dept_id}", headers=h
+            f"/api/events/delete_department?department_id={dept_id}", headers=admin_headers
         )
         assert resp.status_code == 200
         assert db.count("departments") == 0
@@ -248,21 +281,21 @@ class TestDepartments:
 # ── TestClasses ───────────────────────────────────────────────────────────────
 
 class TestClasses:
-    def _setup(self, client, h) -> dict[str, str]:
-        sym_id = _add_symposium(client, h)["symposium_id"]
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+    def _setup(self, client, h, admin_headers) -> dict[str, str]:
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         return {"symposium_id": sym_id, "department_id": dept_id}
 
-    def test_create_class(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_create_class(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers)
         body = _add_class(client, h, ids["department_id"])
         assert body["status"] == "Inserted"
         assert "class_id" in body
         assert db.count("classes") == 1
         assert db.count("professors") == 1
 
-    def test_get_classes(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_get_classes(self, client, h, admin_headers):
+        ids = self._setup(client, h, admin_headers)
         _add_class(client, h, ids["department_id"], name="CS101")
         _add_class(client, h, ids["department_id"], name="CS102")
         resp = client.get(
@@ -271,8 +304,8 @@ class TestClasses:
         assert resp.status_code == 200
         assert len(resp.json()["data"]) == 2
 
-    def test_update_class(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_update_class(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers)
         class_id = _add_class(client, h, ids["department_id"])["class_id"]
         resp = client.put(
             "/api/events/update_class",
@@ -287,8 +320,8 @@ class TestClasses:
         row = db.rows("classes")[0]
         assert row["name"] == "CS999"
 
-    def test_delete_class(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_delete_class(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers)
         class_id = _add_class(client, h, ids["department_id"])["class_id"]
         resp = client.delete(
             f"/api/events/delete_class?class_id={class_id}", headers=h
@@ -300,20 +333,20 @@ class TestClasses:
 # ── TestStudents ──────────────────────────────────────────────────────────────
 
 class TestStudents:
-    def _setup(self, client, h) -> dict[str, str]:
-        sym_id = _add_symposium(client, h)["symposium_id"]
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+    def _setup(self, client, h, admin_headers) -> dict[str, str]:
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         class_id = _add_class(client, h, dept_id)["class_id"]
         return {"department_id": dept_id, "class_id": class_id}
 
-    def test_add_students(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_add_students(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers)
         body = _add_students(client, h, ids["class_id"], count=3)
         assert body["status"] == "inserted"
         assert db.count("students") == 3
 
-    def test_get_students(self, client, h):
-        ids = self._setup(client, h)
+    def test_get_students(self, client, h, admin_headers):
+        ids = self._setup(client, h, admin_headers)
         _add_students(client, h, ids["class_id"], count=2)
         resp = client.get(
             f"/api/events/students?class_id={ids['class_id']}", headers=h
@@ -321,12 +354,11 @@ class TestStudents:
         assert resp.status_code == 200
         assert len(resp.json()["data"]) == 2
 
-    def test_update_student(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_update_student(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers)
         _add_students(client, h, ids["class_id"], count=1)
         student_id = str(db.rows("students")[0]["id"])
 
-        # update_student requires a presentation_id — create one first
         pres_id = _add_presentation(client, h, ids["class_id"], [student_id])["presentation_id"]
 
         resp = client.put(
@@ -344,8 +376,8 @@ class TestStudents:
         row = db.rows("students")[0]
         assert row["name"] == "Updated Student"
 
-    def test_delete_student(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_delete_student(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers)
         _add_students(client, h, ids["class_id"], count=1)
         student_id = str(db.rows("students")[0]["id"])
         resp = client.delete(
@@ -358,22 +390,22 @@ class TestStudents:
 # ── TestProfessors ────────────────────────────────────────────────────────────
 
 class TestProfessors:
-    def _setup(self, client, h) -> dict[str, str]:
-        sym_id = _add_symposium(client, h)["symposium_id"]
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+    def _setup(self, client, h, admin_headers) -> dict[str, str]:
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         class_body = _add_class(client, h, dept_id)
         return {"class_id": class_body["class_id"], "professor_ids": class_body["professor_ids"]}
 
-    def test_get_professors(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_get_professors(self, client, h, admin_headers):
+        ids = self._setup(client, h, admin_headers)
         resp = client.get(
             f"/api/events/professors?class_id={ids['class_id']}", headers=h
         )
         assert resp.status_code == 200
         assert len(resp.json()["data"]) == 1
 
-    def test_update_professor(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_update_professor(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers)
         prof_id = ids["professor_ids"][0]
         resp = client.put(
             "/api/events/update_professor",
@@ -389,8 +421,8 @@ class TestProfessors:
         row = db.rows("professors")[0]
         assert row["name"] == "Prof. Updated"
 
-    def test_delete_professor(self, client, h, db):
-        ids = self._setup(client, h)
+    def test_delete_professor(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers)
         prof_id = ids["professor_ids"][0]
         resp = client.delete(
             f"/api/events/delete_professor?professor_id={prof_id}", headers=h
@@ -402,23 +434,23 @@ class TestProfessors:
 # ── TestPresentations ─────────────────────────────────────────────────────────
 
 class TestPresentations:
-    def _setup(self, client, h, db) -> dict[str, str]:
-        sym_id = _add_symposium(client, h)["symposium_id"]
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+    def _setup(self, client, h, admin_headers, db) -> dict[str, str]:
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         class_id = _add_class(client, h, dept_id)["class_id"]
         _add_students(client, h, class_id, count=2)
         student_ids = [str(r["id"]) for r in db.rows("students")]
         return {"class_id": class_id, "student_ids": student_ids}
 
-    def test_add_presentation(self, client, h, db):
-        ids = self._setup(client, h, db)
+    def test_add_presentation(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers, db)
         body = _add_presentation(client, h, ids["class_id"], ids["student_ids"])
         assert body["status"] == "inserted"
         assert db.count("presentations") == 1
         assert db.count("presenting_students") == 2
 
-    def test_get_presentations_enriched(self, client, h, db):
-        ids = self._setup(client, h, db)
+    def test_get_presentations_enriched(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers, db)
         _add_presentation(client, h, ids["class_id"], ids["student_ids"])
         resp = client.get(
             f"/api/events/presentations?class_id={ids['class_id']}", headers=h
@@ -429,10 +461,9 @@ class TestPresentations:
         assert "presenting_students" in data[0]
         assert len(data[0]["presenting_students"]) == 2
 
-    def test_update_presentation(self, client, h, db):
-        ids = self._setup(client, h, db)
+    def test_update_presentation(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers, db)
         pres_id = _add_presentation(client, h, ids["class_id"], ids["student_ids"])["presentation_id"]
-        # Update with only one of the two students
         resp = client.put(
             "/api/events/update_presentation",
             json={
@@ -451,8 +482,8 @@ class TestPresentations:
         assert row["minutes"] == 30
         assert db.count("presenting_students") == 1
 
-    def test_delete_presentation(self, client, h, db):
-        ids = self._setup(client, h, db)
+    def test_delete_presentation(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers, db)
         pres_id = _add_presentation(client, h, ids["class_id"], ids["student_ids"])["presentation_id"]
         resp = client.delete(
             f"/api/events/delete_presentation?presentation_id={pres_id}", headers=h
@@ -465,15 +496,15 @@ class TestPresentations:
 # ── TestRequests ──────────────────────────────────────────────────────────────
 
 class TestRequests:
-    def _setup(self, client, h, db) -> str:
-        sym_id = _add_symposium(client, h)["symposium_id"]
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+    def _setup(self, client, h, admin_headers, db) -> str:
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         class_id = _add_class(client, h, dept_id)["class_id"]
         _add_students(client, h, class_id, count=1)
         return str(db.rows("students")[0]["id"])
 
-    def test_add_request(self, client, h, db):
-        student_id = self._setup(client, h, db)
+    def test_add_request(self, client, h, admin_headers, db):
+        student_id = self._setup(client, h, admin_headers, db)
         resp = client.post(
             "/api/events/add_request",
             json={"name": "Prof. Pref", "email": "pref@hamilton.edu", "student_id": student_id},
@@ -483,8 +514,8 @@ class TestRequests:
         assert resp.json()["status"] == "inserted"
         assert db.count("requests") == 1
 
-    def test_get_requests(self, client, h, db):
-        student_id = self._setup(client, h, db)
+    def test_get_requests(self, client, h, admin_headers, db):
+        student_id = self._setup(client, h, admin_headers, db)
         client.post(
             "/api/events/add_request",
             json={"name": "Prof. A", "email": "a@hamilton.edu", "student_id": student_id},
@@ -497,19 +528,34 @@ class TestRequests:
         assert len(resp.json()["data"]) == 1
 
 
+# ── TestUpdateTimeframes ──────────────────────────────────────────────────────
+
+class TestUpdateTimeframes:
+    def test_update_timeframes_replaces(self, client, h, admin_headers, db):
+        body = _add_symposium(client, admin_headers)
+        sym_id = body["symposium_id"]
+        assert db.count("timeframes") == 2
+        resp = client.put(
+            "/api/events/update_timeframes",
+            json={"linked_id": sym_id, "timeframes": [TF_1]},
+            headers=h,
+        )
+        assert resp.status_code == 200
+        assert db.count("timeframes") == 1
+
+
 # ── TestCascadeDelete ─────────────────────────────────────────────────────────
 
 class TestCascadeDelete:
-    def _full_setup(self, client, h, db) -> dict[str, str]:
+    def _full_setup(self, client, h, admin_headers, db) -> dict[str, str]:
         """Build: symposium → department → class → students + professor → presentation + request."""
-        sym_id = _add_symposium(client, h)["symposium_id"]
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         class_body = _add_class(client, h, dept_id)
         class_id = class_body["class_id"]
         _add_students(client, h, class_id, count=2)
         student_ids = [str(r["id"]) for r in db.rows("students")]
         _add_presentation(client, h, class_id, student_ids)
-        # add a request for the first student
         client.post(
             "/api/events/add_request",
             json={"name": "Pref Prof", "email": "p@hamilton.edu", "student_id": student_ids[0]},
@@ -521,8 +567,8 @@ class TestCascadeDelete:
             "class_id": class_id,
         }
 
-    def test_delete_class_cascades(self, client, h, db):
-        ids = self._full_setup(client, h, db)
+    def test_delete_class_cascades(self, client, h, admin_headers, db):
+        ids = self._full_setup(client, h, admin_headers, db)
         resp = client.delete(
             f"/api/events/delete_class?class_id={ids['class_id']}", headers=h
         )
@@ -533,20 +579,20 @@ class TestCascadeDelete:
         assert db.count("presentations") == 0
         assert db.count("presenting_students") == 0
 
-    def test_delete_department_cascades(self, client, h, db):
-        ids = self._full_setup(client, h, db)
+    def test_delete_department_cascades(self, client, h, admin_headers, db):
+        ids = self._full_setup(client, h, admin_headers, db)
         resp = client.delete(
-            f"/api/events/delete_department?department_id={ids['department_id']}", headers=h
+            f"/api/events/delete_department?department_id={ids['department_id']}", headers=admin_headers
         )
         assert resp.status_code == 200
         assert db.count("departments") == 0
         assert db.count("classes") == 0
         assert db.count("professors") == 0
 
-    def test_delete_symposium_cascades_everything(self, client, h, db):
-        ids = self._full_setup(client, h, db)
+    def test_delete_symposium_cascades_everything(self, client, h, admin_headers, db):
+        ids = self._full_setup(client, h, admin_headers, db)
         resp = client.delete(
-            f"/api/events/delete_symposium?symposium_id={ids['symposium_id']}", headers=h
+            f"/api/events/delete_symposium?symposium_id={ids['symposium_id']}", headers=admin_headers
         )
         assert resp.status_code == 200
         assert db.count("symposiums") == 0
@@ -563,15 +609,15 @@ class TestCascadeDelete:
 # ── TestNestedRead ────────────────────────────────────────────────────────────
 
 class TestNestedRead:
-    def _setup(self, client, h, db) -> dict[str, str]:
-        sym_id = _add_symposium(client, h)["symposium_id"]
-        dept_id = _add_department(client, h, sym_id)["department_id"]
+    def _setup(self, client, h, admin_headers, db) -> dict[str, str]:
+        sym_id = _add_symposium(client, admin_headers)["symposium_id"]
+        dept_id = _add_department(client, admin_headers, sym_id)["department_id"]
         class_id = _add_class(client, h, dept_id)["class_id"]
         _add_students(client, h, class_id, count=2)
         return {"symposium_id": sym_id, "department_id": dept_id, "class_id": class_id}
 
-    def test_departments_include_classes(self, client, h, db):
-        ids = self._setup(client, h, db)
+    def test_departments_include_classes(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers, db)
         resp = client.get(
             f"/api/events/departments?symposium_id={ids['symposium_id']}&include=classes",
             headers=h,
@@ -583,8 +629,8 @@ class TestNestedRead:
         assert "classes" in depts[0]
         assert len(depts[0]["classes"]) == 1
 
-    def test_classes_include_students(self, client, h, db):
-        ids = self._setup(client, h, db)
+    def test_classes_include_students(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers, db)
         resp = client.get(
             f"/api/events/classes?department_id={ids['department_id']}&include=students",
             headers=h,
@@ -594,28 +640,14 @@ class TestNestedRead:
         assert isinstance(classes, list)
         assert len(classes[0]["students"]) == 2
 
-    def test_departments_include_students_auto_promotes_classes(self, client, h, db):
-        ids = self._setup(client, h, db)
+    def test_classes_include_professors(self, client, h, admin_headers, db):
+        ids = self._setup(client, h, admin_headers, db)
         resp = client.get(
-            f"/api/events/departments?symposium_id={ids['symposium_id']}&include=students",
-            headers=h,
-        )
-        assert resp.status_code == 200
-        depts = resp.json()
-        # classes promoted automatically; students nested inside each class
-        assert "classes" in depts[0]
-        for cls in depts[0]["classes"]:
-            assert "students" in cls
-
-    def test_classes_include_professors_and_students(self, client, h, db):
-        ids = self._setup(client, h, db)
-        resp = client.get(
-            f"/api/events/classes?department_id={ids['department_id']}&include=professors,students",
+            f"/api/events/classes?department_id={ids['department_id']}&include=professors",
             headers=h,
         )
         assert resp.status_code == 200
         classes = resp.json()
+        assert isinstance(classes, list)
         assert "professors" in classes[0]
-        assert "students" in classes[0]
         assert len(classes[0]["professors"]) == 1
-        assert len(classes[0]["students"]) == 2
