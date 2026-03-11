@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type {
   CalendarDay,
   FacultyTab,
@@ -159,12 +159,8 @@ function ProfessorPageContent() {
   const hasSelectedProfessor = Boolean(selectedProfessorId);
   const identityReady = hasSelectedProfessor && !loadingIdentity && Boolean(professorName);
   const pageLocked = !hasSelectedProfessor || (!loadingIdentity && !professorName);
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(
-    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
-    [backendApiKey]
-  );
+  const backendUrl = "/api/backend";
+  const authHeaders = undefined;
 
   // Loads the students for a class from the backend.
   const fetchClassStudentNames = useCallback(

@@ -48,9 +48,8 @@ function timeLabel(start: string, end: string) {
 
 function HomeContent() {
   const searchParams = useSearchParams();
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(() => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined), [backendApiKey]);
+  const backendUrl = "/api/backend";
+  const authHeaders = undefined;
 
   const [symposia, setSymposia] = useState<SymposiumOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
@@ -124,6 +123,7 @@ function HomeContent() {
         const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as {
           detail?: string;
           departments?: DepartmentRecord[];
+          data?: DepartmentRecord[];
         };
 
         if (!symposiumRes.ok) throw new Error(symposiumPayload.detail ?? "Failed to load symposium schedule.");
@@ -138,7 +138,7 @@ function HomeContent() {
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
 
         if (departmentsRes.ok) {
-          const departmentRows = departmentsPayload.departments ?? [];
+          const departmentRows = departmentsPayload.departments ?? departmentsPayload.data ?? [];
           setDepartments(departmentRows);
 
           const classResponses = await Promise.all(

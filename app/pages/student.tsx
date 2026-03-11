@@ -34,8 +34,8 @@ function parseBackendDateTime(value: string) {
 
 // Renders the student page and manages its data and interactions.
 export default function StudentPage() {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
+  const backendUrl = "/api/backend";
+  const authHeaders = undefined;
   const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [loadingStudents, setLoadingStudents] = useState(false);
@@ -81,7 +81,7 @@ export default function StudentPage() {
       setIdentityMessage("");
       try {
         const studentsRes = await fetch(`${backendUrl}/api/events/students`, {
-          headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
+          headers: authHeaders,
         });
         const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; name?: string }> }
@@ -121,7 +121,7 @@ export default function StudentPage() {
     return () => {
       ignore = true;
     };
-  }, [backendApiKey, backendUrl]);
+  }, [authHeaders, backendUrl]);
 
   useEffect(() => {
     if (!selectedStudentId) {
@@ -150,18 +150,10 @@ export default function StudentPage() {
       setCalendarMessage("");
       try {
         const [studentsRes, classesRes, departmentsRes, symposiaRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/students`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/classes`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/departments`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/symposiums`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
+          fetch(`${backendUrl}/api/events/students`, { headers: authHeaders }),
+          fetch(`${backendUrl}/api/events/classes`, { headers: authHeaders }),
+          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
+          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
         ]);
 
         const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
@@ -204,9 +196,7 @@ export default function StudentPage() {
         if (classId) {
           const presentationsRes = await fetch(
             `${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(classId)}`,
-            {
-              headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-            }
+            { headers: authHeaders }
           );
           const presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
             | {
@@ -237,9 +227,7 @@ export default function StudentPage() {
 
         const symposiumTimeframesRes = await fetch(
           `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(symposiumId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
+          { headers: authHeaders }
         );
         const symposiumTimeframesPayload = (await symposiumTimeframesRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ start_time?: string; end_time?: string }> }
@@ -299,9 +287,7 @@ export default function StudentPage() {
 
         const studentTimeframesRes = await fetch(
           `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(selectedStudentId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
+          { headers: authHeaders }
         );
         const studentTimeframesPayload = (await studentTimeframesRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ start_time?: string; end_time?: string }> }
@@ -336,9 +322,7 @@ export default function StudentPage() {
         if (ignore) return;
         const requestsRes = await fetch(
           `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
+          { headers: authHeaders }
         );
         const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; name?: string; email?: string }> }
@@ -391,7 +375,7 @@ export default function StudentPage() {
     return () => {
       ignore = true;
     };
-  }, [backendApiKey, backendUrl, loadingStudents, selectedStudentId]);
+  }, [authHeaders, backendUrl, loadingStudents, selectedStudentId]);
 
   // Updates one availability cell in the grid.
   const setCell = (dayIndex: number, slotIndex: number, value: boolean) => {
@@ -425,7 +409,7 @@ export default function StudentPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(backendApiKey ? { "X-API-Key": backendApiKey } : {}),
+          ...(authHeaders ?? {}),
         },
         body: JSON.stringify({
           name: requestName,
@@ -448,9 +432,7 @@ export default function StudentPage() {
 
       const requestsRes = await fetch(
         `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
-        {
-          headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-        }
+        { headers: authHeaders }
       );
       const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
         | { data?: Array<{ id?: string; name?: string; email?: string }> }
