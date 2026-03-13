@@ -13,7 +13,7 @@ import type {
 const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
 
-const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
+const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
 function formatTimeLabel(slotIndex: number) {
   const totalMinutes = 9 * 60 + slotIndex * 15;
   const hour24 = Math.floor(totalMinutes / 60);
@@ -672,7 +672,7 @@ export default function AdminPage() {
       setDeployEventMessage("Add at least one department before deploying.");
       return;
     }
-    setDeployEventMessage("Deploy Event is not connected yet.");
+    setDeployEventMessage("Deploy is not connected yet.");
   };
 
   const resetCreateTabState = () => {
@@ -1192,7 +1192,7 @@ export default function AdminPage() {
                       onClick={handleDeployEvent}
                       className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#155622]"
                     >
-                      Deploy Event
+                      Deploy
                     </button>
                     {deployEventMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployEventMessage}</p> : null}
                   </div>

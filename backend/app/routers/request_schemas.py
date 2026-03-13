@@ -111,6 +111,7 @@ class AddDepartmentRequest(BaseModel):
 
 
 class ProfessorInit(BaseModel):
+    id: UUID | None = None
     name: str
     email: str
 

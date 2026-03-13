@@ -9,7 +9,7 @@ import type {
   ProfessorOption,
   UploadedStudent,
 } from "./types";
-const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
+const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
 
 // Converts a 15-minute slot index into a human-readable time label.
 function formatTimeLabel(slotIndex: number) {
@@ -148,6 +148,8 @@ function ProfessorPageContent() {
   const [savingEditedPresentationId, setSavingEditedPresentationId] = useState<string | null>(null);
   const [defaultPresentationDuration, setDefaultPresentationDuration] = useState<string>("");
   const [usePerPresentationDuration, setUsePerPresentationDuration] = useState<boolean>(false);
+  const [defaultBufferDuration, setDefaultBufferDuration] = useState<string>("");
+  const [usePerBufferDuration, setUsePerBufferDuration] = useState<boolean>(false);
   const [professorName, setProfessorName] = useState<string>("");
   const [classId, setClassId] = useState<string>("");
   const [className, setClassName] = useState<string>("");
@@ -547,15 +549,11 @@ function ProfessorPageContent() {
           )
         );
         if (uniqueDurations.length === 1) {
-          setUsePerPresentationDuration(false);
           setDefaultPresentationDuration(uniqueDurations[0]);
-        } else if (uniqueDurations.length > 1) {
-          setUsePerPresentationDuration(true);
-          setDefaultPresentationDuration("");
         } else {
-          setUsePerPresentationDuration(false);
           setDefaultPresentationDuration("");
         }
+        setUsePerPresentationDuration(false);
         setGroupMessage("");
         setCalendarDays(nextCalendarDays);
         setCalendarMessage(nextCalendarDays.length === 0 ? "No symposium dates are configured yet." : "");
@@ -931,6 +929,7 @@ function ProfessorPageContent() {
         studentNames: selectedNames,
         presentationName: "",
         durationMinutes: "",
+        bufferMinutes: "",
       },
     ]);
     setUploadedStudents((current) => current.filter((student) => !selectedUploadedStudentKeys.includes(student.id)));
@@ -951,6 +950,14 @@ function ProfessorPageContent() {
       current.map((group) => (group.id === groupId ? { ...group, durationMinutes: value } : group))
     );
   };
+
+  // Updates the buffer duration of a draft presentation group.
+  const setPresentationGroupBuffer = (groupId: string, value: string) => {
+    setPresentationGroups((current) =>
+      current.map((group) => (group.id === groupId ? { ...group, bufferMinutes: value } : group))
+    );
+  };
+
 
   // Returns students from a removed group back to the available student list.
   const restoreStudentsFromGroup = (target: PresentationGroup) => {
@@ -1539,28 +1546,55 @@ function ProfessorPageContent() {
                   {presentationGroups.length > 0 ? (
                     <div className="mt-4 space-y-3">
                       <div className="rounded-lg border border-[#cfd8ff] bg-white p-3">
-                        <label className="flex flex-col gap-1">
-                          <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                            Presentation Duration (Minutes)
-                          </span>
-                          <input
-                            type="number"
-                            min={1}
-                            value={defaultPresentationDuration}
-                            onChange={(event) => setDefaultPresentationDuration(event.target.value)}
-                            placeholder="e.g. 15"
-                            disabled={usePerPresentationDuration}
-                            className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:bg-[#f3f4f6]"
-                          />
-                        </label>
-                        <label className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-[#1f2937]">
-                          <input
-                            type="checkbox"
-                            checked={usePerPresentationDuration}
-                            onChange={(event) => setUsePerPresentationDuration(event.target.checked)}
-                          />
-                          Set duration per presentation
-                        </label>
+                        <div className="flex gap-4">
+                          <div className="flex flex-1 flex-col gap-1">
+                            <label className="flex flex-col gap-1">
+                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                                Presentation Duration (Minutes)
+                              </span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={defaultPresentationDuration}
+                                onChange={(event) => setDefaultPresentationDuration(event.target.value)}
+                                placeholder="e.g. 15"
+                                disabled={usePerPresentationDuration}
+                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:bg-[#f3f4f6]"
+                              />
+                            </label>
+                            <label className="inline-flex items-center gap-2 text-sm font-semibold text-[#1f2937]">
+                              <input
+                                type="checkbox"
+                                checked={usePerPresentationDuration}
+                                onChange={(event) => setUsePerPresentationDuration(event.target.checked)}
+                              />
+                              Set duration per presentation
+                            </label>
+                          </div>
+                          <div className="flex flex-1 flex-col gap-1">
+                            <label className="flex flex-col gap-1">
+                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                                Buffer Duration (Minutes)
+                              </span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={defaultBufferDuration}
+                                onChange={(event) => setDefaultBufferDuration(event.target.value)}
+                                placeholder="e.g. 5"
+                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                              />
+                            </label>
+                            <label className="inline-flex items-center gap-2 text-sm font-semibold text-[#1f2937]">
+                              <input
+                                type="checkbox"
+                                checked={usePerBufferDuration}
+                                onChange={(event) => setUsePerBufferDuration(event.target.checked)}
+                              />
+                              Set duration per presentation
+                            </label>
+                          </div>
+                        </div>
                       </div>
                       {presentationGroups.map((group, groupIndex) => (
                         <div key={group.id} className="rounded-lg border border-[#cfd8ff] bg-white p-3">
@@ -1589,25 +1623,46 @@ function ProfessorPageContent() {
                               className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
                             />
                           </label>
-                          {usePerPresentationDuration ? (
-                            <label className="mt-2 flex flex-col gap-1">
-                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                                Duration (Minutes)
-                              </span>
-                              <input
-                                type="number"
-                                min={1}
-                                value={group.durationMinutes}
-                                onChange={(event) => setPresentationGroupDuration(group.id, event.target.value)}
-                                placeholder="e.g. 15"
-                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                              />
-                            </label>
-                          ) : (
-                            <p className="mt-2 text-sm font-semibold text-[#2d3d7a]">
-                              Duration: {defaultPresentationDuration.trim() ? `${defaultPresentationDuration} minutes` : "Not set"}
-                            </p>
-                          )}
+                          <div className="mt-2 flex gap-4">
+                            {usePerPresentationDuration ? (
+                              <label className="flex flex-1 flex-col gap-1">
+                                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                                  Duration (Minutes)
+                                </span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={group.durationMinutes}
+                                  onChange={(event) => setPresentationGroupDuration(group.id, event.target.value)}
+                                  placeholder="e.g. 15"
+                                  className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                                />
+                              </label>
+                            ) : (
+                              <p className="flex-1 text-sm font-semibold text-[#2d3d7a]">
+                                Duration: {defaultPresentationDuration.trim() ? `${defaultPresentationDuration} minutes` : "Not set"}
+                              </p>
+                            )}
+                            {usePerBufferDuration ? (
+                              <label className="flex flex-1 flex-col gap-1">
+                                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                                  Buffer (Minutes)
+                                </span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={group.bufferMinutes}
+                                  onChange={(event) => setPresentationGroupBuffer(group.id, event.target.value)}
+                                  placeholder="e.g. 5"
+                                  className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                                />
+                              </label>
+                            ) : (
+                              <p className="flex-1 text-sm font-semibold text-[#2d3d7a]">
+                                Buffer: {defaultBufferDuration.trim() ? `${defaultBufferDuration} minutes` : "Not set"}
+                              </p>
+                            )}
+                          </div>
                         </div>
                       ))}
                       <div className="pt-1">

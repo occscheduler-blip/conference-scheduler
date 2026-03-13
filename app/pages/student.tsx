@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { CalendarDay, SavedProfessorRequest, StudentOption, StudentTab } from "./types";
 
-const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
+const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
 
 // Converts a 15-minute slot index into a human-readable time label.
 function formatTimeLabel(slotIndex: number) {
@@ -58,6 +58,8 @@ export default function StudentPage() {
   const [savedProfessorRequests, setSavedProfessorRequests] = useState<SavedProfessorRequest[]>([]);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesMessage, setPreferencesMessage] = useState("");
+  const [savingAvailability, setSavingAvailability] = useState(false);
+  const [availabilityMessage, setAvailabilityMessage] = useState("");
   const identityReady = hasSelectedStudent && !loadingIdentity && Boolean(studentName);
 
   const isAvailabilityTab = activeTab === "availability";
@@ -136,6 +138,7 @@ export default function StudentPage() {
       setEditableSlots([]);
       setAvailability([]);
       setCalendarMessage("");
+      setAvailabilityMessage("");
       setPreferredProfessorName("");
       setPreferredProfessorEmail("");
       setSavedProfessorRequests([]);
@@ -148,6 +151,7 @@ export default function StudentPage() {
       setLoadingIdentity(true);
       setIdentityMessage("");
       setCalendarMessage("");
+      setAvailabilityMessage("");
       try {
         const [studentsRes, classesRes, departmentsRes, symposiaRes] = await Promise.all([
           fetch(`${backendUrl}/api/events/students`, { headers: authHeaders }),
@@ -461,6 +465,75 @@ export default function StudentPage() {
     }
   };
 
+  // Saves selected availability slots to the backend.
+  const handleSaveAvailability = async () => {
+    setAvailabilityMessage("");
+    if (!selectedStudentId) {
+      setAvailabilityMessage("Select a student first.");
+      return;
+    }
+    if (calendarDays.length === 0) {
+      setAvailabilityMessage("No symposium dates are configured yet.");
+      return;
+    }
+
+    const timeframes: Array<{ start_time: string; end_time: string }> = [];
+    for (let dayIndex = 0; dayIndex < calendarDays.length; dayIndex += 1) {
+      const day = calendarDays[dayIndex];
+      const [year, month, dayOfMonth] = day.key.split("-").map((part) => Number.parseInt(part, 10));
+      if (!year || !month || !dayOfMonth) continue;
+
+      for (let slotIndex = 0; slotIndex < totalSlots; slotIndex += 1) {
+        const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
+        const available = availability[dayIndex]?.[slotIndex] ?? false;
+        if (!editable || !available) continue;
+
+        const start = new Date(year, month - 1, dayOfMonth, 9, 0, 0, 0);
+        start.setMinutes(start.getMinutes() + slotIndex * 15);
+        const end = new Date(start);
+        end.setMinutes(end.getMinutes() + 15);
+
+        timeframes.push({
+          start_time: start.toISOString(),
+          end_time: end.toISOString(),
+        });
+      }
+    }
+
+    setSavingAvailability(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/events/update_timeframes`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeaders ?? {}),
+        },
+        body: JSON.stringify({
+          linked_id: selectedStudentId,
+          timeframes,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
+        const detail = payload.detail;
+        const text =
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg)).join("; ")
+              : "Unable to save availability.";
+        setAvailabilityMessage(`Save failed: ${text}`);
+        return;
+      }
+      setAvailabilityMessage(`Saved ${timeframes.length} availability slot${timeframes.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setAvailabilityMessage(`Save failed: ${message}`);
+    } finally {
+      setSavingAvailability(false);
+    }
+  };
+
   // Starts drag-editing availability from the clicked cell.
   const handleCellMouseDown = (dayIndex: number, slotIndex: number) => {
     if (!editableSlots[dayIndex]?.[slotIndex]) return;
@@ -649,6 +722,17 @@ export default function StudentPage() {
                 </div>
               </div>
               {calendarMessage ? <p className="mt-3 text-sm font-semibold text-[#9a1f1f]">{calendarMessage}</p> : null}
+              <div className="mt-4 flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveAvailability()}
+                  disabled={savingAvailability}
+                  className="rounded-lg bg-[#0f33a8] px-6 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingAvailability ? "Saving..." : "Save"}
+                </button>
+                {availabilityMessage ? <p className="text-sm font-semibold text-[#222]">{availabilityMessage}</p> : null}
+              </div>
             </div>
           ) : identityReady ? (
             <div className="mt-4 w-full max-w-4xl rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-4">
