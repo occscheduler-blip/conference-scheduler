@@ -87,6 +87,7 @@ export type PresentationGroup = {
   studentNames: string[];
   presentationName: string;
   durationMinutes: string;
+  bufferMinutes: string;
 };
 
 export type ProfessorOption = {

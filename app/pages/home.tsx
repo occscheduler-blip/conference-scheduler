@@ -59,11 +59,19 @@ function HomeContent() {
   const [presentations, setPresentations] = useState<PresentationRecord[]>([]);
   const [roomsAvailable, setRoomsAvailable] = useState(1);
   const [selectedDay, setSelectedDay] = useState("");
+  const [dayPage, setDayPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [locationFilter, setLocationFilter] = useState("");
   const [professorFilter, setProfessorFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [popupCard, setPopupCard] = useState<{
+    title: string;
+    timeframe: Timeframe | null;
+    room: string;
+    presenterNames: string[];
+    department: DepartmentRecord;
+  } | null>(null);
 
   const isLoggedIn = Boolean(
     searchParams.get("student_id") ||
@@ -103,6 +111,7 @@ function HomeContent() {
         setPresentations([]);
         setRoomsAvailable(1);
         setSelectedDay("");
+        setDayPage(0);
         return;
       }
 
@@ -263,6 +272,7 @@ function HomeContent() {
 
         const days = Array.from(new Set(list.map((item) => dayKey(parseBackendDateTime(item.start_time)))));
         setSelectedDay(days[0] ?? "");
+        setDayPage(0);
         if (list.length === 0) setMessage("No presentation times posted for this symposium yet.");
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Unknown error";
@@ -411,49 +421,70 @@ function HomeContent() {
         </div>
 
         <section className="overflow-hidden rounded-lg border-4 border-[#1635a7] bg-[#1635a7]">
-          <div className="grid grid-cols-1 md:grid-cols-5">
-            {days.map((day) => {
-              const active = day === selectedDay;
-              return (
-                <button
-                  key={day}
-                  type="button"
-                  onClick={() => setSelectedDay(day)}
-                  className={`border-b border-r border-[#1635a7] px-4 py-3 text-left text-lg leading-tight ${
-                    active ? "bg-white text-[#111]" : "bg-[#1635a7] text-white"
-                  }`}
-                >
-                  {dayLabel(day)}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto]">
-            <button type="button" className="border-r border-t border-[#1635a7] bg-white px-4 py-2 text-xl font-semibold text-[#111]">
-              Filter
-            </button>
-            {isLoggedIn ? (
-              <button type="button" className="border-t border-[#1635a7] bg-white px-6 py-2 text-xl font-semibold text-[#111]">
-                My Itinerary
+          <div className="flex items-stretch">
+            {days.length > 4 ? (
+              <button
+                type="button"
+                onClick={() => setDayPage((p) => p - 1)}
+                disabled={dayPage === 0}
+                className="flex items-center justify-center px-3 text-white disabled:opacity-30 hover:bg-[#0b2a8d]"
+                aria-label="Previous days"
+              >
+                &#8592;
+              </button>
+            ) : null}
+            <div className="grid flex-1 grid-cols-1 md:grid-cols-4">
+              {days.slice(dayPage * 4, (dayPage + 1) * 4).map((day) => {
+                const active = day === selectedDay;
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => setSelectedDay(day)}
+                    className={`whitespace-nowrap border-b border-r border-[#1635a7] px-4 py-3 text-left text-lg leading-tight ${
+                      active ? "bg-white text-[#111]" : "bg-[#1635a7] text-white"
+                    }`}
+                  >
+                    {dayLabel(day)}
+                  </button>
+                );
+              })}
+            </div>
+            {days.length > 4 ? (
+              <button
+                type="button"
+                onClick={() => setDayPage((p) => p + 1)}
+                disabled={(dayPage + 1) * 4 >= days.length}
+                className="flex items-center justify-center px-3 text-white disabled:opacity-30 hover:bg-[#0b2a8d]"
+                aria-label="Next days"
+              >
+                &#8594;
               </button>
             ) : null}
           </div>
+
+          {isLoggedIn ? (
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto]">
+              <button type="button" className="border-t border-[#1635a7] bg-white px-6 py-2 text-xl font-semibold text-[#111]">
+                My Itinerary
+              </button>
+            </div>
+          ) : null}
         </section>
 
         <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
           <input
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search title, professor, or department"
-            className="rounded-full border border-[#d7b980] bg-white px-4 py-2 text-xl"
+            placeholder="Search title, student, professor, or department"
+            className="rounded-full border border-[#d7b980] bg-white px-4 py-2 text-xl text-[#111]"
           />
           <div className="rounded-3xl border border-[#d7b980] bg-white p-3 text-lg">
             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
               <select
                 value={locationFilter}
                 onChange={(event) => setLocationFilter(event.target.value)}
-                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base"
+                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base text-[#111]"
               >
                 <option value="">Location</option>
                 {filterOptions.locations.map((option) => (
@@ -465,7 +496,7 @@ function HomeContent() {
               <select
                 value={professorFilter}
                 onChange={(event) => setProfessorFilter(event.target.value)}
-                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base"
+                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base text-[#111]"
               >
                 <option value="">Advisor/Professor</option>
                 {filterOptions.professors.map((option) => (
@@ -477,7 +508,7 @@ function HomeContent() {
               <select
                 value={departmentFilter}
                 onChange={(event) => setDepartmentFilter(event.target.value)}
-                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base"
+                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base text-[#111]"
               >
                 <option value="">Department</option>
                 {filterOptions.departments.map((option) => (
@@ -514,7 +545,15 @@ function HomeContent() {
                   {timeframe ? timeLabel(timeframe.start_time, timeframe.end_time) : "Time TBD"}
                 </div>
                 <div className="px-4 py-3">
-                  <h3 className="text-3xl font-extrabold text-[#111]">{title}</h3>
+                  <h3 className="text-3xl font-extrabold text-[#111]">
+                    <button
+                      type="button"
+                      onClick={() => setPopupCard({ title, timeframe, room, presenterNames: safePresenterNames, department })}
+                      className="text-left underline hover:text-[#1635a7]"
+                    >
+                      {title}
+                    </button>
+                  </h3>
                   <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xl text-[#111]">
                     <span>{room}</span>
                     {safePresenterNames.length > 0 ? (
@@ -531,6 +570,41 @@ function HomeContent() {
           })}
         </div>
       </div>
+
+      {popupCard ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setPopupCard(null)}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border border-[#d6b676] bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-[#1635a7] px-5 py-3 text-xl font-semibold text-white">
+              {popupCard.timeframe ? timeLabel(popupCard.timeframe.start_time, popupCard.timeframe.end_time) : "Time TBD"}
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <h2 className="text-2xl font-extrabold text-[#111]">{popupCard.title}</h2>
+              <div className="text-lg text-[#333] space-y-1">
+                <p><span className="font-semibold">Location:</span> {popupCard.room}</p>
+                <p><span className="font-semibold">Department:</span> {popupCard.department.department_name}</p>
+                <p><span className="font-semibold">Advisor:</span> {popupCard.department.department_head_name}</p>
+                <p>
+                  <span className="font-semibold">Presenters:</span>{" "}
+                  {popupCard.presenterNames.length > 0 ? popupCard.presenterNames.join(", ") : "TBD"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPopupCard(null)}
+                className="mt-2 rounded-lg bg-[#1635a7] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b2a8d]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

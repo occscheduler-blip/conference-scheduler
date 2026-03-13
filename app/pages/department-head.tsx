@@ -35,13 +35,15 @@ function DepartmentHeadPageContent() {
   const [className, setClassName] = useState("");
   const [professors, setProfessors] = useState<ProfessorRow[]>([{ name: "", email: "" }]);
   const [savedClasses, setSavedClasses] = useState<SavedClass[]>([]);
-  const [deployedClassIds, setDeployedClassIds] = useState<string[]>([]);
+  const [deployMessage, setDeployMessage] = useState<string>("");
 
   const [editingLocalId, setEditingLocalId] = useState<string>("");
   const [editingClassName, setEditingClassName] = useState<string>("");
   const [editingDepartmentId, setEditingDepartmentId] = useState<string>("");
   const [editingProfessors, setEditingProfessors] = useState<ProfessorRow[]>([]);
 
+  const [departmentHeadById, setDepartmentHeadById] = useState<Map<string, { name: string; email: string }>>(new Map());
+  const [isSelfProfessor, setIsSelfProfessor] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingLocalId, setDeletingLocalId] = useState<string>("");
@@ -53,10 +55,6 @@ function DepartmentHeadPageContent() {
     [selectedSymposiumId, symposiumOptions]
   );
 
-  const deployedStorageKey = useMemo(
-    () => `deployed_classes_${selectedSymposiumId || departmentIdFromLink || "global"}`,
-    [departmentIdFromLink, selectedSymposiumId]
-  );
 
   useEffect(() => {
     let ignore = false;
@@ -145,8 +143,8 @@ function DepartmentHeadPageContent() {
           { headers: authHeaders }
         );
         const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
-          | Array<{ id?: string; department_name?: string; symposium_id?: string }>;
+          | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string; department_head_name?: string; email?: string }> }
+          | Array<{ id?: string; department_name?: string; symposium_id?: string; department_head_name?: string; email?: string }>;
         if (!departmentsRes.ok) {
           throw new Error(toMessage((departmentsPayload as { detail?: unknown }).detail, "Failed to load departments."));
         }
@@ -155,6 +153,11 @@ function DepartmentHeadPageContent() {
         const nextDepartments = departmentRows
           .filter((row) => row.id)
           .map((row) => ({ id: row.id as string, name: row.department_name ?? (row.id as string) }));
+        const nextDepartmentHeadById = new Map(
+          departmentRows
+            .filter((row) => row.id && row.department_head_name)
+            .map((row) => [row.id as string, { name: row.department_head_name as string, email: row.email ?? "" }])
+        );
 
         const classesByDepartment = await Promise.all(
           nextDepartments.map(async (department) => {
@@ -238,6 +241,7 @@ function DepartmentHeadPageContent() {
 
         if (ignore) return;
         setDepartments(nextDepartments);
+        setDepartmentHeadById(nextDepartmentHeadById);
         setSavedClasses(savedClassResults);
         setSelectedDepartmentId((current) => {
           if (current && nextDepartments.some((department) => department.id === current)) return current;
@@ -262,44 +266,17 @@ function DepartmentHeadPageContent() {
     };
   }, [authHeaders, backendUrl, departmentIdFromLink, selectedSymposiumId]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const raw = window.localStorage.getItem(deployedStorageKey);
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw) as string[];
-      if (Array.isArray(parsed)) {
-        setDeployedClassIds(parsed.filter((id) => typeof id === "string" && id.length > 0));
-      }
-    } catch {
-      setDeployedClassIds([]);
-    }
-  }, [deployedStorageKey]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(deployedStorageKey, JSON.stringify(deployedClassIds));
-  }, [deployedClassIds, deployedStorageKey]);
-
-  useEffect(() => {
-    if (savedClasses.length === 0) return;
-    const savedIds = new Set(savedClasses.map((savedClass) => savedClass.classId));
-    setDeployedClassIds((current) => current.filter((classId) => savedIds.has(classId)));
-  }, [savedClasses]);
 
   const canSubmit = useMemo(() => {
     if (!selectedDepartmentId || !className.trim()) return false;
+    if (isSelfProfessor) return Boolean(departmentHeadById.get(selectedDepartmentId));
     return professors.some((prof) => prof.name.trim() && prof.email.trim());
-  }, [className, professors, selectedDepartmentId]);
+  }, [className, departmentHeadById, isSelfProfessor, professors, selectedDepartmentId]);
 
-  const pendingClasses = useMemo(
-    () => savedClasses.filter((savedClass) => !deployedClassIds.includes(savedClass.classId)),
-    [deployedClassIds, savedClasses]
-  );
-  const deployedClasses = useMemo(
-    () => savedClasses.filter((savedClass) => deployedClassIds.includes(savedClass.classId)),
-    [deployedClassIds, savedClasses]
-  );
+  const handleSelfProfessorChange = (checked: boolean) => {
+    setIsSelfProfessor(checked);
+  };
+
 
   const setProfessorField = (index: number, field: keyof ProfessorRow, value: string) => {
     setProfessors((current) => current.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
@@ -350,7 +327,6 @@ function DepartmentHeadPageContent() {
       }
 
       setSavedClasses((current) => current.filter((item) => item.localId !== savedClass.localId));
-      setDeployedClassIds((current) => current.filter((classId) => classId !== savedClass.classId));
       setMessage(`Deleted class "${savedClass.className}".`);
     } catch (error) {
       const text = error instanceof Error ? error.message : "Unknown error";
@@ -472,12 +448,8 @@ function DepartmentHeadPageContent() {
   };
 
   const handleDeployClasses = () => {
-    const toDeploy = pendingClasses.map((savedClass) => savedClass.classId);
-    if (toDeploy.length > 0) {
-      setDeployedClassIds((current) => Array.from(new Set([...current, ...toDeploy])));
-    }
-    setMessage(
-      "Deploy Class is not connected yet. It will send each professor an email link with their professor_id in the URL."
+    setDeployMessage(
+      "Deploy is not connected yet. It will send each professor an email link with their professor_id in the URL."
     );
   };
 
@@ -485,12 +457,18 @@ function DepartmentHeadPageContent() {
     event.preventDefault();
     setMessage("");
 
-    const cleanProfessors = professors
+    const headInfo = isSelfProfessor ? departmentHeadById.get(selectedDepartmentId) : undefined;
+    const headId = departmentIdFromLink || selectedDepartmentId;
+    const selfProfessorRow = headInfo ? { id: headId, name: headInfo.name, email: headInfo.email.trim().toLowerCase() } : null;
+
+    const otherProfessors = professors
       .map((professor) => ({
         name: professor.name.trim(),
         email: professor.email.trim().toLowerCase(),
       }))
       .filter((professor) => professor.name && professor.email);
+
+    const cleanProfessors = selfProfessorRow ? [selfProfessorRow, ...otherProfessors] : otherProfessors;
 
     if (!selectedDepartmentId) {
       setMessage("Select a department.");
@@ -551,6 +529,7 @@ function DepartmentHeadPageContent() {
       setSavedClasses((current) => [...current, newClass]);
       setClassName("");
       setProfessors([{ name: "", email: "" }]);
+      setIsSelfProfessor(false);
       setMessage(`Saved class "${newClass.className}" for ${departmentName}.`);
     } catch (error) {
       const text = error instanceof Error ? error.message : "Unknown error";
@@ -608,7 +587,7 @@ function DepartmentHeadPageContent() {
               <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Department</span>
               <select
                 value={selectedDepartmentId}
-                onChange={(event) => setSelectedDepartmentId(event.target.value)}
+                onChange={(event) => { setSelectedDepartmentId(event.target.value); setIsSelfProfessor(false); setProfessors([{ name: "", email: "" }]); }}
                 disabled={loading || departments.length === 0}
                 className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -660,6 +639,17 @@ function DepartmentHeadPageContent() {
               ))}
             </div>
 
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-[#2d3d7a]">
+              <input
+                type="checkbox"
+                checked={isSelfProfessor}
+                onChange={(event) => handleSelfProfessorChange(event.target.checked)}
+                disabled={!selectedDepartmentId}
+                className="h-4 w-4 rounded border-[#c7c7c7] accent-[#0f33a8]"
+              />
+              I am a professor of this class
+            </label>
+
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -686,7 +676,7 @@ function DepartmentHeadPageContent() {
                 Saved Classes
               </h3>
               <div className="mt-3 space-y-3">
-                {pendingClasses.map((savedClass) => (
+                {savedClasses.map((savedClass) => (
                   <div key={savedClass.localId} className="rounded-lg border border-[#d7e0ff] bg-white p-3">
                     {editingLocalId === savedClass.localId ? (
                       <div className="space-y-2">
@@ -793,44 +783,8 @@ function DepartmentHeadPageContent() {
                 >
                   Deploy
                 </button>
+                {deployMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployMessage}</p> : null}
               </div>
-              {deployedClasses.length > 0 ? (
-                <div className="mt-4 rounded-lg border border-[#d7e0ff] bg-white p-3">
-                  <h4 className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a] md:text-base">
-                    Deployed Classes
-                  </h4>
-                  <ul className="mt-2 space-y-2 text-sm text-[#222]">
-                    {deployedClasses.map((savedClass) => (
-                      <li key={`deployed-${savedClass.localId}`} className="rounded border border-[#cfd8ff] bg-[#fdfdff] p-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-[#111]">
-                            {savedClass.departmentName}: {savedClass.className}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => void removeSavedClass(savedClass)}
-                            disabled={deletingLocalId === savedClass.localId}
-                            className="rounded-lg border border-[#b7b7b7] bg-white px-2.5 py-1 text-xs font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
-                          >
-                            {deletingLocalId === savedClass.localId ? "Deleting..." : "Delete"}
-                          </button>
-                        </div>
-                        {savedClass.professors.length > 0 ? (
-                          <ul className="mt-1 space-y-1 text-xs text-[#444]">
-                            {savedClass.professors.map((professor, index) => (
-                              <li key={`deployed-prof-${savedClass.classId}-${index}`}>
-                                {professor.name} ({professor.email})
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="mt-1 text-xs text-[#666]">No professors listed.</p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
             </div>
           ) : null}
         </section>

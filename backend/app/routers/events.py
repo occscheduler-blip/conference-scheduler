@@ -93,7 +93,7 @@ def add_class(
         class_resp = write.insert("classes", [class_def.model_dump()])
         professors = [
             supabase_schemas.Professor(
-                id=uuid4(),
+                id=professor.id if professor.id is not None else uuid4(),
                 name=professor.name,
                 email=professor.email,
                 class_id=class_id,
