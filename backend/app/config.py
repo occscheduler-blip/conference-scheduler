@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     jwt_secret_key: str = ""
     jwt_ttl_hours: int = 24
 
+    resend_api_key: str = ""
+    resend_from: str = "noreply@hamilton.edu"
+
     @property
     def cors_origins(self) -> list[str]:
         return [

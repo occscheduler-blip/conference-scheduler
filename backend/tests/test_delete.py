@@ -1,12 +1,95 @@
 """Tests for supabase_io.delete cascade logic."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.supabase_io import delete
+
+
+# ── Shared helpers ─────────────────────────────────────────────────────────
+
+TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
+
+
+def _seed_full(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
+    """Build: symposium → department → class (+ professor) → students → presentation + request."""
+    resp = client.post(
+        "/api/events/add_symposium",
+        json={"symposium_name": "Symp", "rooms_available": 1, "timeframes": [TF_1]},
+        headers=h,
+    )
+    sym_id = resp.json()["symposium_id"]
+
+    resp = client.post(
+        "/api/events/add_department",
+        json={
+            "symposium_id": sym_id,
+            "department_name": "CS",
+            "department_head_name": "Dr. H",
+            "email": "h@hamilton.edu",
+        },
+        headers=h,
+    )
+    dept_id = resp.json()["department_id"]
+
+    resp = client.post(
+        "/api/events/add_class",
+        json={
+            "name": "CS101",
+            "department_id": dept_id,
+            "professors": [{"name": "Prof A", "email": "a@hamilton.edu"}],
+        },
+        headers=h,
+    )
+    class_id = resp.json()["class_id"]
+
+    client.post(
+        "/api/events/add_students",
+        json={
+            "class_id": class_id,
+            "students": [
+                {"name": "Stu 1", "email": "s1@hamilton.edu"},
+                {"name": "Stu 2", "email": "s2@hamilton.edu"},
+            ],
+        },
+        headers=h,
+    )
+    student_ids = [str(r["id"]) for r in db.rows("students")]
+
+    resp = client.post(
+        "/api/events/add_presentation",
+        json={
+            "title": "Talk",
+            "class_id": class_id,
+            "minutes": 15,
+            "presenting_students": student_ids,
+        },
+        headers=h,
+    )
+    pres_id = resp.json()["presentation_id"]
+
+    client.post(
+        "/api/events/add_request",
+        json={"name": "Prof P", "email": "p@hamilton.edu", "student_id": student_ids[0]},
+        headers=h,
+    )
+
+    prof_id = str(db.rows("professors")[0]["id"])
+
+    return {
+        "symposium_id": sym_id,
+        "department_id": dept_id,
+        "class_id": class_id,
+        "professor_id": prof_id,
+        "student_ids": student_ids,
+        "presentation_id": pres_id,
+    }
+
+
+# ── Pure unit tests (no DB needed) ────────────────────────────────────────
 
 
 class TestRowsAffectedDelete:
@@ -24,7 +107,7 @@ class TestRowsAffectedDelete:
 
 class TestMergeCounts:
     def test_merge_into_empty(self):
-        target = {}
+        target: dict[str, int] = {}
         delete._merge_counts(target, {"a": 1, "b": 2})
         assert target == {"a": 1, "b": 2}
 
@@ -39,7 +122,7 @@ class TestMergeCounts:
         assert target == {"a": 1}
 
     def test_negative_values_ignored(self):
-        target = {}
+        target: dict[str, int] = {}
         delete._merge_counts(target, {"a": -1, "b": 5})
         assert target == {"b": 5}
 
@@ -58,112 +141,107 @@ class TestSafeCount:
         assert delete._safe_count("bad") == 0
 
 
+# ── Docker Supabase cascade delete tests ──────────────────────────────────
+
+
 class TestDeleteTimeframes:
-    def test_calls_delete_with_uuid(self, mock_supabase):
-        uid = uuid4()
+    def test_deletes_timeframes_for_linked_id(self, client, h, db):
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={"symposium_name": "S", "rooms_available": 1, "timeframes": [TF_1]},
+            headers=h,
+        )
+        sym_id = resp.json()["symposium_id"]
+        assert db.count("timeframes") == 1
 
-        def _table(name):
-            table = MagicMock()
-            for m in ("select", "insert", "update", "delete", "eq", "in_", "limit"):
-                getattr(table, m).return_value = table
-            # The count query returns count=2
-            table.execute.return_value = SimpleNamespace(data=[], count=2)
-            return table
-
-        mock_supabase.table.side_effect = _table
-        result = delete.delete_timeframes(uid)
-        assert result == 2
+        result = delete.delete_timeframes(UUID(sym_id))
+        assert result >= 1
+        assert db.count("timeframes") == 0
 
 
 class TestDeleteStudent:
-    def test_returns_count_dict(self, mock_supabase):
-        uid = uuid4()
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=1
-        )
-        result = delete.delete_student(uid)
+    def test_returns_count_dict_and_removes_student(self, client, h, db):
+        ids = _seed_full(client, h, db)
+        student_id = UUID(ids["student_ids"][0])
+
+        result = delete.delete_student(student_id)
+        assert isinstance(result, dict)
         assert "students" in result
         assert "presenting_students" in result
-        assert "prof_requests" in result
+        assert "requests" in result
         assert "timeframes" in result
-        for key, val in result.items():
-            assert isinstance(val, int), f"{key} is not int: {val!r}"
-            assert val >= 0, f"{key} is negative: {val}"
+        for val in result.values():
+            assert isinstance(val, int) and val >= 0
+        assert db.count("students") == 1  # one of two removed
 
 
 class TestDeleteProfessor:
-    def test_returns_count_dict(self, mock_supabase):
-        uid = uuid4()
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=1
-        )
-        result = delete.delete_professor(uid)
+    def test_returns_count_dict_and_removes_professor(self, client, h, db):
+        ids = _seed_full(client, h, db)
+
+        result = delete.delete_professor(UUID(ids["professor_id"]))
+        assert isinstance(result, dict)
         assert "professors" in result
-        assert "prof_requests" in result
-        assert "timeframes" in result
-        for key, val in result.items():
-            assert isinstance(val, int), f"{key} is not int: {val!r}"
-            assert val >= 0, f"{key} is negative: {val}"
+        assert db.count("professors") == 0
 
 
 class TestDeletePresentation:
-    def test_returns_count_dict(self, mock_supabase):
-        uid = uuid4()
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=1
-        )
-        result = delete.delete_presentation(uid)
+    def test_returns_count_dict_and_removes_presentation(self, client, h, db):
+        ids = _seed_full(client, h, db)
+
+        result = delete.delete_presentation(UUID(ids["presentation_id"]))
+        assert isinstance(result, dict)
         assert "presentations" in result
         assert "presenting_students" in result
-        assert "timeframes" in result
-        for key, val in result.items():
-            assert isinstance(val, int), f"{key} is not int: {val!r}"
-            assert val >= 0, f"{key} is negative: {val}"
+        assert db.count("presentations") == 0
+        assert db.count("presenting_students") == 0
 
 
 class TestDeleteClass:
-    def test_cascade_empty_class(self, mock_supabase):
-        """Deleting a class with no students/professors/presentations."""
-        uid = uuid4()
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=0
-        )
-        result = delete.delete_class(uid)
-        assert "classes" in result
+    def test_cascade_removes_class_and_children(self, client, h, db):
+        ids = _seed_full(client, h, db)
 
-    def test_list_dispatches_to_multiple(self, mock_supabase):
-        uids = [uuid4(), uuid4()]
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=0
-        )
-        result = delete.delete_class(uids)
+        result = delete.delete_class(UUID(ids["class_id"]))
         assert isinstance(result, dict)
+        assert "classes" in result
+        assert db.count("classes") == 0
+        assert db.count("professors") == 0
+        assert db.count("students") == 0
+        assert db.count("presentations") == 0
+
+    def test_list_dispatches_to_multiple(self, client, h, db):
+        """Passing a list of UUIDs deletes all of them."""
+        ids = _seed_full(client, h, db)
+        result = delete.delete_class([UUID(ids["class_id"])])
+        assert isinstance(result, dict)
+        assert db.count("classes") == 0
 
 
 class TestDeleteDepartment:
-    def test_cascade_empty_department(self, mock_supabase):
-        uid = uuid4()
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=0
-        )
-        result = delete.delete_department(uid)
-        assert "departments" in result
+    def test_cascade_removes_department_and_children(self, client, h, db):
+        ids = _seed_full(client, h, db)
 
-    def test_list_dispatches(self, mock_supabase):
-        uids = [uuid4(), uuid4()]
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=0
-        )
-        result = delete.delete_department(uids)
+        result = delete.delete_department(UUID(ids["department_id"]))
         assert isinstance(result, dict)
+        assert "departments" in result
+        assert db.count("departments") == 0
+        assert db.count("classes") == 0
+
+    def test_list_dispatches(self, client, h, db):
+        ids = _seed_full(client, h, db)
+        result = delete.delete_department([UUID(ids["department_id"])])
+        assert isinstance(result, dict)
+        assert db.count("departments") == 0
 
 
 class TestDeleteSymposium:
-    def test_cascade_empty_symposium(self, mock_supabase):
-        uid = uuid4()
-        mock_supabase.table.return_value.execute.return_value = SimpleNamespace(
-            data=[], count=0
-        )
-        result = delete.delete_symposium(uid)
-        assert "symposia" in result
+    def test_cascade_removes_everything(self, client, h, db):
+        ids = _seed_full(client, h, db)
+
+        result = delete.delete_symposium(UUID(ids["symposium_id"]))
+        assert isinstance(result, dict)
         assert "timeframes" in result
+        assert db.count("symposiums") == 0
+        assert db.count("departments") == 0
+        assert db.count("classes") == 0
+        assert db.count("timeframes") == 0
