@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4, UUID
@@ -297,7 +297,7 @@ def add_presentation(
 ) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         presentation_id = uuid4()
-        presentation_payload = {
+        presentation_payload: dict[str, str | int | UUID | datetime | date | None] = {
             "id": presentation_id,
             "title": payload.title,
             "class_id": payload.class_id,
