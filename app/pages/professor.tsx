@@ -82,7 +82,7 @@ function parseCsvLine(line: string): string[] {
   return cells;
 }
 
-// Builds API URL variants to handle optional /api duplication.
+// AI template: URL normalization to handle optional /api path duplication across deployment environments.
 function buildCandidateUrls(baseUrl: string, path: string): string[] {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -166,6 +166,7 @@ function ProfessorPageContent() {
     [backendApiKey]
   );
 
+  // AI template: fetches and normalizes student names for a class, with URL fallback logic.
   // Loads the students for a class from the backend.
   const fetchClassStudentNames = useCallback(
     async (targetClassId: string) => {
@@ -271,7 +272,7 @@ function ProfessorPageContent() {
     }
 
     let ignore = false;
-    // Loads class/symposium identity data and existing availability/groups for the selected professor.
+    // AI template: loads identity, resolves the class/symposium chain, maps timeframes to calendar slots, loads uploaded students, and fetches deployed presentations.
     const loadIdentity = async () => {
       setLoadingIdentity(true);
       setIdentityMessage("");
@@ -693,6 +694,7 @@ function ProfessorPageContent() {
     }
   };
 
+  // AI template: parses a CSV file and uploads each student row to the backend for the current class.
   // Parses and uploads a CSV file of students for this class.
   async function handleCsvUpload(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();

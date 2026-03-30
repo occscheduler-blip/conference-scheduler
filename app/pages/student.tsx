@@ -143,7 +143,7 @@ export default function StudentPage() {
     }
 
     let ignore = false;
-    // Loads identity data, schedule data, and saved requests for the selected student.
+    // AI template: loads student identity, resolves the class/symposium chain, maps timeframes to calendar slots, and fetches saved preference requests.
     const loadStudent = async () => {
       setLoadingIdentity(true);
       setIdentityMessage("");
@@ -595,6 +595,7 @@ export default function StudentPage() {
             </p>
           ) : null}
 
+          {/* AI template: drag-to-edit availability calendar grid */}
           {isAvailabilityTab && identityReady ? (
             <div className="mt-4">
               <div className="mb-4 flex flex-wrap items-center gap-5 text-sm font-semibold text-[#333] md:text-base">
@@ -669,6 +670,7 @@ export default function StudentPage() {
               {calendarMessage ? <p className="mt-3 text-sm font-semibold text-[#9a1f1f]">{calendarMessage}</p> : null}
             </div>
           ) : identityReady ? (
+            
             <div className="mt-4 w-full max-w-4xl rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-4">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label className="flex flex-col gap-1">

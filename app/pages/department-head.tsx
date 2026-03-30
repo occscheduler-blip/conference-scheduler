@@ -140,6 +140,7 @@ function DepartmentHeadPageContent() {
     }
     let ignore = false;
 
+    // AI template: loads all classes and professors for each department via cascading parallel fetches.
     const loadSymposiumData = async () => {
       setLoading(true);
       setMessage("");
@@ -317,6 +318,7 @@ function DepartmentHeadPageContent() {
     setProfessors((current) => (current.length === 1 ? current : current.filter((_row, i) => i !== index)));
   };
 
+  // AI template: deletes a class and all linked professors from the backend, with a confirm dialog.
   const removeSavedClass = async (savedClass: SavedClass) => {
     const confirmed = window.confirm(`Delete class "${savedClass.className}"?`);
     if (!confirmed) return;
@@ -383,6 +385,7 @@ function DepartmentHeadPageContent() {
     setEditingProfessors((current) => current.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   };
 
+  // AI template: validates and updates a class and all its professors on the backend.
   const saveEditedClass = async (savedClass: SavedClass) => {
     const nextName = editingClassName.trim();
     if (!nextName) {
