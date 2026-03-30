@@ -102,6 +102,7 @@ function HomeContent() {
     void loadSymposia();
   }, [authHeaders, backendUrl]);
 
+  // AI template: loads all symposium schedule data in parallel — departments, classes, presentations, and students — and joins them for display.
   useEffect(() => {
     async function loadSymposiumDetails() {
       if (!selectedSymposiumId) {
@@ -287,6 +288,7 @@ function HomeContent() {
     void loadSymposiumDetails();
   }, [authHeaders, backendUrl, selectedSymposiumId]);
 
+  // AI template: derived state — groups presentations into display cards, builds filter options, and applies search/filter logic.
   const days = useMemo(
     () => Array.from(new Set(timeframes.map((item) => dayKey(parseBackendDateTime(item.start_time))))),
     [timeframes]

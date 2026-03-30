@@ -61,6 +61,7 @@ function toMessage(detail: unknown, fallback: string): string {
   return fallback;
 }
 
+// AI template: converts between the availability calendar grid and backend timeframe records.
 function buildCalendarDates(startDate: string, endDate: string) {
   if (!startDate || !endDate) return [] as Date[];
   const start = new Date(`${startDate}T00:00:00`);
@@ -378,6 +379,7 @@ export default function AdminPage() {
     );
   };
 
+  // AI template: creates or updates a symposium with a full set of timeframes derived from the grid.
   const handleCreateEventSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setCreateSaveMessage(null);
