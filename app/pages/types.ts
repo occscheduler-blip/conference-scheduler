@@ -1,6 +1,4 @@
-// Tab state for the admin page
-export type AdminTab = "create" | "edit";
-// Action state for department management (adding or editing a department)
+export type AdminTab = "create" | "edit" | "admins";
 export type DepartmentAction = "add" | "edit";
 // Tab state for the faculty/professor page
 export type FacultyTab = "availability" | "students";

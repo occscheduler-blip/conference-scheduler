@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CalendarDay,
   FacultyTab,
@@ -111,7 +110,7 @@ function isUuid(value: string) {
 }
 
 // Renders the professor page and manages its data and interactions.
-function ProfessorPageContent() {
+function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   const [activeTab, setActiveTab] = useState<FacultyTab>("availability");
   const [professorOptions, setProfessorOptions] = useState<ProfessorOption[]>([]);
   const [selectedProfessorId, setSelectedProfessorId] = useState<string>("");
@@ -162,7 +161,7 @@ function ProfessorPageContent() {
   const identityReady = hasSelectedProfessor && !loadingIdentity && Boolean(professorName);
   const pageLocked = !hasSelectedProfessor || (!loadingIdentity && !professorName);
   const backendUrl = "/api/backend";
-  const authHeaders = undefined;
+  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   // AI template: fetches and normalizes student names for a class, with URL fallback logic.
   // Loads the students for a class from the backend.
@@ -232,6 +231,7 @@ function ProfessorPageContent() {
         setProfessorOptions(nextProfessorOptions);
         setSelectedProfessorId((current) => {
           if (current && nextProfessorOptions.some((professor) => professor.id === current)) return current;
+          if (entityId && nextProfessorOptions.some((professor) => professor.id === entityId)) return entityId;
           return nextProfessorOptions[0]?.id ?? "";
         });
         if (nextProfessorOptions.length === 0) {
@@ -640,20 +640,34 @@ function ProfessorPageContent() {
       const [year, month, dayOfMonth] = day.key.split("-").map((part) => Number.parseInt(part, 10));
       if (!year || !month || !dayOfMonth) continue;
 
+      let rangeStart: Date | null = null;
+      let rangeEnd: Date | null = null;
+
       for (let slotIndex = 0; slotIndex < totalSlots; slotIndex += 1) {
         const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
         const available = availability[dayIndex]?.[slotIndex] ?? false;
-        if (!editable || !available) continue;
 
-        const start = new Date(year, month - 1, dayOfMonth, 9, 0, 0, 0);
-        start.setMinutes(start.getMinutes() + slotIndex * 15);
-        const end = new Date(start);
-        end.setMinutes(end.getMinutes() + 15);
+        if (editable && available) {
+          const slotStart = new Date(year, month - 1, dayOfMonth, 9, 0, 0, 0);
+          slotStart.setMinutes(slotStart.getMinutes() + slotIndex * 15);
+          const slotEnd = new Date(slotStart);
+          slotEnd.setMinutes(slotEnd.getMinutes() + 15);
 
-        timeframes.push({
-          start_time: start.toISOString(),
-          end_time: end.toISOString(),
-        });
+          if (!rangeStart) {
+            rangeStart = slotStart;
+            rangeEnd = slotEnd;
+          } else {
+            rangeEnd = slotEnd;
+          }
+        } else if (rangeStart && rangeEnd) {
+          timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
+          rangeStart = null;
+          rangeEnd = null;
+        }
+      }
+
+      if (rangeStart && rangeEnd) {
+        timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
       }
     }
 
@@ -1243,12 +1257,13 @@ function ProfessorPageContent() {
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
-          <Link
-            href="/pages?view=home"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-red-500 hover:bg-red-500 hover:text-white"
           >
-            Home
-          </Link>
+            Sign Out
+          </button>
         </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
@@ -1783,10 +1798,10 @@ function ProfessorPageContent() {
 }
 
 // Wraps the professor page content in a suspense boundary.
-export default function ProfessorPage() {
+export default function ProfessorPage({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   return (
     <Suspense fallback={<main className="min-h-screen bg-[#f5f5f5] px-4 py-8">Loading...</main>}>
-      <ProfessorPageContent />
+      <ProfessorPageContent token={token} onSignOut={onSignOut} entityId={entityId} />
     </Suspense>
   );
 }

@@ -90,16 +90,48 @@ class TestHealth:
 # ── TestAuth ─────────────────────────────────────────────────────────────────
 
 class TestAuth:
-    def test_no_key_returns_401(self, client):
+    def test_public_get_no_token_ok(self, client):
+        """GET endpoints are public — no token required."""
         resp = client.get("/api/events/symposiums")
+        assert resp.status_code == 200
+
+    def test_no_token_returns_401_on_protected(self, client):
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={"symposium_name": "S", "rooms_available": 1, "timeframes": []},
+        )
         assert resp.status_code == 401
 
-    def test_wrong_key_returns_401(self, client):
-        resp = client.get("/api/events/symposiums", headers={"X-API-Key": "wrong"})
+    def test_wrong_token_returns_401(self, client):
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={"symposium_name": "S", "rooms_available": 1, "timeframes": []},
+            headers={"Authorization": "Bearer bad-token"},
+        )
         assert resp.status_code == 401
 
-    def test_valid_key_accepted(self, client, h):
-        resp = client.get("/api/events/symposiums", headers=h)
+    def test_wrong_role_returns_403(self, client):
+        from app.auth.jwt_utils import encode_jwt
+        student_token = encode_jwt("00000000-0000-0000-0000-000000000099", "s@hamilton.edu", "student")
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={
+                "symposium_name": "S", "rooms_available": 1,
+                "timeframes": [{"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}],
+            },
+            headers={"Authorization": f"Bearer {student_token}"},
+        )
+        assert resp.status_code == 403
+
+    def test_valid_token_accepted(self, client, h):
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={
+                "symposium_name": "S", "rooms_available": 1,
+                "timeframes": [{"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}],
+            },
+            headers=h,
+        )
         assert resp.status_code == 200
 
 

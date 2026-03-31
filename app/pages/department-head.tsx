@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { DepartmentOption, ProfessorRow, SavedClass } from "./types";
@@ -21,12 +20,12 @@ function toMessage(detail: unknown, fallback: string): string {
   return fallback;
 }
 
-function DepartmentHeadPageContent() {
+function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   const searchParams = useSearchParams();
   const symposiumIdFromLink = searchParams.get("symposium_id") ?? "";
   const departmentIdFromLink = searchParams.get("department_id") ?? "";
   const backendUrl = "/api/backend";
-  const authHeaders = undefined;
+  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   const [symposiumOptions, setSymposiumOptions] = useState<DepartmentOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState<string>("");
@@ -246,6 +245,9 @@ function DepartmentHeadPageContent() {
         setSavedClasses(savedClassResults);
         setSelectedDepartmentId((current) => {
           if (current && nextDepartments.some((department) => department.id === current)) return current;
+          if (entityId && nextDepartments.some((department) => department.id === entityId)) {
+            return entityId;
+          }
           if (departmentIdFromLink && nextDepartments.some((department) => department.id === departmentIdFromLink)) {
             return departmentIdFromLink;
           }
@@ -550,12 +552,13 @@ function DepartmentHeadPageContent() {
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
-          <Link
-            href="/pages?view=home"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-red-500 hover:bg-red-500 hover:text-white"
           >
-            Home
-          </Link>
+            Sign Out
+          </button>
         </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
@@ -796,10 +799,10 @@ function DepartmentHeadPageContent() {
   );
 }
 
-export default function DepartmentHeadPage() {
+export default function DepartmentHeadPage({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   return (
     <Suspense fallback={<main className="min-h-screen bg-[#f5f5f5] px-4 py-8">Loading...</main>}>
-      <DepartmentHeadPageContent />
+      <DepartmentHeadPageContent token={token} onSignOut={onSignOut} entityId={entityId} />
     </Suspense>
   );
 }

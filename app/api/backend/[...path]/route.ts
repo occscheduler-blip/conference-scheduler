@@ -31,14 +31,9 @@ function buildRequestHeaders(request: NextRequest) {
 
   request.headers.forEach((value, key) => {
     const lowerKey = key.toLowerCase();
-    if (hopByHopHeaders.has(lowerKey) || lowerKey === "x-api-key") return;
+    if (hopByHopHeaders.has(lowerKey)) return;
     headers.set(key, value);
   });
-
-  const backendApiKey = process.env.BACKEND_API_KEY;
-  if (backendApiKey) {
-    headers.set("X-API-Key", backendApiKey);
-  }
 
   return headers;
 }
@@ -66,13 +61,6 @@ async function forwardRequest(
       { status: 500 }
     );
   }
-  if (!process.env.BACKEND_API_KEY) {
-    return NextResponse.json(
-      { detail: "BACKEND_API_KEY is not configured." },
-      { status: 500 }
-    );
-  }
-
   const method = request.method.toUpperCase();
   const body =
     method === "GET" || method === "HEAD"

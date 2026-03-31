@@ -4,7 +4,9 @@ from typing import Any
 from uuid import uuid4, UUID
 from postgrest.base_request_builder import APIResponse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from app.auth.dependencies import require_jwt
+from app.auth.jwt_utils import JWTClaims
 from app.supabase_io import delete, read, write
 from app.supabase_io.nested_read import (
     CLASS_CHILDREN,
@@ -36,7 +38,9 @@ def _serialize_update_fields(fields: dict[str, object]) -> dict[str, Any]:
     return serialized
 
 
-def _rows_affected(response: APIResponse | dict[str, object] | None, fallback: int = 0) -> int:
+def _rows_affected(
+    response: APIResponse | dict[str, object] | None, fallback: int = 0
+) -> int:
     """Return rows affected from a Supabase response object or dict."""
     if response is None:
         return fallback
@@ -81,91 +85,15 @@ def _sum_counts(*groups: dict[str, int]) -> int:
     return total
 
 
-@router.post("/add_class")
-def add_class(
-    payload: request_schemas.AddClassRequest,
-) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
-    try:
-        class_id = uuid4()
-        class_def = supabase_schemas.Class(
-            id=class_id, name=payload.name, department_id=payload.department_id
-        )
-        class_resp = write.insert("classes", [class_def.model_dump()])
-        professors = [
-            supabase_schemas.Professor(
-                id=professor.id if professor.id is not None else uuid4(),
-                name=professor.name,
-                email=professor.email,
-                class_id=class_id,
-            )
-            for professor in payload.professors
-        ]
-        professors_payload = [professor.model_dump() for professor in professors]
-        prof_resp = write.insert("professors", professors_payload)
-        class_inserted = _rows_affected(class_resp, fallback=1)
-        professors_inserted = _rows_affected(
-            prof_resp, fallback=len(professors_payload)
-        )
-        records_inserted = {
-            "classes": class_inserted,
-            "professors": professors_inserted,
-        }
-        return {
-            "status": "Inserted",
-            "class_id": class_def.id,
-            "professor_ids": [professor.id for professor in professors],
-            "department_id": class_def.department_id,
-            "records_inserted": records_inserted,
-            "lines_edited": _sum_counts(records_inserted),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
-        ) from exc
-
-
-@router.post("/add_department")
-def add_department(
-    payload: request_schemas.AddDepartmentRequest,
-) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
-    try:
-        department = supabase_schemas.Department(
-            id=uuid4(),
-            department_name=payload.department_name,
-            department_head_name=payload.department_head_name,
-            email=payload.email,
-            symposium_id=payload.symposium_id,
-        )
-
-        resp = write.insert("departments", [department.model_dump()])
-        departments_inserted = _rows_affected(resp, fallback=1)
-        records_inserted = {"departments": departments_inserted}
-
-        return {
-            "status": "Inserted",
-            "department_id": department.id,
-            "symposium_id": department.symposium_id,
-            "records_inserted": records_inserted,
-            "lines_edited": _sum_counts(records_inserted),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
-        ) from exc
+# Admin Only
 
 
 @router.post("/add_symposium")
 def add_symposium(
     payload: request_schemas.AddSymposiumRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
+    # TODO: Make this endpoint for creating new symposia only, use update_symposium for making changes instead.
     """Validate symposium + timeframe data and insert into Supabase tables.
 
     Args:
@@ -255,8 +183,268 @@ def add_symposium(
         ) from exc
 
 
+@router.post("/add_department")
+def add_department(
+    payload: request_schemas.AddDepartmentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
+    try:
+        department = supabase_schemas.Department(
+            id=uuid4(),
+            department_name=payload.department_name,
+            department_head_name=payload.department_head_name,
+            email=payload.email,
+            symposium_id=payload.symposium_id,
+        )
+
+        resp = write.insert("departments", [department.model_dump()])
+        departments_inserted = _rows_affected(resp, fallback=1)
+        records_inserted = {"departments": departments_inserted}
+
+        return {
+            "status": "Inserted",
+            "department_id": department.id,
+            "symposium_id": department.symposium_id,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
+
+
+@router.put("/update_symposium")
+def update_symposium(
+    payload: request_schemas.UpdateSymposiumRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"symposium_id"},
+        )
+        if "symposium_name" in updates:
+            updates["name"] = updates.pop("symposium_name")
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("symposiums")
+            .update(update_payload)
+            .eq("id", str(payload.symposium_id))
+            .execute()
+        )
+        records_updated = {
+            "symposiums": _rows_affected(
+                update_resp, fallback=1 if update_payload else 0
+            )
+        }
+
+        return {
+            "status": "updated",
+            "symposium_id": str(payload.symposium_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update symposium: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_symposium")
+def delete_symposium(
+    symposium_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(
+            delete.delete_symposium(symposium_id), {"symposiums": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete symposium: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_department")
+def delete_department(
+    department_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(
+            delete.delete_department(department_id), {"departments": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete department: {exc}"
+        ) from exc
+
+
+# Admins and Department Heads
+
+
+@router.post("/add_class")
+def add_class(
+    payload: request_schemas.AddClassRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
+    try:
+        class_id = uuid4()
+        class_def = supabase_schemas.Class(
+            id=class_id, name=payload.name, department_id=payload.department_id
+        )
+        class_resp = write.insert("classes", [class_def.model_dump()])
+        professors = [
+            supabase_schemas.Professor(
+                id=uuid4(),
+                name=professor.name,
+                email=professor.email,
+                class_id=class_id,
+            )
+            for professor in payload.professors
+        ]
+        professors_payload = [professor.model_dump() for professor in professors]
+        prof_resp = write.insert("professors", professors_payload)
+        class_inserted = _rows_affected(class_resp, fallback=1)
+        professors_inserted = _rows_affected(
+            prof_resp, fallback=len(professors_payload)
+        )
+        records_inserted = {
+            "classes": class_inserted,
+            "professors": professors_inserted,
+        }
+        return {
+            "status": "Inserted",
+            "class_id": class_def.id,
+            "professor_ids": [professor.id for professor in professors],
+            "department_id": class_def.department_id,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
+
+
+@router.put("/update_department")
+def update_department(
+    payload: request_schemas.UpdateDepartmentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        update_payload = {
+            "department_name": payload.department_name,
+            "department_head_name": payload.department_head_name,
+            "email": payload.email,
+        }
+        update_resp = (
+            supabase.table("departments")
+            .update(update_payload)
+            .eq("id", str(payload.department_id))
+            .execute()
+        )
+        records_updated = {
+            "departments": _rows_affected(
+                update_resp, fallback=1 if update_payload else 0
+            )
+        }
+
+        return {
+            "status": "updated",
+            "department_id": str(payload.department_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update department: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_professor")
+def delete_professor(
+    professor_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(
+            delete.delete_professor(professor_id), {"professors": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete professor: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_class")
+def delete_class(
+    class_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete class: {exc}"
+        ) from exc
+
+
+# Admins, Department Heads, and Professors
+
+
 @router.post("/add_students")
-def add_students(payload: request_schemas.AddStudentsRequest) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
+def add_students(
+    payload: request_schemas.AddStudentsRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     """Adds a list of students to the students table in the database."""
     try:
         students: list[supabase_schemas.Student] = []
@@ -294,6 +482,7 @@ def add_students(payload: request_schemas.AddStudentsRequest) -> dict[str, str |
 @router.post("/add_presentation")
 def add_presentation(
     payload: request_schemas.AddPresentationRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         presentation_id = uuid4()
@@ -347,8 +536,172 @@ def add_presentation(
         ) from exc
 
 
+@router.put("/update_professor")
+def update_professor(
+    payload: request_schemas.UpdateProfessorRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"professor_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("professors")
+            .update(update_payload)
+            .eq("id", str(payload.professor_id))
+            .execute()
+        )
+        records_updated = {
+            "professors": _rows_affected(
+                update_resp, fallback=1 if update_payload else 0
+            )
+        }
+
+        return {
+            "status": "updated",
+            "professor_id": str(payload.professor_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update professor: {exc}"
+        ) from exc
+
+
+@router.put("/update_class")
+def update_class(
+    payload: request_schemas.UpdateClassRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"class_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("classes")
+            .update(update_payload)
+            .eq("id", str(payload.class_id))
+            .execute()
+        )
+        records_updated = {
+            "classes": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
+
+        return {
+            "status": "updated",
+            "class_id": str(payload.class_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update class: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_presentation")
+def delete_presentation(
+    presentation_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(
+            delete.delete_presentation(presentation_id), {"presentations": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete presentation: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_student")
+def delete_student(
+    student_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete student: {exc}"
+        ) from exc
+
+
+# Admins, Department Heads, Professors, and Students
+
+
+@router.put("/update_student")
+def update_student(
+    payload: request_schemas.UpdateStudentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"student_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("students")
+            .update(update_payload)
+            .eq("id", str(payload.student_id))
+            .execute()
+        )
+        records_updated = {
+            "students": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
+
+        return {
+            "status": "updated",
+            "student_id": str(payload.student_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update student: {exc}"
+        ) from exc
+
+
 @router.post("/add_request")
-def add_prof_request(payload: request_schemas.AddReqRequest) -> dict[str, str | int | dict[str, int]]:
+def add_request(
+    payload: request_schemas.AddReqRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+) -> dict[str, str | int | dict[str, int]]:
     try:
         request = supabase_schemas.Request(
             id=uuid4(),
@@ -379,7 +732,10 @@ def add_prof_request(payload: request_schemas.AddReqRequest) -> dict[str, str | 
 
 
 @router.put("/update_timeframes")
-def update_timeframes(payload: request_schemas.UpdateTimeframesRequest) -> dict[str, str | int | UUID | dict[str, int]]:
+def update_timeframes(
+    payload: request_schemas.UpdateTimeframesRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         deleted_timeframes = delete.delete_timeframes(payload.linked_id)
 
@@ -417,191 +773,11 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest) -> dict[
         ) from exc
 
 
-@router.put("/update_student")
-def update_student(payload: request_schemas.UpdateStudentRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"student_id"},
-        )
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("students")
-            .update(update_payload)
-            .eq("id", str(payload.student_id))
-            .execute()
-        )
-        records_updated = {
-            "students": _rows_affected(update_resp, fallback=1 if update_payload else 0)
-        }
-
-        return {
-            "status": "updated",
-            "student_id": str(payload.student_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update student: {exc}"
-        ) from exc
-
-
-@router.put("/update_professor")
-def update_professor(payload: request_schemas.UpdateProfessorRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"professor_id"},
-        )
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("professors")
-            .update(update_payload)
-            .eq("id", str(payload.professor_id))
-            .execute()
-        )
-        records_updated = {
-            "professors": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
-            )
-        }
-
-        return {
-            "status": "updated",
-            "professor_id": str(payload.professor_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update professor: {exc}"
-        ) from exc
-
-
-@router.put("/update_class")
-def update_class(payload: request_schemas.UpdateClassRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"class_id"},
-        )
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("classes")
-            .update(update_payload)
-            .eq("id", str(payload.class_id))
-            .execute()
-        )
-        records_updated = {
-            "classes": _rows_affected(update_resp, fallback=1 if update_payload else 0)
-        }
-
-        return {
-            "status": "updated",
-            "class_id": str(payload.class_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update class: {exc}"
-        ) from exc
-
-
-@router.put("/update_department")
-def update_department(payload: request_schemas.UpdateDepartmentRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        update_payload = {
-            "department_name": payload.department_name,
-            "department_head_name": payload.department_head_name,
-            "email": payload.email,
-        }
-        update_resp = (
-            supabase.table("departments")
-            .update(update_payload)
-            .eq("id", str(payload.department_id))
-            .execute()
-        )
-        records_updated = {
-            "departments": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
-            )
-        }
-
-        return {
-            "status": "updated",
-            "department_id": str(payload.department_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update department: {exc}"
-        ) from exc
-
-
-@router.put("/update_symposium")
-def update_symposium(payload: request_schemas.UpdateSymposiumRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"symposium_id"},
-        )
-        if "symposium_name" in updates:
-            updates["name"] = updates.pop("symposium_name")
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("symposiums")
-            .update(update_payload)
-            .eq("id", str(payload.symposium_id))
-            .execute()
-        )
-        records_updated = {
-            "symposiums": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
-            )
-        }
-
-        return {
-            "status": "updated",
-            "symposium_id": str(payload.symposium_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update symposium: {exc}"
-        ) from exc
-
-
 @router.put("/update_presentation")
-def update_presentation(payload: request_schemas.UpdatePresentationRequest) -> dict[str, str | int | bool | list[str] | dict[str, int]]:
+def update_presentation(
+    payload: request_schemas.UpdatePresentationRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+) -> dict[str, str | int | bool | list[str] | dict[str, int]]:
     try:
         updates = payload.model_dump(
             exclude_none=True,
@@ -672,6 +848,9 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest) -> d
         raise HTTPException(
             status_code=400, detail=f"Failed to update presentation: {exc}"
         ) from exc
+
+
+# Undecided/Not Sure
 
 
 @router.get("/symposiums")
@@ -809,114 +988,4 @@ def get_requests(student_id: UUID | None = None) -> APIResponse:
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Failed to get requests: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_symposium")
-def delete_symposium(symposium_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(
-            delete.delete_symposium(symposium_id), {"symposiums": 1}
-        )
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete symposium: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_department")
-def delete_department(department_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(
-            delete.delete_department(department_id), {"departments": 1}
-        )
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete department: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_class")
-def delete_class(class_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete class: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_student")
-def delete_student(student_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete student: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_professor")
-def delete_professor(professor_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(
-            delete.delete_professor(professor_id), {"professors": 1}
-        )
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete professor: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_presentation")
-def delete_presentation(presentation_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(
-            delete.delete_presentation(presentation_id), {"presentations": 1}
-        )
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete presentation: {exc}"
         ) from exc
