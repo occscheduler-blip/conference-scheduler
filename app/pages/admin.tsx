@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AdminTab,
@@ -81,16 +80,33 @@ function buildTimeframesFromGrid(dates: Date[], availability: boolean[][]) {
   const tuples: [string, string][] = [];
 
   for (let dayIndex = 0; dayIndex < dates.length; dayIndex += 1) {
+    let rangeStart: Date | null = null;
+    let rangeEnd: Date | null = null;
+
     for (let slotIndex = 0; slotIndex < totalSlots; slotIndex += 1) {
-      if (!availability[dayIndex]?.[slotIndex]) continue;
+      if (availability[dayIndex]?.[slotIndex]) {
+        const slotStart = new Date(dates[dayIndex]);
+        const startMinutes = 9 * 60 + slotIndex * 15;
+        slotStart.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
 
-      const start = new Date(dates[dayIndex]);
-      const startMinutes = 9 * 60 + slotIndex * 15;
-      start.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
+        const slotEnd = new Date(slotStart);
+        slotEnd.setMinutes(slotEnd.getMinutes() + 15);
 
-      const end = new Date(start);
-      end.setMinutes(end.getMinutes() + 15);
-      tuples.push([start.toISOString(), end.toISOString()]);
+        if (!rangeStart) {
+          rangeStart = slotStart;
+          rangeEnd = slotEnd;
+        } else {
+          rangeEnd = slotEnd;
+        }
+      } else if (rangeStart && rangeEnd) {
+        tuples.push([rangeStart.toISOString(), rangeEnd.toISOString()]);
+        rangeStart = null;
+        rangeEnd = null;
+      }
+    }
+
+    if (rangeStart && rangeEnd) {
+      tuples.push([rangeStart.toISOString(), rangeEnd.toISOString()]);
     }
   }
 
@@ -117,18 +133,25 @@ function gridFromTimeframes(timeframes: TimeframeRecord[]) {
     const dayIndex = dayIndexByKey.get(localDateString(start));
     if (dayIndex === undefined) continue;
 
-    const minutesFromStart = start.getHours() * 60 + start.getMinutes() - 9 * 60;
-    if (minutesFromStart < 0) continue;
-    const slotIndex = Math.floor(minutesFromStart / 15);
-    if (slotIndex >= 0 && slotIndex < totalSlots) availability[dayIndex][slotIndex] = true;
+    const startMinutes = start.getHours() * 60 + start.getMinutes();
+    const end = timeframe.end_time ? parseBackendDateTime(timeframe.end_time) : null;
+    const endMinutes = end && !Number.isNaN(end.getTime()) ? end.getHours() * 60 + end.getMinutes() : startMinutes + 15;
+    const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
+    const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
+
+    for (let offset = 0; offset < slotSpan; offset += 1) {
+      const slotIndex = startSlot + offset;
+      if (slotIndex >= 0 && slotIndex < totalSlots) availability[dayIndex][slotIndex] = true;
+    }
   }
 
   return { startDate, endDate, availability };
 }
 
-export default function AdminPage() {
+export default function AdminPage({ token, onSignOut }: { token: string; onSignOut: () => void }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
   const backendUrl = "/api/backend";
+  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   // Create event state
   const [createSymposiumName, setCreateSymposiumName] = useState("");
@@ -175,9 +198,17 @@ export default function AdminPage() {
   const [departmentMessageKind, setDepartmentMessageKind] = useState<"success" | "error" | null>(null);
   const [deployEventMessage, setDeployEventMessage] = useState<string | null>(null);
 
+  // Manage Admins tab state
+  const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [newAdminConfirmPassword, setNewAdminConfirmPassword] = useState("");
+  const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
+  const [adminMessage, setAdminMessage] = useState<string | null>(null);
+  const [adminMessageKind, setAdminMessageKind] = useState<"success" | "error" | null>(null);
+
   const isCreateTab = activeTab === "create";
+  const isEditTab = activeTab === "edit";
   const hasSelectedSymposium = Boolean(selectedSymposiumId.trim());
-  const authHeaders = undefined;
 
   const createCalendarDates = useMemo(
     () => buildCalendarDates(createStartDate, createEndDate),
@@ -662,6 +693,59 @@ export default function AdminPage() {
     setDepartmentMessageKind(null);
   };
 
+  const handleCreateAdmin = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAdminMessage(null);
+    setAdminMessageKind(null);
+
+    const trimmedEmail = newAdminEmail.trim().toLowerCase();
+    if (!trimmedEmail || !/^[^\s@]+@hamilton\.edu$/i.test(trimmedEmail)) {
+      setAdminMessage("Enter a valid @hamilton.edu email.");
+      setAdminMessageKind("error");
+      return;
+    }
+
+    if (!newAdminPassword || newAdminPassword.length < 8) {
+      setAdminMessage("Password must be at least 8 characters.");
+      setAdminMessageKind("error");
+      return;
+    }
+
+    if (newAdminPassword !== newAdminConfirmPassword) {
+      setAdminMessage("Passwords do not match.");
+      setAdminMessageKind("error");
+      return;
+    }
+
+    setIsCreatingAdmin(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/auth/admin/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        body: JSON.stringify({ email: trimmedEmail, password: newAdminPassword }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown; admin_id?: string };
+      if (!response.ok) {
+        setAdminMessage(toMessage(payload.detail, "Failed to create admin."));
+        setAdminMessageKind("error");
+        return;
+      }
+
+      setAdminMessage(`Admin created successfully (${trimmedEmail}).`);
+      setAdminMessageKind("success");
+      setNewAdminEmail("");
+      setNewAdminPassword("");
+      setNewAdminConfirmPassword("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setAdminMessage(`Request failed: ${message}`);
+      setAdminMessageKind("error");
+    } finally {
+      setIsCreatingAdmin(false);
+    }
+  };
+
   const handleDeployEvent = () => {
     setDeployEventMessage(null);
     if (!selectedSymposiumId) {
@@ -714,10 +798,23 @@ export default function AdminPage() {
     setDeployEventMessage(null);
   };
 
+  const resetAdminsTabState = () => {
+    setNewAdminEmail("");
+    setNewAdminPassword("");
+    setNewAdminConfirmPassword("");
+    setIsCreatingAdmin(false);
+    setAdminMessage(null);
+    setAdminMessageKind(null);
+  };
+
   const handleTabSwitch = (tab: AdminTab) => {
     setActiveTab(tab);
     if (tab === "create") {
       resetCreateTabState();
+      return;
+    }
+    if (tab === "admins") {
+      resetAdminsTabState();
       return;
     }
     resetEditTabState();
@@ -728,12 +825,13 @@ export default function AdminPage() {
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
-          <Link
-            href="/pages?view=home"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-red-500 hover:bg-red-500 hover:text-white"
           >
-            Home
-          </Link>
+            Sign Out
+          </button>
         </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
@@ -741,7 +839,7 @@ export default function AdminPage() {
           </h1>
         </header>
 
-        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           <button
             type="button"
             onClick={() => handleTabSwitch("create")}
@@ -757,16 +855,85 @@ export default function AdminPage() {
             type="button"
             onClick={() => handleTabSwitch("edit")}
             className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
-              isCreateTab
-                ? "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
-                : "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+              isEditTab
+                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
             }`}
           >
             Edit Existing Event
           </button>
+          <button
+            type="button"
+            onClick={() => handleTabSwitch("admins")}
+            className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
+              activeTab === "admins"
+                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
+            }`}
+          >
+            Manage Admins
+          </button>
         </nav>
 
-        {isCreateTab ? (
+        {activeTab === "admins" ? (
+          <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+            <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Create New Admin</h2>
+
+            <form onSubmit={handleCreateAdmin} className="max-w-md space-y-4">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Email</span>
+                <input
+                  type="email"
+                  className={fieldClass}
+                  placeholder="name@hamilton.edu"
+                  value={newAdminEmail}
+                  onChange={(event) => setNewAdminEmail(event.target.value)}
+                  disabled={isCreatingAdmin}
+                />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Password</span>
+                <input
+                  type="password"
+                  className={fieldClass}
+                  placeholder="At least 8 characters"
+                  value={newAdminPassword}
+                  onChange={(event) => setNewAdminPassword(event.target.value)}
+                  disabled={isCreatingAdmin}
+                />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Confirm Password</span>
+                <input
+                  type="password"
+                  className={fieldClass}
+                  placeholder="Re-enter password"
+                  value={newAdminConfirmPassword}
+                  onChange={(event) => setNewAdminConfirmPassword(event.target.value)}
+                  disabled={isCreatingAdmin}
+                />
+              </label>
+
+              <button
+                type="submit"
+                disabled={isCreatingAdmin}
+                className="rounded-lg bg-[#0f33a8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60 md:text-base"
+              >
+                {isCreatingAdmin ? "Creating..." : "Create Admin"}
+              </button>
+
+              {adminMessage ? (
+                <p
+                  className={`text-sm font-semibold ${
+                    adminMessageKind === "error" ? "text-[#9a1f1f]" : "text-[#1f5132]"
+                  }`}
+                >
+                  {adminMessage}
+                </p>
+              ) : null}
+            </form>
+          </section>
+        ) : isCreateTab ? (
           <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
             <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Create New Event</h2>
 

@@ -1,10 +1,9 @@
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.routers.auth import router as auth_router
 from app.routers.events import router as events_router
-from app.security import require_api_key
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
@@ -28,5 +27,4 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(
     events_router,
     prefix="/api",
-    dependencies=[Depends(require_api_key)],
 )

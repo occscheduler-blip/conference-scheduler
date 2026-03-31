@@ -375,30 +375,12 @@ function HomeContent() {
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-4 py-6">
       <div className="mx-auto w-full max-w-6xl">
-        <div className="mb-4 flex flex-wrap justify-center gap-2">
+        <div className="mb-4 flex justify-center">
           <Link
-            href="/pages?view=admin"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+            href="/pages?view=login"
+            className="rounded-md border border-[#0f33a8] bg-[#0f33a8] px-6 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] md:text-base"
           >
-            Admin Page
-          </Link>
-          <Link
-            href="/pages?view=department-head"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
-          >
-            Department Head Page
-          </Link>
-          <Link
-            href="/pages?view=professor"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
-          >
-            Professor Page
-          </Link>
-          <Link
-            href="/pages?view=student"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
-          >
-            Student Page
+            Sign In
           </Link>
         </div>
 

@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CalendarDay, SavedProfessorRequest, StudentOption, StudentTab } from "./types";
 
 const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
@@ -33,9 +32,9 @@ function parseBackendDateTime(value: string) {
 }
 
 // Renders the student page and manages its data and interactions.
-export default function StudentPage() {
+export default function StudentPage({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   const backendUrl = "/api/backend";
-  const authHeaders = undefined;
+  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [loadingStudents, setLoadingStudents] = useState(false);
@@ -103,6 +102,7 @@ export default function StudentPage() {
         setStudentOptions(nextOptions);
         setSelectedStudentId((current) => {
           if (current && nextOptions.some((option) => option.id === current)) return current;
+          if (entityId && nextOptions.some((option) => option.id === entityId)) return entityId;
           return nextOptions[0]?.id ?? "";
         });
         if (nextOptions.length === 0) {
@@ -483,20 +483,34 @@ export default function StudentPage() {
       const [year, month, dayOfMonth] = day.key.split("-").map((part) => Number.parseInt(part, 10));
       if (!year || !month || !dayOfMonth) continue;
 
+      let rangeStart: Date | null = null;
+      let rangeEnd: Date | null = null;
+
       for (let slotIndex = 0; slotIndex < totalSlots; slotIndex += 1) {
         const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
         const available = availability[dayIndex]?.[slotIndex] ?? false;
-        if (!editable || !available) continue;
 
-        const start = new Date(year, month - 1, dayOfMonth, 9, 0, 0, 0);
-        start.setMinutes(start.getMinutes() + slotIndex * 15);
-        const end = new Date(start);
-        end.setMinutes(end.getMinutes() + 15);
+        if (editable && available) {
+          const slotStart = new Date(year, month - 1, dayOfMonth, 9, 0, 0, 0);
+          slotStart.setMinutes(slotStart.getMinutes() + slotIndex * 15);
+          const slotEnd = new Date(slotStart);
+          slotEnd.setMinutes(slotEnd.getMinutes() + 15);
 
-        timeframes.push({
-          start_time: start.toISOString(),
-          end_time: end.toISOString(),
-        });
+          if (!rangeStart) {
+            rangeStart = slotStart;
+            rangeEnd = slotEnd;
+          } else {
+            rangeEnd = slotEnd;
+          }
+        } else if (rangeStart && rangeEnd) {
+          timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
+          rangeStart = null;
+          rangeEnd = null;
+        }
+      }
+
+      if (rangeStart && rangeEnd) {
+        timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
       }
     }
 
@@ -554,12 +568,13 @@ export default function StudentPage() {
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
-          <Link
-            href="/pages?view=home"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-red-500 hover:bg-red-500 hover:text-white"
           >
-            Home
-          </Link>
+            Sign Out
+          </button>
         </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">

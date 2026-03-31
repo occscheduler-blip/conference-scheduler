@@ -1,4 +1,4 @@
-export type AdminTab = "create" | "edit";
+export type AdminTab = "create" | "edit" | "admins";
 export type DepartmentAction = "add" | "edit";
 export type FacultyTab = "availability" | "students";
 export type StudentTab = "availability" | "preferences";
