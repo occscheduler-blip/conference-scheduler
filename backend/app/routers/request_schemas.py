@@ -463,3 +463,6 @@ class UpdatePresentationRequest(BaseModel):
                 f"No more than {MAX_PRESENTING_STUDENTS} can present one presentation"
             )
         return presenting_students
+
+class RunSchedulerRequest(BaseModel):
+    symposium_id: UUID
