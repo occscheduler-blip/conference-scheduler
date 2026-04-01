@@ -460,7 +460,7 @@ def add_presentation(
             "title": payload.title,
             "class_id": payload.class_id,
             "minutes": payload.minutes,
-            "buffer": payload.buffer
+            "buffer": payload.buffer,
         }
         pres_resp = write.insert("presentations", [presentation_payload])
 
@@ -506,28 +506,58 @@ def add_presentation(
         ) from exc
 
 
-@router.put("/update_professor")
-def update_professor(
-    payload: request_schemas.UpdateProfessorRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
-) -> dict[str, str | int | list[str] | dict[str, int]]:
+@router.post("/add_request")
+def add_prof_request(payload: request_schemas.AddReqRequest) -> dict[str, str | int | dict[str, int]]:
     try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"professor_id"},
+        request = supabase_schemas.Request(
+            id=uuid4(),
+            name=payload.name,
+            email=payload.email,
+            student_id=payload.student_id,
         )
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("professors")
-            .update(update_payload)
-            .eq("id", str(payload.professor_id))
-            .execute()
-        )
-        records_updated = {
-            "professors": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
-            )
+
+        response = write.insert("requests", [request.model_dump()])
+        prof_requests_inserted = _rows_affected(response, fallback=1)
+        records_inserted = {"prof_requests": prof_requests_inserted}
+
+        return {
+            "status": "inserted",
+            "name": payload.name,
+            "email": payload.email,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
         }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
+
+
+@router.put("/update_timeframes")
+def update_timeframes(payload: request_schemas.UpdateTimeframesRequest) -> dict[str, str | int | UUID | dict[str, int]]:
+    try:
+        deleted_timeframes = delete.delete_timeframes(payload.linked_id)
+
+        timeframes = [
+            supabase_schemas.Timeframe(
+                id=uuid4(),
+                linked_id=payload.linked_id,
+                start_time=timeframe.start_time,
+                end_time=timeframe.end_time,
+            )
+            for timeframe in payload.timeframes
+        ]
+        timeframe_payload = [item.model_dump() for item in timeframes]
+        timeframe_resp = write.insert("timeframes", timeframe_payload)
+        timeframes_inserted = _rows_affected(
+            timeframe_resp, fallback=len(timeframe_payload)
+        )
+        records_deleted = {"timeframes": deleted_timeframes}
+        records_inserted = {"timeframes": timeframes_inserted}
 
         return {
             "status": "updated",

@@ -240,6 +240,7 @@ class AddPresentationRequest(BaseModel):
     title: str
     class_id: UUID
     minutes: int
+    buffer: int | None = None
     presenting_students: list[UUID]
     buffer: int
 
@@ -437,6 +438,7 @@ class UpdatePresentationRequest(BaseModel):
     title: str
     class_id: UUID
     minutes: int
+    buffer: int | None = None
     presenting_students: list[UUID]
     buffer: int
 
