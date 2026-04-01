@@ -17,7 +17,7 @@ def _seed_chain(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
     """Create symposium → department → class (+ professor) → students → presentation."""
     resp = client.post(
         "/api/events/add_symposium",
-        json={"symposium_name": "Symp", "rooms_available": 1, "timeframes": [TF_1]},
+        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
         headers=h,
     )
     sym_id = resp.json()["symposium_id"]
@@ -61,6 +61,7 @@ def _seed_chain(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
             "title": "My Talk",
             "class_id": class_id,
             "minutes": 15,
+            "buffer": 0,
             "presenting_students": [student_id],
         },
         headers=h,
@@ -112,7 +113,7 @@ class TestGetSymposiums:
     def test_returns_symposium_rows(self, client, h, db):
         client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "Spring", "rooms_available": 5, "timeframes": [TF_1]},
+            json={"symposium_name": "Spring", "rooms_available": 5, "default_buffer": 0, "timeframes": [TF_1]},
             headers=h,
         )
         result = read.get_symposiums()

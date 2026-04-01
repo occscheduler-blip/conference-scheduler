@@ -2,7 +2,8 @@ create table if not exists public.symposiums (
     id              uuid primary key default gen_random_uuid(),
     created_at      timestamptz not null default now(),
     name            text,
-    rooms_available smallint not null
+    rooms_available smallint not null,
+    default_buffer  smallint not null default 0
 );
 
 create table if not exists public.departments (

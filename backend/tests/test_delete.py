@@ -18,7 +18,7 @@ def _seed_full(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
     """Build: symposium → department → class (+ professor) → students → presentation + request."""
     resp = client.post(
         "/api/events/add_symposium",
-        json={"symposium_name": "Symp", "rooms_available": 1, "timeframes": [TF_1]},
+        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
         headers=h,
     )
     sym_id = resp.json()["symposium_id"]
@@ -65,6 +65,7 @@ def _seed_full(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
             "title": "Talk",
             "class_id": class_id,
             "minutes": 15,
+            "buffer": 0,
             "presenting_students": student_ids,
         },
         headers=h,
@@ -148,7 +149,7 @@ class TestDeleteTimeframes:
     def test_deletes_timeframes_for_linked_id(self, client, h, db):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "S", "rooms_available": 1, "timeframes": [TF_1]},
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
             headers=h,
         )
         sym_id = resp.json()["symposium_id"]

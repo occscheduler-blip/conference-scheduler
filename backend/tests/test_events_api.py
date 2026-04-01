@@ -36,7 +36,7 @@ def _seed_chain(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
     """Create symposium → department → class (+ professor) → students."""
     resp = client.post(
         "/api/events/add_symposium",
-        json={"symposium_name": "Symp", "rooms_available": 1, "timeframes": [TF_1]},
+        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
         headers=h,
     )
     sym_id = resp.json()["symposium_id"]
@@ -94,7 +94,7 @@ class TestValidation:
     def test_empty_symposium_name_rejected(self, client, h):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "", "rooms_available": 5, "timeframes": []},
+            json={"symposium_name": "", "rooms_available": 5, "default_buffer": 0, "timeframes": []},
             headers=h,
         )
         assert resp.status_code == 422
@@ -127,6 +127,7 @@ class TestValidation:
                 "title": "Talk",
                 "class_id": str(uuid4()),
                 "minutes": 999,
+                "buffer": 0,
                 "presenting_students": [],
             },
             headers=h,
@@ -149,17 +150,15 @@ class TestPostResponseShapes:
     def test_add_symposium_shape(self, client, h):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "Spring", "rooms_available": 5, "timeframes": [TF_1]},
+            json={"symposium_name": "Spring", "rooms_available": 5, "default_buffer": 0, "timeframes": [TF_1]},
             headers=h,
         )
         body = resp.json()
-        assert body["status"] == "saved"
+        assert body["status"] == "created"
         assert _is_uuid(body["symposium_id"])
         assert body["name"] == "Spring"
         assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
         _assert_counts(body["records_inserted"])
-        _assert_counts(body["records_updated"])
-        _assert_counts(body["records_deleted"])
 
     def test_add_department_shape(self, client, h, db):
         ids = _seed_chain(client, h, db)
@@ -227,6 +226,7 @@ class TestPostResponseShapes:
                 "title": "My Talk",
                 "class_id": ids["class_id"],
                 "minutes": 20,
+                "buffer": 0,
                 "presenting_students": ids["student_ids"],
             },
             headers=h,
@@ -269,6 +269,8 @@ class TestPutResponseShapes:
                 "symposium_id": ids["symposium_id"],
                 "symposium_name": "Fall",
                 "rooms_available": 10,
+                "default_buffer": 0,
+                "timeframes": [TF_1],
             },
             headers=h,
         )
@@ -278,6 +280,8 @@ class TestPutResponseShapes:
         assert isinstance(body["fields_updated"], list)
         assert isinstance(body["lines_edited"], int) and body["lines_edited"] >= 0
         _assert_counts(body["records_updated"])
+        _assert_counts(body["records_deleted"])
+        _assert_counts(body["records_inserted"])
 
     def test_update_department_shape(self, client, h, db):
         ids = _seed_chain(client, h, db)
@@ -321,6 +325,7 @@ class TestPutResponseShapes:
                 "title": "Talk",
                 "class_id": ids["class_id"],
                 "minutes": 15,
+                "buffer": 0,
                 "presenting_students": ids["student_ids"],
             },
             headers=h,
@@ -384,6 +389,7 @@ class TestPutResponseShapes:
                 "title": "Talk",
                 "class_id": ids["class_id"],
                 "minutes": 15,
+                "buffer": 0,
                 "presenting_students": ids["student_ids"],
             },
             headers=h,
@@ -397,6 +403,7 @@ class TestPutResponseShapes:
                 "title": "Updated Talk",
                 "class_id": ids["class_id"],
                 "minutes": 20,
+                "buffer": 0,
                 "presenting_students": [ids["student_ids"][0]],
             },
             headers=h,

@@ -25,8 +25,6 @@ class TimeframeWindow(BaseModel):
 
 
 class AddSymposiumRequest(BaseModel):
-    # TODO: Get rid of the option to set a symposium id
-    symposium_id: UUID | None = None
     symposium_name: str
     rooms_available: int
     timeframes: list[TimeframeWindow]
@@ -35,9 +33,9 @@ class AddSymposiumRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "symposium_id": "9e1fd0da-ea43-48f2-85df-5281a495f054",
                 "symposium_name": "Spring Symposium",
                 "rooms_available": 5,
+                "default_buffer": 3,
                 "timeframes": [
                     {
                         "start_time": "2026-04-20T09:00:00Z",
@@ -275,6 +273,7 @@ class AddPresentationRequest(BaseModel):
                 "title": "Bio Thesis Presentation",
                 "class_id": "a2d9911c-977b-457f-81dc-672490e4f2ab",
                 "minutes": 20,
+                "buffer": 3,
                 "presenting_students": [
                     "6015d279-a271-4d9d-9c8e-435731caac04",
                     "a4b08f01-9cea-4e35-9d9e-0e664f35d4ef",
@@ -394,6 +393,7 @@ class UpdateSymposiumRequest(BaseModel):
     symposium_name: str
     rooms_available: int
     default_buffer: int
+    timeframes: list[TimeframeWindow]
 
     @field_validator("symposium_name")
     @classmethod
@@ -409,6 +409,27 @@ class UpdateSymposiumRequest(BaseModel):
         if rooms_available > MAX_ROOMS:
             raise ValueError(f"You may not choose more than {MAX_ROOMS} rooms.")
         return rooms_available
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "symposium_id": "ba16476b-e00e-4eeb-98e6-d78be76bfd41",
+                "symposium_name": "Spring Symposium",
+                "rooms_available": 10,
+                "default_buffer": 3,
+                "timeframes": [
+                    {
+                        "start_time": "2026-04-20T09:00:00Z",
+                        "end_time": "2026-04-20T12:00:00Z",
+                    },
+                    {
+                        "start_time": "2026-04-21T13:00:00Z",
+                        "end_time": "2026-04-21T16:00:00Z",
+                    },
+                ]
+            },
+        }
+    )
 
 
 class UpdatePresentationRequest(BaseModel):

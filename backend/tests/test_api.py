@@ -13,7 +13,7 @@ def _add_symposium(client, h, name="Spring Symposium", rooms=5, timeframes=None)
         timeframes = [TF_1, TF_2]
     resp = client.post(
         "/api/events/add_symposium",
-        json={"symposium_name": name, "rooms_available": rooms, "timeframes": timeframes},
+        json={"symposium_name": name, "rooms_available": rooms, "default_buffer": 0, "timeframes": timeframes},
         headers=h,
     )
     assert resp.status_code == 200, resp.text
@@ -70,6 +70,7 @@ def _add_presentation(client, h, class_id, student_ids):
             "title": "Test Presentation",
             "class_id": class_id,
             "minutes": 20,
+            "buffer": 0,
             "presenting_students": student_ids,
         },
         headers=h,
@@ -98,14 +99,14 @@ class TestAuth:
     def test_no_token_returns_401_on_protected(self, client):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "S", "rooms_available": 1, "timeframes": []},
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": []},
         )
         assert resp.status_code == 401
 
     def test_wrong_token_returns_401(self, client):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "S", "rooms_available": 1, "timeframes": []},
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": []},
             headers={"Authorization": "Bearer bad-token"},
         )
         assert resp.status_code == 401
@@ -116,7 +117,7 @@ class TestAuth:
         resp = client.post(
             "/api/events/add_symposium",
             json={
-                "symposium_name": "S", "rooms_available": 1,
+                "symposium_name": "S", "rooms_available": 1, "default_buffer": 0,
                 "timeframes": [{"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}],
             },
             headers={"Authorization": f"Bearer {student_token}"},
@@ -127,7 +128,7 @@ class TestAuth:
         resp = client.post(
             "/api/events/add_symposium",
             json={
-                "symposium_name": "S", "rooms_available": 1,
+                "symposium_name": "S", "rooms_available": 1, "default_buffer": 0,
                 "timeframes": [{"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}],
             },
             headers=h,
@@ -140,7 +141,7 @@ class TestAuth:
 class TestSymposiums:
     def test_create_symposium(self, client, h, db):
         body = _add_symposium(client, h)
-        assert body["status"] == "saved"
+        assert body["status"] == "created"
         assert "symposium_id" in body
         assert db.count("symposiums") == 1
         assert db.count("timeframes") == 2
@@ -170,16 +171,16 @@ class TestSymposiums:
         )
         assert resp.status_code == 404
 
-    def test_upsert_symposium_updates_existing(self, client, h, db):
+    def test_update_symposium_updates_existing(self, client, h, db):
         body = _add_symposium(client, h)
         sym_id = body["symposium_id"]
-        # Re-POST with same ID — should update, not insert a second row
-        resp = client.post(
-            "/api/events/add_symposium",
+        resp = client.put(
+            "/api/events/update_symposium",
             json={
                 "symposium_id": sym_id,
                 "symposium_name": "Updated Name",
                 "rooms_available": 10,
+                "default_buffer": 0,
                 "timeframes": [TF_1],
             },
             headers=h,
@@ -196,7 +197,7 @@ class TestSymposiums:
         sym_id = body["symposium_id"]
         resp = client.put(
             "/api/events/update_symposium",
-            json={"symposium_id": sym_id, "symposium_name": "Renamed", "rooms_available": 7},
+            json={"symposium_id": sym_id, "symposium_name": "Renamed", "rooms_available": 7, "default_buffer": 0, "timeframes": [TF_1]},
             headers=h,
         )
         assert resp.status_code == 200
@@ -472,6 +473,7 @@ class TestPresentations:
                 "title": "Updated Title",
                 "class_id": ids["class_id"],
                 "minutes": 30,
+                "buffer": 0,
                 "presenting_students": [ids["student_ids"][0]],
             },
             headers=h,

@@ -509,8 +509,8 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
     setIsSavingSymposiumEdit(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_symposium`, {
-        method: "POST",
+      const response = await fetch(`${backendUrl}/api/events/update_symposium`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
         body: JSON.stringify({
           symposium_id: selectedSymposiumId,

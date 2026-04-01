@@ -24,28 +24,29 @@ class TestSymposiumCounts:
     def test_post_inserts_correct_timeframe_count(self, client, h, db):
         client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "Multi", "rooms_available": 4, "timeframes": [TF_1, TF_2]},
+            json={"symposium_name": "Multi", "rooms_available": 4, "default_buffer": 0, "timeframes": [TF_1, TF_2]},
             headers=h,
         )
         assert db.count("symposiums") == 1
         assert db.count("timeframes") == 2
 
-    def test_upsert_does_not_duplicate(self, client, h, db):
-        """POSTing with the same symposium_id a second time updates — no duplicate."""
+    def test_update_does_not_duplicate(self, client, h, db):
+        """PUTting update_symposium updates — no duplicate."""
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "Original", "rooms_available": 2, "timeframes": [TF_1]},
+            json={"symposium_name": "Original", "rooms_available": 2, "default_buffer": 0, "timeframes": [TF_1]},
             headers=h,
         )
         sym_id = resp.json()["symposium_id"]
         assert db.count("symposiums") == 1
 
-        client.post(
-            "/api/events/add_symposium",
+        client.put(
+            "/api/events/update_symposium",
             json={
                 "symposium_id": sym_id,
                 "symposium_name": "Updated",
                 "rooms_available": 10,
+                "default_buffer": 0,
                 "timeframes": [TF_2],
             },
             headers=h,
@@ -63,7 +64,7 @@ class TestTimeframeReplacement:
     def test_put_replaces_all_timeframes(self, client, h, db):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "S", "rooms_available": 1, "timeframes": [TF_1, TF_2]},
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1, TF_2]},
             headers=h,
         )
         sym_id = resp.json()["symposium_id"]
@@ -86,7 +87,7 @@ class TestCascadeDeleteCounts:
     def _seed(self, client, h, db):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "S", "rooms_available": 1, "timeframes": [TF_1]},
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
             headers=h,
         )
         sym_id = resp.json()["symposium_id"]
@@ -161,7 +162,7 @@ class TestPresentationEnrichment:
     def test_presentations_include_student_names(self, client, h, db):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "S", "rooms_available": 1, "timeframes": [TF_1]},
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
             headers=h,
         )
         sym_id = resp.json()["symposium_id"]
@@ -208,6 +209,7 @@ class TestPresentationEnrichment:
                 "title": "Polymer Study",
                 "class_id": class_id,
                 "minutes": 15,
+                "buffer": 0,
                 "presenting_students": student_ids,
             },
             headers=h,
@@ -235,7 +237,7 @@ class TestStudentUpdatePersistence:
     def test_update_student_persists(self, client, h, db):
         resp = client.post(
             "/api/events/add_symposium",
-            json={"symposium_name": "S", "rooms_available": 1, "timeframes": [TF_1]},
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
             headers=h,
         )
         sym_id = resp.json()["symposium_id"]
@@ -279,6 +281,7 @@ class TestStudentUpdatePersistence:
                 "title": "Talk",
                 "class_id": class_id,
                 "minutes": 10,
+                "buffer": 0,
                 "presenting_students": [student_id],
             },
             headers=h,

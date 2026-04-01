@@ -29,7 +29,7 @@ def _seed_chain(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
     """Create symposium → department → class (+ professor) → students."""
     resp = client.post(
         "/api/events/add_symposium",
-        json={"symposium_name": "Symp", "rooms_available": 1, "timeframes": [TF_1]},
+        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
         headers=h,
     )
     sym_id = resp.json()["symposium_id"]
