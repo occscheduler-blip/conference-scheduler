@@ -109,6 +109,7 @@ def add_symposium(
             name=payload.symposium_name,
             created_at=datetime.now(timezone.utc),
             rooms_available=payload.rooms_available,
+            default_buffer=payload.default_buffer
         )
         symposium_payload = symposium.model_dump()
 
@@ -129,6 +130,7 @@ def add_symposium(
                     {
                         "name": symposium_payload["name"],
                         "rooms_available": symposium_payload["rooms_available"],
+                        "default_buffer": symposium_payload["default_buffer"],
                     }
                 )
                 .eq("id", str(symposium_id))
@@ -491,6 +493,7 @@ def add_presentation(
             "title": payload.title,
             "class_id": payload.class_id,
             "minutes": payload.minutes,
+            "buffer": payload.buffer
         }
         pres_resp = write.insert("presentations", [presentation_payload])
 

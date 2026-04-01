@@ -144,6 +144,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const [editingDeployedPresentationId, setEditingDeployedPresentationId] = useState<string | null>(null);
   const [editingPresentationName, setEditingPresentationName] = useState<string>("");
   const [editingPresentationDuration, setEditingPresentationDuration] = useState<string>("");
+  const [editingPresentationBuffer, setEditingPresentationBuffer] = useState<string>("");
   const [savingEditedPresentationId, setSavingEditedPresentationId] = useState<string | null>(null);
   const [defaultPresentationDuration, setDefaultPresentationDuration] = useState<string>("");
   const [usePerPresentationDuration, setUsePerPresentationDuration] = useState<boolean>(false);
@@ -342,6 +343,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                   id?: string;
                   title?: string;
                   minutes?: number;
+                  buffer?: number;
                   presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
                 }>;
               }
@@ -349,6 +351,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                 id?: string;
                 title?: string;
                 minutes?: number;
+                buffer?: number;
                 presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
               }> = {};
           for (const url of buildCandidateUrls(
@@ -363,6 +366,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                     id?: string;
                     title?: string;
                     minutes?: number;
+                    buffer?: number;
                     presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
                   }>;
                 }
@@ -370,6 +374,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                   id?: string;
                   title?: string;
                   minutes?: number;
+                  buffer?: number;
                   presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
                 }>;
             if (presentationsRes.status !== 404) break;
@@ -405,6 +410,8 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
               presentationName: presentation.title ?? "",
               durationMinutes:
                 typeof presentation.minutes === "number" ? String(presentation.minutes) : "",
+              bufferMinutes:
+                typeof presentation.buffer === "number" ? String(presentation.buffer) : "",
             });
           }
           existingGroups = groups;
@@ -555,6 +562,19 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
           setDefaultPresentationDuration("");
         }
         setUsePerPresentationDuration(false);
+        const uniqueBuffers = Array.from(
+          new Set(
+            existingGroups
+              .map((group) => group.bufferMinutes.trim())
+              .filter((value) => value.length > 0)
+          )
+        );
+        if (uniqueBuffers.length === 1) {
+          setDefaultBufferDuration(uniqueBuffers[0]);
+        } else {
+          setDefaultBufferDuration("");
+        }
+        setUsePerBufferDuration(false);
         setGroupMessage("");
         setCalendarDays(nextCalendarDays);
         setCalendarMessage(nextCalendarDays.length === 0 ? "No symposium dates are configured yet." : "");
@@ -1067,6 +1087,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     setEditingDeployedPresentationId(group.id);
     setEditingPresentationName(group.presentationName);
     setEditingPresentationDuration(group.durationMinutes);
+    setEditingPresentationBuffer(group.bufferMinutes);
     setDeployMessage("");
   };
 
@@ -1074,6 +1095,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     setEditingDeployedPresentationId(null);
     setEditingPresentationName("");
     setEditingPresentationDuration("");
+    setEditingPresentationBuffer("");
   };
 
   const handleSaveEditedPresentation = async (group: PresentationGroup) => {
@@ -1083,12 +1105,17 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     }
     const title = editingPresentationName.trim();
     const minutes = Number.parseInt(editingPresentationDuration.trim(), 10);
+    const buffer = Number.parseInt(editingPresentationBuffer.trim(), 10);
     if (!title) {
       setDeployMessage("Save failed: presentation title cannot be empty.");
       return;
     }
     if (!Number.isFinite(minutes) || minutes < 1) {
       setDeployMessage("Save failed: duration must be at least 1 minute.");
+      return;
+    }
+    if (!Number.isFinite(buffer) || buffer < 0) {
+      setDeployMessage("Save failed: buffer must be 0 or more minutes.");
       return;
     }
     const studentIds = group.studentIds.filter((id) => isUuid(id));
@@ -1117,6 +1144,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
             title,
             class_id: classId,
             minutes,
+            buffer,
             presenting_students: studentIds,
           }),
         });
@@ -1135,6 +1163,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                 ...candidate,
                 presentationName: title,
                 durationMinutes: String(minutes),
+                bufferMinutes: String(buffer),
               }
             : candidate
         )
@@ -1183,6 +1212,18 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         );
         return;
       }
+      const bufferValue = usePerBufferDuration
+        ? group.bufferMinutes.trim()
+        : defaultBufferDuration.trim();
+      const parsedBuffer = Number.parseInt(bufferValue, 10);
+      if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0) {
+        setDeployMessage(
+          usePerBufferDuration
+            ? `Enter a valid buffer for Group ${i + 1}.`
+            : "Enter a valid default buffer duration."
+        );
+        return;
+      }
     }
 
     setDeployingPresentations(true);
@@ -1194,6 +1235,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
           ? group.durationMinutes.trim()
           : defaultPresentationDuration.trim();
         const minutes = Number.parseInt(durationValue, 10);
+        const bufferValue = usePerBufferDuration
+          ? group.bufferMinutes.trim()
+          : defaultBufferDuration.trim();
+        const buffer = Number.parseInt(bufferValue, 10);
 
         let response: Response | null = null;
         let payload: { detail?: unknown; presentation_id?: string } = {};
@@ -1208,6 +1253,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
               title: group.presentationName.trim(),
               class_id: classId,
               minutes,
+              buffer,
               presenting_students: group.studentIds,
             }),
           });
@@ -1745,7 +1791,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                               </div>
                             </div>
                             {editingDeployedPresentationId === group.id ? (
-                              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
                                 <label className="flex flex-col gap-1">
                                   <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
                                     Presentation Name
@@ -1768,6 +1814,18 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                                     className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
                                   />
                                 </label>
+                                <label className="flex flex-col gap-1">
+                                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                                    Buffer (Minutes)
+                                  </span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={editingPresentationBuffer}
+                                    onChange={(event) => setEditingPresentationBuffer(event.target.value)}
+                                    className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                                  />
+                                </label>
                               </div>
                             ) : (
                               <>
@@ -1778,6 +1836,9 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                                   {group.durationMinutes.trim()
                                     ? `${group.durationMinutes.trim()} minutes`
                                     : "Duration not set"}
+                                  {group.bufferMinutes.trim()
+                                    ? ` | Buffer: ${group.bufferMinutes.trim()} min`
+                                    : ""}
                                 </p>
                               </>
                             )}

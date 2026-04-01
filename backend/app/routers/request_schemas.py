@@ -25,10 +25,12 @@ class TimeframeWindow(BaseModel):
 
 
 class AddSymposiumRequest(BaseModel):
+    # TODO: Get rid of the option to set a symposium id
     symposium_id: UUID | None = None
     symposium_name: str
     rooms_available: int
     timeframes: list[TimeframeWindow]
+    default_buffer: int
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -241,6 +243,7 @@ class AddPresentationRequest(BaseModel):
     class_id: UUID
     minutes: int
     presenting_students: list[UUID]
+    buffer: int
 
     @field_validator("title")
     @classmethod
@@ -390,6 +393,7 @@ class UpdateSymposiumRequest(BaseModel):
     symposium_id: UUID
     symposium_name: str
     rooms_available: int
+    default_buffer: int
 
     @field_validator("symposium_name")
     @classmethod
@@ -413,6 +417,7 @@ class UpdatePresentationRequest(BaseModel):
     class_id: UUID
     minutes: int
     presenting_students: list[UUID]
+    buffer: int
 
     @field_validator("title")
     @classmethod

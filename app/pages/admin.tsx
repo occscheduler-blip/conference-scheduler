@@ -159,6 +159,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   const [createRooms, setCreateRooms] = useState("");
   const [createStartDate, setCreateStartDate] = useState("");
   const [createEndDate, setCreateEndDate] = useState("");
+  const [createDefaultBuffer, setCreateDefaultBuffer] = useState("");
   const [createAvailability, setCreateAvailability] = useState<boolean[][]>([]);
   const [isCreateDragging, setIsCreateDragging] = useState(false);
   const [createDragValue, setCreateDragValue] = useState<boolean | null>(null);
@@ -175,6 +176,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   const [editRooms, setEditRooms] = useState("");
   const [editStartDate, setEditStartDate] = useState("");
   const [editEndDate, setEditEndDate] = useState("");
+  const [editDefaultBuffer, setEditDefaultBuffer] = useState("");
   const [editAvailability, setEditAvailability] = useState<boolean[][]>([]);
   const [isEditDragging, setIsEditDragging] = useState(false);
   const [editDragValue, setEditDragValue] = useState<boolean | null>(null);
@@ -287,6 +289,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       if (!symposiumId.trim()) {
         setEditSymposiumName("");
         setEditRooms("");
+        setEditDefaultBuffer("");
         setEditStartDate("");
         setEditEndDate("");
         setEditAvailability([]);
@@ -299,7 +302,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         const response = await fetch(`${backendUrl}/api/events/symposiums/${symposiumId}`, { headers: authHeaders });
         const payload = (await response.json()) as {
           detail?: string;
-          symposium?: { id: string; name: string; rooms_available: number };
+          symposium?: { id: string; name: string; rooms_available: number; default_buffer?: number };
           timeframes?: TimeframeRecord[];
         };
         if (!response.ok || !payload.symposium) {
@@ -309,6 +312,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
         setEditSymposiumName(payload.symposium.name ?? "");
         setEditRooms(String(payload.symposium.rooms_available ?? ""));
+        setEditDefaultBuffer(String(payload.symposium.default_buffer ?? "0"));
 
         const grid = gridFromTimeframes(payload.timeframes ?? []);
         setEditStartDate(grid.startDate);
@@ -427,6 +431,12 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       return;
     }
 
+    const parsedBuffer = Number.parseInt(createDefaultBuffer, 10);
+    if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0) {
+      setCreateSaveMessage("Enter a valid default buffer (0 or more minutes).");
+      return;
+    }
+
     const timeframes = buildTimeframesFromGrid(createCalendarDates, createAvailability);
     if (!timeframes || timeframes.length === 0) {
       setCreateSaveMessage("Select at least one available time slot.");
@@ -441,6 +451,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         body: JSON.stringify({
           symposium_name: trimmedName,
           rooms_available: parsedRooms,
+          default_buffer: parsedBuffer,
           timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
         }),
       });
@@ -484,6 +495,12 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       return;
     }
 
+    const parsedBuffer = Number.parseInt(editDefaultBuffer, 10);
+    if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0) {
+      setSymposiumEditMessage("Enter a valid default buffer (0 or more minutes).");
+      return;
+    }
+
     const timeframes = buildTimeframesFromGrid(editCalendarDates, editAvailability);
     if (!timeframes || timeframes.length === 0) {
       setSymposiumEditMessage("Select at least one available time slot.");
@@ -499,6 +516,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           symposium_id: selectedSymposiumId,
           symposium_name: trimmedName,
           rooms_available: parsedRooms,
+          default_buffer: parsedBuffer,
           timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
         }),
       });
@@ -777,6 +795,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setSelectedSymposiumId("");
     setEditSymposiumName("");
     setEditRooms("");
+    setEditDefaultBuffer("");
     setEditStartDate("");
     setEditEndDate("");
     setEditAvailability([]);
@@ -962,6 +981,17 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                       onChange={(event) => setCreateRooms(event.target.value)}
                     />
                   </label>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Default Buffer (Minutes)</span>
+                    <input
+                      type="number"
+                      min={0}
+                      className={fieldClass}
+                      placeholder="Ex. 5"
+                      value={createDefaultBuffer}
+                      onChange={(event) => setCreateDefaultBuffer(event.target.value)}
+                    />
+                  </label>
                 </div>
 
                 <div className="mt-5 grid grid-cols-1 gap-4">
@@ -1131,6 +1161,17 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                           className={fieldClass}
                           value={editRooms}
                           onChange={(event) => setEditRooms(event.target.value)}
+                          disabled={isLoadingSymposiumDetails}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1.5">
+                        <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Default Buffer (Minutes)</span>
+                        <input
+                          type="number"
+                          min={0}
+                          className={fieldClass}
+                          value={editDefaultBuffer}
+                          onChange={(event) => setEditDefaultBuffer(event.target.value)}
                           disabled={isLoadingSymposiumDetails}
                         />
                       </label>
