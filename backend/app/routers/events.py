@@ -302,6 +302,7 @@ def add_presentation(
             "title": payload.title,
             "class_id": payload.class_id,
             "minutes": payload.minutes,
+            "buffer": payload.buffer,
         }
         pres_resp = write.insert("presentations", [presentation_payload])
 
@@ -375,6 +376,21 @@ def add_prof_request(payload: request_schemas.AddReqRequest) -> dict[str, str | 
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
+
+@router.post("/schedule")
+def run_schedule(body: RunSchedulerRequest):
+    try:
+        payload = scheduler_payload.scheduler_payload(body.symposium_id)
+        #results = scheduler.solve(payload)
+        return {"schedule": results}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to run scheduler: {exc}"
         ) from exc
 
 
