@@ -660,6 +660,21 @@ def add_request(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
 
+@router.post("/schedule")
+def run_schedule(body: RunSchedulerRequest):
+    try:
+        payload = scheduler_payload.scheduler_payload(body.symposium_id)
+        #results = scheduler.solve(payload)
+        return {"schedule": results}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to run scheduler: {exc}"
+        ) from exc
+
 
 @router.put("/update_timeframes")
 def update_timeframes(
