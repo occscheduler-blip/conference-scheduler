@@ -23,7 +23,6 @@ Edit `.env` and fill in the required values:
 |----------|----------|---------|---------|
 | `SUPABASE_URL` | Yes | — | Supabase project URL |
 | `SUPABASE_KEY` | Yes | — | Supabase service role key |
-| `BACKEND_API_KEY` | Yes | — | Static API key for `/api/events/*` routes |
 | `JWT_SECRET_KEY` | Yes | — | HS256 secret for signing JWT tokens |
 | `SUPABASE_DB_URL` | No | — | Direct PostgreSQL URL (used by tests) |
 | `APP_NAME` | No | `Conference Scheduler API` | API title shown in docs |
@@ -132,23 +131,14 @@ cd backend
 
 ## Authentication
 
-The API uses two independent auth systems:
+The API uses JWT Bearer tokens for authentication:
 
-### API Key — `/api/events/*`
-
-All event routes require a static API key in the `X-API-Key` header:
-
-```http
-X-API-Key: <your BACKEND_API_KEY value>
-```
-
-### JWT — `/api/auth/*`
-
-- **Admin login:** POST email + password, receive a JWT Bearer token
+- **Admin login:** POST email + password to `/api/auth/admin/login`, receive a JWT Bearer token
 - **OTP login:** Department heads, professors, and students receive a one-time code via email
-- Protected event routes (POST, PUT, DELETE) also require a valid JWT Bearer token with the appropriate role
+- Write operations (POST, PUT, DELETE) on event routes require a valid JWT Bearer token with the appropriate role
+- GET endpoints on event routes are public (no token required)
 
-Include the token in subsequent requests:
+Include the token in requests:
 
 ```http
 Authorization: Bearer <token>
@@ -175,7 +165,7 @@ Base URL: `http://127.0.0.1:8000`
 
 ### Event Routes (`/api/events`)
 
-All require `X-API-Key` header. Write operations (POST/PUT/DELETE) also require a JWT Bearer token with an authorized role.
+GET endpoints are public. Write operations (POST/PUT/DELETE) require a JWT Bearer token with an authorized role.
 
 #### Create (POST)
 

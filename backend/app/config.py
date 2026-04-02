@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     app_port: int = 8000
 
     backend_cors_origins: str = "http://localhost:3000"
-    backend_api_key: str = ""
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_db_url: str = ""
