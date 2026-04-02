@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { apiPost } from "../lib/api";
 import AdminPage from "./admin";
 import DepartmentHeadPage from "./department-head";
 import HomePage from "./home";
@@ -26,7 +27,6 @@ const ROLE_VIEW: Record<string, string> = {
 };
 
 function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
-  const backendUrl = "/api/backend";
   const [mode, setMode] = useState<"admin" | "otp">("otp");
 
   // Admin login
@@ -48,28 +48,14 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${backendUrl}/api/auth/admin/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: adminEmail, password: adminPassword }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        access_token?: string;
-        role?: string;
-        entity_id?: string;
-        detail?: string;
-      };
-      if (!res.ok) {
-        setError(data.detail ?? "Login failed.");
-        return;
-      }
+      const { raw } = await apiPost("/api/auth/admin/login", { email: adminEmail, password: adminPassword });
       onLogin({
-        token: data.access_token ?? "",
-        role: data.role ?? "admin",
-        entityId: data.entity_id ?? "",
+        token: (raw.access_token as string) ?? "",
+        role: (raw.role as string) ?? "admin",
+        entityId: (raw.entity_id as string) ?? "",
       });
-    } catch {
-      setError("Could not reach the server.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reach the server.");
     } finally {
       setLoading(false);
     }
@@ -79,19 +65,10 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${backendUrl}/api/auth/otp/request`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: otpEmail, role: otpRole }),
-      });
-      const data = (await res.json().catch(() => ({}))) as { detail?: string };
-      if (!res.ok) {
-        setError(data.detail ?? "Failed to send code.");
-        return;
-      }
+      await apiPost("/api/auth/otp/request", { email: otpEmail, role: otpRole });
       setOtpSent(true);
-    } catch {
-      setError("Could not reach the server.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reach the server.");
     } finally {
       setLoading(false);
     }
@@ -101,28 +78,14 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${backendUrl}/api/auth/otp/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: otpEmail, role: otpRole, otp: otpCode }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        access_token?: string;
-        role?: string;
-        entity_id?: string;
-        detail?: string;
-      };
-      if (!res.ok) {
-        setError(data.detail ?? "Verification failed.");
-        return;
-      }
+      const { raw } = await apiPost("/api/auth/otp/verify", { email: otpEmail, role: otpRole, otp: otpCode });
       onLogin({
-        token: data.access_token ?? "",
-        role: data.role ?? otpRole,
-        entityId: data.entity_id ?? "",
+        token: (raw.access_token as string) ?? "",
+        role: (raw.role as string) ?? otpRole,
+        entityId: (raw.entity_id as string) ?? "",
       });
-    } catch {
-      setError("Could not reach the server.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reach the server.");
     } finally {
       setLoading(false);
     }

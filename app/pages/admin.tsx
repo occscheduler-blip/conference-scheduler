@@ -12,11 +12,11 @@ import {
   totalSlots,
   formatTimeLabel,
   formatCalendarDate,
-  toMessage,
   buildCalendarDates,
   buildTimeframesFromGrid,
   gridFromTimeframes,
 } from "../lib/utils";
+import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 
 const fieldClass =
@@ -24,7 +24,6 @@ const fieldClass =
 
 export default function AdminPage({ token, onSignOut }: { token: string; onSignOut: () => void }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
-  const backendUrl = "/api/backend";
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   // Create event state
@@ -104,25 +103,15 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setIsLoadingSymposia(true);
     setSymposiumLoadError(null);
     try {
-      const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-      const payload = (await response.json().catch(() => ({}))) as {
-        detail?: string;
-        symposia?: SymposiumOption[];
-        symposiums?: SymposiumOption[];
-        data?: SymposiumOption[];
-      };
-      if (!response.ok) {
-        setSymposiumLoadError(payload.detail ?? "Failed to load symposia.");
-        return;
-      }
-      setSymposiumOptions(payload.symposiums ?? payload.symposia ?? payload.data ?? []);
+      const rows = await apiFetch<SymposiumOption>("/api/events/symposiums", { headers: authHeaders });
+      setSymposiumOptions(rows);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumLoadError(`Load failed: ${message}`);
     } finally {
       setIsLoadingSymposia(false);
     }
-  }, [authHeaders, backendUrl]);
+  }, [authHeaders]);
 
   const fetchDepartments = useCallback(
     async (symposiumId: string) => {
@@ -136,20 +125,10 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       setIsLoadingDepartments(true);
       setDepartmentLoadError(null);
       try {
-        const response = await fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`, {
-          headers: authHeaders,
-        });
-        const payload = (await response.json()) as {
-          detail?: string;
-          departments?: DepartmentRecord[];
-          data?: DepartmentRecord[];
-        };
-        if (!response.ok) {
-          setDepartmentLoadError(payload.detail ?? "Failed to load departments.");
-          setDepartments([]);
-          return;
-        }
-        const loaded = payload.departments ?? payload.data ?? [];
+        const loaded = await apiFetch<DepartmentRecord>(
+          `/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`,
+          { headers: authHeaders }
+        );
         setDepartments(loaded);
         setDepartmentToEditId((current) =>
           loaded.some((department) => department.id === current) ? current : loaded[0]?.id ?? ""
@@ -162,7 +141,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         setIsLoadingDepartments(false);
       }
     },
-    [authHeaders, backendUrl]
+    [authHeaders]
   );
 
   const fetchSymposiumDetails = useCallback(
@@ -180,7 +159,12 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       setIsLoadingSymposiumDetails(true);
       setSymposiumEditMessage(null);
       try {
-        const response = await fetch(`${backendUrl}/api/events/symposiums/${symposiumId}`, { headers: authHeaders });
+        // This endpoint returns {symposium, timeframes} — a non-standard shape
+        // incompatible with apiFetch (which expects an array or {data:[]}), so
+        // we use a direct fetch here.
+        const response = await fetch(`/api/backend/api/events/symposiums/${symposiumId}`, {
+          headers: { "Content-Type": "application/json", ...authHeaders },
+        });
         const payload = (await response.json()) as {
           detail?: string;
           symposium?: { id: string; name: string; rooms_available: number; default_buffer?: number };
@@ -206,7 +190,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         setIsLoadingSymposiumDetails(false);
       }
     },
-    [authHeaders, backendUrl]
+    [authHeaders]
   );
 
   useEffect(() => {
@@ -298,30 +282,20 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
     setIsSavingCreate(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_symposium`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
-        body: JSON.stringify({
-          symposium_name: trimmedName,
-          rooms_available: parsedRooms,
-          default_buffer: parsedBuffer,
-          timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
-        }),
-      });
-
-      const payload = (await response.json()) as { detail?: string; status?: string; symposium_id?: string };
-      if (!response.ok) {
-        setCreateSaveMessage(payload.detail ?? "Failed to save symposium.");
-        return;
-      }
+      const { raw } = await apiPost("/api/events/add_symposium", {
+        symposium_name: trimmedName,
+        rooms_available: parsedRooms,
+        default_buffer: parsedBuffer,
+        timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
+      }, authHeaders);
 
       setCreateSaveMessage("Event created successfully.");
       await fetchSymposia();
-      if (payload.symposium_id) setSelectedSymposiumId(payload.symposium_id);
+      if (raw.symposium_id) setSelectedSymposiumId(String(raw.symposium_id));
       setActiveTab("edit");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setCreateSaveMessage(`Save failed: ${message}`);
+      setCreateSaveMessage(message);
     } finally {
       setIsSavingCreate(false);
     }
@@ -362,29 +336,19 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
     setIsSavingSymposiumEdit(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/update_symposium`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
-        body: JSON.stringify({
-          symposium_id: selectedSymposiumId,
-          symposium_name: trimmedName,
-          rooms_available: parsedRooms,
-          default_buffer: parsedBuffer,
-          timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
-        }),
-      });
-
-      const payload = (await response.json()) as { detail?: string; status?: string };
-      if (!response.ok) {
-        setSymposiumEditMessage(payload.detail ?? "Failed to update event.");
-        return;
-      }
+      await apiPut("/api/events/update_symposium", {
+        symposium_id: selectedSymposiumId,
+        symposium_name: trimmedName,
+        rooms_available: parsedRooms,
+        default_buffer: parsedBuffer,
+        timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
+      }, authHeaders);
 
       setSymposiumEditMessage("Event updated successfully.");
       await fetchSymposia();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setSymposiumEditMessage(`Update failed: ${message}`);
+      setSymposiumEditMessage(message);
     } finally {
       setIsSavingSymposiumEdit(false);
     }
@@ -398,25 +362,17 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setIsDeletingSymposium(true);
     setSymposiumEditMessage(null);
     try {
-      const response = await fetch(
-        `${backendUrl}/api/events/delete_symposium?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
-        {
-        method: "DELETE",
-        headers: authHeaders,
-        }
+      await apiDelete(
+        `/api/events/delete_symposium?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
+        authHeaders
       );
-      const payload = (await response.json()) as { detail?: string; status?: string };
-      if (!response.ok) {
-        setSymposiumEditMessage(payload.detail ?? "Failed to delete event.");
-        return;
-      }
 
       setSymposiumEditMessage("Event deleted.");
       setSelectedSymposiumId("");
       await fetchSymposia();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setSymposiumEditMessage(`Delete failed: ${message}`);
+      setSymposiumEditMessage(message);
     } finally {
       setIsDeletingSymposium(false);
     }
@@ -461,23 +417,12 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setIsSavingDepartment(true);
     try {
       if (departmentAction === "add") {
-        const response = await fetch(`${backendUrl}/api/events/add_department`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
-          body: JSON.stringify({
-            symposium_id: selectedSymposiumId,
-            department_name: departmentName.trim(),
-            department_head_name: departmentHeadName.trim(),
-            email: departmentHeadEmail.trim().toLowerCase(),
-          }),
-        });
-
-        const payload = (await response.json()) as { detail?: unknown; status?: string };
-        if (!response.ok) {
-          setDepartmentMessage(toMessage(payload.detail, "Failed to add department."));
-          setDepartmentMessageKind("error");
-          return;
-        }
+        await apiPost("/api/events/add_department", {
+          symposium_id: selectedSymposiumId,
+          department_name: departmentName.trim(),
+          department_head_name: departmentHeadName.trim(),
+          email: departmentHeadEmail.trim().toLowerCase(),
+        }, authHeaders);
 
         setDepartmentName("");
         setDepartmentHeadName("");
@@ -485,23 +430,12 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         setDepartmentMessage("Department added.");
         setDepartmentMessageKind("success");
       } else if (departmentAction === "edit") {
-        const response = await fetch(`${backendUrl}/api/events/update_department`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
-          body: JSON.stringify({
-            department_id: departmentToEditId,
-            department_name: departmentName.trim(),
-            department_head_name: departmentHeadName.trim(),
-            email: departmentHeadEmail.trim().toLowerCase(),
-          }),
-        });
-
-        const payload = (await response.json()) as { detail?: unknown; status?: string };
-        if (!response.ok) {
-          setDepartmentMessage(toMessage(payload.detail, "Failed to update department."));
-          setDepartmentMessageKind("error");
-          return;
-        }
+        await apiPut("/api/events/update_department", {
+          department_id: departmentToEditId,
+          department_name: departmentName.trim(),
+          department_head_name: departmentHeadName.trim(),
+          email: departmentHeadEmail.trim().toLowerCase(),
+        }, authHeaders);
 
         setDepartmentMessage("Department updated.");
         setDepartmentMessageKind("success");
@@ -515,7 +449,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       await fetchDepartments(selectedSymposiumId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setDepartmentMessage(`Request failed: ${message}`);
+      setDepartmentMessage(message);
       setDepartmentMessageKind("error");
     } finally {
       setIsSavingDepartment(false);
@@ -530,26 +464,17 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setDepartmentMessage(null);
     setDepartmentMessageKind(null);
     try {
-      const response = await fetch(
-        `${backendUrl}/api/events/delete_department?department_id=${encodeURIComponent(department.id)}`,
-        {
-          method: "DELETE",
-          headers: authHeaders,
-        }
+      await apiDelete(
+        `/api/events/delete_department?department_id=${encodeURIComponent(department.id)}`,
+        authHeaders
       );
-      const payload = (await response.json()) as { detail?: unknown; status?: string };
-      if (!response.ok) {
-        setDepartmentMessage(toMessage(payload.detail, "Failed to delete department."));
-        setDepartmentMessageKind("error");
-        return;
-      }
 
       setDepartmentMessage("Department deleted.");
       setDepartmentMessageKind("success");
       await fetchDepartments(selectedSymposiumId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setDepartmentMessage(`Request failed: ${message}`);
+      setDepartmentMessage(message);
       setDepartmentMessageKind("error");
     } finally {
       setDeletingDepartmentId("");
@@ -592,18 +517,10 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
     setIsCreatingAdmin(true);
     try {
-      const response = await fetch(`${backendUrl}/api/auth/admin/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({ email: trimmedEmail, password: newAdminPassword }),
-      });
-
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown; admin_id?: string };
-      if (!response.ok) {
-        setAdminMessage(toMessage(payload.detail, "Failed to create admin."));
-        setAdminMessageKind("error");
-        return;
-      }
+      await apiPost("/api/auth/admin/create", {
+        email: trimmedEmail,
+        password: newAdminPassword,
+      }, authHeaders);
 
       setAdminMessage(`Admin created successfully (${trimmedEmail}).`);
       setAdminMessageKind("success");
@@ -612,7 +529,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       setNewAdminConfirmPassword("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setAdminMessage(`Request failed: ${message}`);
+      setAdminMessage(message);
       setAdminMessageKind("error");
     } finally {
       setIsCreatingAdmin(false);

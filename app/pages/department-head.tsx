@@ -3,7 +3,6 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { DepartmentOption, ProfessorRow, SavedClass } from "./types";
-import { toMessage } from "../lib/utils";
 import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 
 function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {

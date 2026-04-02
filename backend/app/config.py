@@ -22,11 +22,6 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_db_url: str = ""
-    supabase_events_table: str = "events"
-    supabase_symposiums_table: str = "symposiums"
-    supabase_departments_table: str = "departments"
-    supabase_timeframes_table: str = "timeframes"
-    supabase_students_table: str = "students"
 
     jwt_secret_key: str = ""
     jwt_ttl_hours: int = 24
