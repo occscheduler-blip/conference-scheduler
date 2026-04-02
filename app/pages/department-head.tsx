@@ -3,22 +3,8 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { DepartmentOption, ProfessorRow, SavedClass } from "./types";
-
-function toMessage(detail: unknown, fallback: string): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (Array.isArray(detail)) {
-    const joined = detail
-      .map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg))
-      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      .join("; ");
-    if (joined) return joined;
-  }
-  if (detail && typeof detail === "object") {
-    const msg = (detail as { msg?: unknown }).msg;
-    if (typeof msg === "string" && msg.trim()) return msg;
-  }
-  return fallback;
-}
+import { toMessage } from "../lib/utils";
+import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 
 function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   const searchParams = useSearchParams();
@@ -62,31 +48,10 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
       setLoading(true);
       setMessage("");
       try {
-        const [symposiaRes, allDepartmentsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
+        const [symposiumRows, departmentRows] = await Promise.all([
+          apiFetch<{ id?: string; name?: string; symposium_name?: string }>("/api/events/symposiums", { headers: authHeaders }),
+          apiFetch<{ id?: string; department_name?: string; symposium_id?: string }>("/api/events/departments", { headers: authHeaders }),
         ]);
-
-        const symposiaPayload = (await symposiaRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
-          | Array<{ id?: string; name?: string; symposium_name?: string }>;
-        const allDepartmentsPayload = (await allDepartmentsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
-          | Array<{ id?: string; department_name?: string; symposium_id?: string }>;
-
-        if (!symposiaRes.ok) {
-          throw new Error(toMessage((symposiaPayload as { detail?: unknown }).detail, "Failed to load symposium."));
-        }
-        if (!allDepartmentsRes.ok) {
-          throw new Error(
-            toMessage((allDepartmentsPayload as { detail?: unknown }).detail, "Failed to load departments.")
-          );
-        }
-
-        const departmentRows = Array.isArray(allDepartmentsPayload)
-          ? allDepartmentsPayload
-          : (allDepartmentsPayload.data ?? []);
-        const symposiumRows = Array.isArray(symposiaPayload) ? symposiaPayload : (symposiaPayload.data ?? []);
         const nextSymposiumOptions = symposiumRows
           .filter((row) => row.id)
           .map((row) => ({
@@ -138,18 +103,10 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
       setLoading(true);
       setMessage("");
       try {
-        const departmentsRes = await fetch(
-          `${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
+        const departmentRows = await apiFetch<{ id?: string; department_name?: string; symposium_id?: string; department_head_name?: string; email?: string }>(
+          `/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
           { headers: authHeaders }
         );
-        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string; department_head_name?: string; email?: string }> }
-          | Array<{ id?: string; department_name?: string; symposium_id?: string; department_head_name?: string; email?: string }>;
-        if (!departmentsRes.ok) {
-          throw new Error(toMessage((departmentsPayload as { detail?: unknown }).detail, "Failed to load departments."));
-        }
-
-        const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
         const nextDepartments = departmentRows
           .filter((row) => row.id)
           .map((row) => ({ id: row.id as string, name: row.department_name ?? (row.id as string) }));
@@ -161,19 +118,10 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
 
         const classesByDepartment = await Promise.all(
           nextDepartments.map(async (department) => {
-            const classesRes = await fetch(
-              `${backendUrl}/api/events/classes?department_id=${encodeURIComponent(department.id)}`,
+            const classRows = await apiFetch<{ id?: string; name?: string }>(
+              `/api/events/classes?department_id=${encodeURIComponent(department.id)}`,
               { headers: authHeaders }
             );
-            const classesPayload = (await classesRes.json().catch(() => ({}))) as
-              | { data?: Array<{ id?: string; name?: string }> }
-              | Array<{ id?: string; name?: string }>;
-
-            if (!classesRes.ok) {
-              throw new Error(toMessage((classesPayload as { detail?: unknown }).detail, "Failed to load classes."));
-            }
-
-            const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
             const classes = classRows
               .filter((row) => row.id)
               .map((row) => ({
@@ -189,23 +137,10 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
           classesByDepartment.flatMap(({ department, classes }) =>
             classes.map(async (classRow) => {
               try {
-                const professorsRes = await fetch(
-                  `${backendUrl}/api/events/professors?class_id=${encodeURIComponent(classRow.id)}`,
+                const professorRows = await apiFetch<{ id?: string; name?: string; email?: string }>(
+                  `/api/events/professors?class_id=${encodeURIComponent(classRow.id)}`,
                   { headers: authHeaders }
                 );
-                const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
-                  | { data?: Array<{ id?: string; name?: string; email?: string }> }
-                  | Array<{ id?: string; name?: string; email?: string }>;
-
-                if (!professorsRes.ok) {
-                  throw new Error(
-                    toMessage((professorsPayload as { detail?: unknown }).detail, "Failed to load professors.")
-                  );
-                }
-
-                const professorRows = Array.isArray(professorsPayload)
-                  ? professorsPayload
-                  : (professorsPayload.data ?? []);
                 const normalizedProfessors = professorRows.map((professor) => ({
                   id: professor.id,
                   name: professor.name ?? "",
@@ -302,33 +237,13 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
     try {
       if (savedClass.professorIds.length > 0) {
         await Promise.all(
-          savedClass.professorIds.map(async (professorId) => {
-            const response = await fetch(
-              `${backendUrl}/api/events/delete_professor?professor_id=${encodeURIComponent(professorId)}`,
-              {
-                method: "DELETE",
-                headers: authHeaders,
-              }
-            );
-            const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-            if (!response.ok) {
-              throw new Error(toMessage(payload.detail, `Unable to delete professor ${professorId}.`));
-            }
-          })
+          savedClass.professorIds.map((professorId) =>
+            apiDelete(`/api/events/delete_professor?professor_id=${encodeURIComponent(professorId)}`, authHeaders)
+          )
         );
       }
 
-      const classResponse = await fetch(
-        `${backendUrl}/api/events/delete_class?class_id=${encodeURIComponent(savedClass.classId)}`,
-        {
-          method: "DELETE",
-          headers: authHeaders,
-        }
-      );
-      const classPayload = (await classResponse.json().catch(() => ({}))) as { detail?: unknown };
-      if (!classResponse.ok) {
-        throw new Error(toMessage(classPayload.detail, "Unable to delete class."));
-      }
+      await apiDelete(`/api/events/delete_class?class_id=${encodeURIComponent(savedClass.classId)}`, authHeaders);
 
       setSavedClasses((current) => current.filter((item) => item.localId !== savedClass.localId));
       setMessage(`Deleted class "${savedClass.className}".`);
@@ -388,42 +303,19 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
     setMessage("");
     setUpdatingLocalId(savedClass.localId);
     try {
-      const classResponse = await fetch(`${backendUrl}/api/events/update_class`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          class_id: savedClass.classId,
-          name: nextName,
-          department_id: editingDepartmentId,
-        }),
-      });
-      const classPayload = (await classResponse.json().catch(() => ({}))) as { detail?: unknown };
-      if (!classResponse.ok) {
-        setMessage(`Update failed: ${toMessage(classPayload.detail, "Unable to update class.")}`);
-        return;
-      }
+      await apiPut("/api/events/update_class", {
+        class_id: savedClass.classId,
+        name: nextName,
+        department_id: editingDepartmentId,
+      }, authHeaders);
 
       await Promise.all(
         cleanedProfessors.map(async (professor) => {
-          const response = await fetch(`${backendUrl}/api/events/update_professor`, {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              ...(authHeaders ?? {}),
-            },
-            body: JSON.stringify({
-              professor_id: professor.id,
-              name: professor.name,
-              email: professor.email,
-            }),
-          });
-          const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-          if (!response.ok) {
-            throw new Error(toMessage(payload.detail, "Unable to update professor."));
-          }
+          await apiPut("/api/events/update_professor", {
+            professor_id: professor.id,
+            name: professor.name,
+            email: professor.email,
+          }, authHeaders);
         })
       );
 
@@ -493,26 +385,14 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
 
     setSaving(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_class`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          name: className.trim(),
-          department_id: selectedDepartmentId,
-          professors: cleanProfessors,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown; class_id?: string; professor_ids?: string[] };
-      if (!response.ok) {
-        setMessage(`Save failed: ${toMessage(payload.detail, "Unable to save class.")}`);
-        return;
-      }
+      const { raw: payload } = await apiPost("/api/events/add_class", {
+        name: className.trim(),
+        department_id: selectedDepartmentId,
+        professors: cleanProfessors,
+      }, authHeaders);
 
-      const classId = payload.class_id;
-      const professorIds = payload.professor_ids ?? [];
+      const classId = payload.class_id as string | undefined;
+      const professorIds = (payload.professor_ids as string[]) ?? [];
       if (!classId || !Array.isArray(professorIds)) {
         setMessage("Save failed: backend did not return class/professor IDs.");
         return;

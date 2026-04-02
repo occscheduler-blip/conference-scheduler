@@ -2,34 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { CalendarDay, SavedProfessorRequest, StudentOption, StudentTab } from "./types";
-
-const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
-
-// Converts a 15-minute slot index into a human-readable time label.
-function formatTimeLabel(slotIndex: number) {
-  const totalMinutes = 9 * 60 + slotIndex * 15;
-  const hour24 = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  const suffix = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-  const minutePart = minutes.toString().padStart(2, "0");
-  return `${hour12}:${minutePart} ${suffix}`;
-}
-
-// Formats a date for calendar column headers.
-function formatCalendarDate(date: Date) {
-  return date.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-// Parses backend date strings and defaults timezone-less values to UTC.
-function parseBackendDateTime(value: string) {
-  const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
-  return new Date(hasExplicitTimezone ? value : `${value}Z`);
-}
+import {
+  totalSlots,
+  formatTimeLabel,
+  formatCalendarDate,
+  parseBackendDateTime,
+} from "../lib/utils";
+import { useCalendarGrid } from "../lib/useCalendarGrid";
 
 // Renders the student page and manages its data and interactions.
 export default function StudentPage({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
@@ -39,12 +18,10 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [activeTab, setActiveTab] = useState<StudentTab>("availability");
-  const [availability, setAvailability] = useState<boolean[][]>([]);
   const [editableSlots, setEditableSlots] = useState<boolean[][]>([]);
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const [calendarMessage, setCalendarMessage] = useState("");
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragValue, setDragValue] = useState<boolean | null>(null);
+  const { availability, setAvailability, handleCellMouseDown, handleCellMouseEnter } = useCalendarGrid(calendarDays.length, editableSlots);
   const hasSelectedStudent = Boolean(selectedStudentId);
   const [studentName, setStudentName] = useState("");
   const [symposiumName, setSymposiumName] = useState("");
@@ -62,17 +39,6 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
   const identityReady = hasSelectedStudent && !loadingIdentity && Boolean(studentName);
 
   const isAvailabilityTab = activeTab === "availability";
-
-  useEffect(() => {
-    // Stops drag-edit mode when the mouse is released anywhere on the page.
-    const stopDragging = () => {
-      setIsDragging(false);
-      setDragValue(null);
-    };
-
-    window.addEventListener("mouseup", stopDragging);
-    return () => window.removeEventListener("mouseup", stopDragging);
-  }, []);
 
   useEffect(() => {
     let ignore = false;
@@ -381,17 +347,6 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
     };
   }, [authHeaders, backendUrl, loadingStudents, selectedStudentId]);
 
-  // Updates one availability cell in the grid.
-  const setCell = (dayIndex: number, slotIndex: number, value: boolean) => {
-    setAvailability((current) =>
-      Array.from({ length: calendarDays.length }, (_, dIdx) =>
-        Array.from({ length: totalSlots }, (_, sIdx) =>
-          dIdx === dayIndex && sIdx === slotIndex ? value : (current[dIdx]?.[sIdx] ?? false)
-        )
-      )
-    );
-  };
-
   // Saves one preferred professor request for the selected student.
   const handleSavePreferences = async () => {
     setPreferencesMessage("");
@@ -546,22 +501,6 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
     } finally {
       setSavingAvailability(false);
     }
-  };
-
-  // Starts drag-editing availability from the clicked cell.
-  const handleCellMouseDown = (dayIndex: number, slotIndex: number) => {
-    if (!editableSlots[dayIndex]?.[slotIndex]) return;
-    const nextValue = !(availability[dayIndex]?.[slotIndex] ?? false);
-    setCell(dayIndex, slotIndex, nextValue);
-    setDragValue(nextValue);
-    setIsDragging(true);
-  };
-
-  // Applies drag-editing to a cell while moving across the grid.
-  const handleCellMouseEnter = (dayIndex: number, slotIndex: number) => {
-    if (!isDragging || dragValue === null) return;
-    if (!editableSlots[dayIndex]?.[slotIndex]) return;
-    setCell(dayIndex, slotIndex, dragValue);
   };
 
   return (

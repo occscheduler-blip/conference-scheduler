@@ -8,106 +8,17 @@ import type {
   ProfessorOption,
   UploadedStudent,
 } from "./types";
-const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
-
-// Converts a 15-minute slot index into a human-readable time label.
-function formatTimeLabel(slotIndex: number) {
-  const totalMinutes = 9 * 60 + slotIndex * 15;
-  const hour24 = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  const suffix = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-  const minutePart = minutes.toString().padStart(2, "0");
-  return `${hour12}:${minutePart} ${suffix}`;
-}
-
-// Formats a date for calendar column headers.
-function formatCalendarDate(date: Date) {
-  return date.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-// Parses backend date strings and defaults timezone-less values to UTC.
-function parseBackendDateTime(value: string) {
-  const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
-  return new Date(hasExplicitTimezone ? value : `${value}Z`);
-}
-
-// Extracts a readable error message from different API error payload shapes.
-function toMessage(detail: unknown, fallback: string): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (Array.isArray(detail)) {
-    const joined = detail
-      .map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg))
-      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      .join("; ");
-    if (joined) return joined;
-  }
-  if (detail && typeof detail === "object") {
-    const msg = (detail as { msg?: unknown }).msg;
-    if (typeof msg === "string" && msg.trim()) return msg;
-  }
-  return fallback;
-}
-
-// Splits a CSV line into cells while handling quoted values.
-function parseCsvLine(line: string): string[] {
-  const cells: string[] = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (char === "," && !inQuotes) {
-      cells.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  cells.push(current.trim());
-  return cells;
-}
-
-// AI template: URL normalization to handle optional /api path duplication across deployment environments.
-function buildCandidateUrls(baseUrl: string, path: string): string[] {
-  const normalizedBase = baseUrl.replace(/\/+$/, "");
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const direct = `${normalizedBase}${normalizedPath}`;
-  if (normalizedBase.endsWith("/api") && normalizedPath.startsWith("/api/")) {
-    const withoutDupApi = `${normalizedBase}${normalizedPath.replace(/^\/api/, "")}`;
-    return [direct, withoutDupApi];
-  }
-  if (!normalizedBase.endsWith("/api") && normalizedPath.startsWith("/api/")) {
-    const withoutApi = `${normalizedBase}${normalizedPath.replace(/^\/api/, "")}`;
-    return [direct, withoutApi];
-  }
-  return [direct];
-}
-
-// Normalizes IDs for consistent comparisons.
-function normalizeId(value: string) {
-  return value.trim().toLowerCase();
-}
-
-// Checks whether a value is a valid UUID.
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value.trim()
-  );
-}
+import {
+  totalSlots,
+  formatTimeLabel,
+  formatCalendarDate,
+  parseBackendDateTime,
+  toMessage,
+  normalizeId,
+  parseCsvLine,
+  isUuid,
+} from "../lib/utils";
+import { useCalendarGrid } from "../lib/useCalendarGrid";
 
 // Renders the professor page and manages its data and interactions.
 function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
@@ -115,12 +26,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const [professorOptions, setProfessorOptions] = useState<ProfessorOption[]>([]);
   const [selectedProfessorId, setSelectedProfessorId] = useState<string>("");
   const [loadingProfessors, setLoadingProfessors] = useState(false);
-  const [availability, setAvailability] = useState<boolean[][]>([]);
   const [editableSlots, setEditableSlots] = useState<boolean[][]>([]);
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const [calendarMessage, setCalendarMessage] = useState<string>("");
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragValue, setDragValue] = useState<boolean | null>(null);
+  const { availability, setAvailability, handleCellMouseDown, handleCellMouseEnter } = useCalendarGrid(calendarDays.length, editableSlots);
   const [availabilityMessage, setAvailabilityMessage] = useState<string>("");
   const [savingAvailability, setSavingAvailability] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -169,21 +78,11 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const fetchClassStudentNames = useCallback(
     async (targetClassId: string) => {
       if (!targetClassId) return [] as UploadedStudent[];
-      let response: Response | null = null;
-      let payload:
+      const response = await fetch(`${backendUrl}/api/events/students?class_id=${encodeURIComponent(targetClassId)}`, { headers: authHeaders, cache: "no-store" });
+      const payload = (await response.json().catch(() => ({}))) as
         | { detail?: unknown; data?: Array<{ id?: string; name?: string }> }
-        | Array<{ id?: string; name?: string }> = {};
-      for (const url of buildCandidateUrls(
-        backendUrl,
-        `/api/events/students?class_id=${encodeURIComponent(targetClassId)}`
-      )) {
-        response = await fetch(url, { headers: authHeaders, cache: "no-store" });
-        payload = (await response.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ name?: string }> }
-          | Array<{ name?: string }>;
-        if (response.status !== 404) break;
-      }
-      if (!response || !response.ok) {
+        | Array<{ id?: string; name?: string }>;
+      if (!response.ok) {
         throw new Error(toMessage((payload as { detail?: unknown }).detail, "Failed to load students."));
       }
       const rows = Array.isArray(payload) ? payload : (payload.data ?? []);
@@ -205,14 +104,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setLoadingProfessors(true);
       setIdentityMessage("");
       try {
-        let professorsRes: Response | null = null;
-        for (const url of buildCandidateUrls(backendUrl, "/api/events/professors")) {
-          professorsRes = await fetch(url, { headers: authHeaders, cache: "no-store" });
-          if (professorsRes.status !== 404) break;
-        }
-        if (!professorsRes) {
-          throw new Error("Failed to load professors.");
-        }
+        const professorsRes = await fetch(`${backendUrl}/api/events/professors`, { headers: authHeaders, cache: "no-store" });
         const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
           | { detail?: unknown; data?: Array<{ id?: string; name?: string; class_id?: string }> }
           | Array<{ id?: string; name?: string; class_id?: string }>;
@@ -277,25 +169,11 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setIdentityMessage("");
       setCalendarMessage("");
       try {
-        // Fetches from candidate URLs and falls through on 404.
-        const fetchWithCandidates = async (path: string) => {
-          let response: Response | null = null;
-          for (const url of buildCandidateUrls(backendUrl, path)) {
-            response = await fetch(url, { headers: authHeaders });
-            if (response.status !== 404) break;
-          }
-          return response;
-        };
-
         const [classesRes, departmentsRes, symposiaRes] = await Promise.all([
-          fetchWithCandidates("/api/events/classes"),
-          fetchWithCandidates("/api/events/departments"),
-          fetchWithCandidates("/api/events/symposiums"),
+          fetch(`${backendUrl}/api/events/classes`, { headers: authHeaders }),
+          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
+          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
         ]);
-
-        if (!classesRes || !departmentsRes || !symposiaRes) {
-          throw new Error("Failed to load page data.");
-        }
 
         const classesPayload = (await classesRes.json().catch(() => ({}))) as
           | { data?: Array<{ id?: string; name?: string; department_id?: string }> }
@@ -354,32 +232,26 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                 buffer?: number;
                 presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
               }> = {};
-          for (const url of buildCandidateUrls(
-            backendUrl,
-            `/api/events/presentations?class_id=${encodeURIComponent(resolvedClassId)}`
-          )) {
-            presentationsRes = await fetch(url, { headers: authHeaders });
-            presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
-              | {
-                  detail?: unknown;
-                  data?: Array<{
-                    id?: string;
-                    title?: string;
-                    minutes?: number;
-                    buffer?: number;
-                    presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
-                  }>;
-                }
-              | Array<{
+          presentationsRes = await fetch(`${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(resolvedClassId)}`, { headers: authHeaders });
+          presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
+            | {
+                detail?: unknown;
+                data?: Array<{
                   id?: string;
                   title?: string;
                   minutes?: number;
                   buffer?: number;
                   presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
                 }>;
-            if (presentationsRes.status !== 404) break;
-          }
-          if (!presentationsRes || !presentationsRes.ok) {
+              }
+            | Array<{
+                id?: string;
+                title?: string;
+                minutes?: number;
+                buffer?: number;
+                presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
+              }>;
+          if (!presentationsRes.ok) {
             throw new Error(
               toMessage((presentationsPayload as { detail?: unknown }).detail, "Failed to load presentations.")
             );
@@ -604,44 +476,6 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     };
   }, [authHeaders, backendUrl, fetchClassStudentNames, loadingProfessors, professorOptions, selectedProfessorId]);
 
-  useEffect(() => {
-    // Stops drag-edit mode when the mouse is released anywhere on the page.
-    const stopDragging = () => {
-      setIsDragging(false);
-      setDragValue(null);
-    };
-
-    window.addEventListener("mouseup", stopDragging);
-    return () => window.removeEventListener("mouseup", stopDragging);
-  }, []);
-
-  // Updates one availability cell in the grid.
-  const setCell = (dayIndex: number, slotIndex: number, value: boolean) => {
-    setAvailability((current) =>
-      Array.from({ length: calendarDays.length }, (_, dIdx) =>
-        Array.from({ length: totalSlots }, (_, sIdx) =>
-          dIdx === dayIndex && sIdx === slotIndex ? value : (current[dIdx]?.[sIdx] ?? false)
-        )
-      )
-    );
-  };
-
-  // Starts drag-editing availability from the clicked cell.
-  const handleCellMouseDown = (dayIndex: number, slotIndex: number) => {
-    if (!editableSlots[dayIndex]?.[slotIndex]) return;
-    const nextValue = !(availability[dayIndex]?.[slotIndex] ?? false);
-    setCell(dayIndex, slotIndex, nextValue);
-    setDragValue(nextValue);
-    setIsDragging(true);
-  };
-
-  // Applies drag-editing to a cell while moving across the grid.
-  const handleCellMouseEnter = (dayIndex: number, slotIndex: number) => {
-    if (!isDragging || dragValue === null) return;
-    if (!editableSlots[dayIndex]?.[slotIndex]) return;
-    setCell(dayIndex, slotIndex, dragValue);
-  };
-
   // Saves selected availability slots to backend timeframes.
   const handleSaveAvailability = async () => {
     setAvailabilityMessage("");
@@ -775,30 +609,25 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         return;
       }
 
-      let response: Response | null = null;
-      let payload: { detail?: unknown; records_inserted?: { students?: number } } = {};
-      for (const url of buildCandidateUrls(backendUrl, "/api/events/add_students")) {
-        response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authHeaders ?? {}),
-          },
-          body: JSON.stringify({
-            class_id: classId,
-            students,
-          }),
-        });
-        payload = (await response.json().catch(() => ({}))) as {
-          detail?: unknown;
-          records_inserted?: {
-            students?: number;
-          };
+      const response = await fetch(`${backendUrl}/api/events/add_students`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeaders ?? {}),
+        },
+        body: JSON.stringify({
+          class_id: classId,
+          students,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        detail?: unknown;
+        records_inserted?: {
+          students?: number;
         };
-        if (response.status !== 404) break;
-      }
+      };
 
-      if (!response || !response.ok) {
+      if (!response.ok) {
         setCsvMessage(toMessage(payload.detail, "CSV upload failed."));
         return;
       }
@@ -856,25 +685,20 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     setManualStudentSubmitting(true);
     try {
-      let response: Response | null = null;
-      let payload: { detail?: unknown } = {};
-      for (const url of buildCandidateUrls(backendUrl, "/api/events/add_students")) {
-        response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authHeaders ?? {}),
-          },
-          body: JSON.stringify({
-            class_id: classId,
-            students: [{ name, email }],
-          }),
-        });
-        payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (response.status !== 404) break;
-      }
+      const response = await fetch(`${backendUrl}/api/events/add_students`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeaders ?? {}),
+        },
+        body: JSON.stringify({
+          class_id: classId,
+          students: [{ name, email }],
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
 
-      if (!response || !response.ok) {
+      if (!response.ok) {
         setManualStudentMessage(`Add failed: ${toMessage(payload.detail, "Unable to add student.")}`);
         return;
       }
@@ -914,20 +738,12 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     setSelectedUploadedStudentKeys((current) => current.filter((key) => key !== studentId));
     setDeletingStudentIds((current) => [...current, studentId]);
     try {
-      let response: Response | null = null;
-      let payload: { detail?: unknown } = {};
-      for (const url of buildCandidateUrls(
-        backendUrl,
-        `/api/events/delete_student?student_id=${encodeURIComponent(studentId)}`
-      )) {
-        response = await fetch(url, {
-          method: "DELETE",
-          headers: authHeaders,
-        });
-        payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (response.status !== 404) break;
-      }
-      if (!response || !response.ok) {
+      const response = await fetch(`${backendUrl}/api/events/delete_student?student_id=${encodeURIComponent(studentId)}`, {
+        method: "DELETE",
+        headers: authHeaders,
+      });
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
         setUploadedStudents(previousStudents);
         setSelectedUploadedStudentKeys(previousSelectedKeys);
         setCsvMessage(`Delete failed: ${toMessage(payload.detail, "Unable to delete student.")}`);
@@ -1050,21 +866,13 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     setDeletingPresentationGroupIds((current) => [...current, group.id]);
     try {
-      let response: Response | null = null;
-      let payload: { detail?: unknown } = {};
-      for (const url of buildCandidateUrls(
-        backendUrl,
-        `/api/events/delete_presentation?presentation_id=${encodeURIComponent(group.id)}`
-      )) {
-        response = await fetch(url, {
-          method: "DELETE",
-          headers: authHeaders,
-        });
-        payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (response.status !== 404) break;
-      }
+      const response = await fetch(`${backendUrl}/api/events/delete_presentation?presentation_id=${encodeURIComponent(group.id)}`, {
+        method: "DELETE",
+        headers: authHeaders,
+      });
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
 
-      if (!response || !response.ok) {
+      if (!response.ok) {
         setDeployMessage(`Delete failed: ${toMessage(payload.detail, "Unable to delete presentation.")}`);
         return;
       }
@@ -1130,28 +938,23 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     setSavingEditedPresentationId(group.id);
     try {
-      let response: Response | null = null;
-      let payload: { detail?: unknown } = {};
-      for (const url of buildCandidateUrls(backendUrl, "/api/events/update_presentation")) {
-        response = await fetch(url, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authHeaders ?? {}),
-          },
-          body: JSON.stringify({
-            presentation_id: group.id,
-            title,
-            class_id: classId,
-            minutes,
-            buffer,
-            presenting_students: studentIds,
-          }),
-        });
-        payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (response.status !== 404) break;
-      }
-      if (!response || !response.ok) {
+      const response = await fetch(`${backendUrl}/api/events/update_presentation`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeaders ?? {}),
+        },
+        body: JSON.stringify({
+          presentation_id: group.id,
+          title,
+          class_id: classId,
+          minutes,
+          buffer,
+          presenting_students: studentIds,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
         setDeployMessage(`Save failed: ${toMessage(payload.detail, "Unable to update presentation.")}`);
         return;
       }
@@ -1240,31 +1043,26 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
           : defaultBufferDuration.trim();
         const buffer = Number.parseInt(bufferValue, 10);
 
-        let response: Response | null = null;
-        let payload: { detail?: unknown; presentation_id?: string } = {};
-        for (const url of buildCandidateUrls(backendUrl, "/api/events/add_presentation")) {
-          response = await fetch(url, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(authHeaders ?? {}),
-            },
-            body: JSON.stringify({
-              title: group.presentationName.trim(),
-              class_id: classId,
-              minutes,
-              buffer,
-              presenting_students: group.studentIds,
-            }),
-          });
-          payload = (await response.json().catch(() => ({}))) as {
-            detail?: unknown;
-            presentation_id?: string;
-          };
-          if (response.status !== 404) break;
-        }
+        const response = await fetch(`${backendUrl}/api/events/add_presentation`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(authHeaders ?? {}),
+          },
+          body: JSON.stringify({
+            title: group.presentationName.trim(),
+            class_id: classId,
+            minutes,
+            buffer,
+            presenting_students: group.studentIds,
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as {
+          detail?: unknown;
+          presentation_id?: string;
+        };
 
-        if (!response || !response.ok) {
+        if (!response.ok) {
           setDeployMessage(`Deploy failed: ${toMessage(payload.detail, "Unable to save presentations.")}`);
           return;
         }
