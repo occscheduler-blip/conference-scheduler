@@ -1,27 +1,9 @@
 from app.supabase_io.client import supabase
 from uuid import UUID
 from app.supabase_io import read
-from postgrest.base_request_builder import APIResponse
 from postgrest.types import CountMethod
 from typing import cast
-from app.utils import force_uuid
-
-
-def _rows_affected(response: APIResponse | dict[str, object], fallback: int = 0) -> int:
-    """Return rows affected from a Supabase response object or dict."""
-    if isinstance(response, dict):
-        count = response.get("count")
-        data = response.get("data")
-    else:
-        count = getattr(response, "count", None)
-        data = getattr(response, "data", None)
-    if isinstance(count, int) and count >= 0:
-        return count
-    if isinstance(data, list):
-        return len(data)
-    if isinstance(data, dict):
-        return 1
-    return fallback
+from app.utils import force_uuid, rows_affected as _rows_affected
 
 
 def _merge_counts(target: dict[str, int], source: dict[str, int] | None) -> None:

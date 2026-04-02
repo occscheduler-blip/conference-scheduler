@@ -11,22 +11,7 @@ import type {
   SymposiumOption,
   Timeframe,
 } from "./types";
-
-function parseBackendDateTime(value: string) {
-  const normalized = value.includes(" ") ? value.replace(" ", "T") : value;
-  return new Date(normalized);
-}
-
-function normalizeId(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function dayKey(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+import { parseBackendDateTime, normalizeId, dayKey } from "../lib/utils";
 
 function dayLabel(key: string) {
   return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {

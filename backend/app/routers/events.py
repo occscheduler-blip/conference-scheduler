@@ -7,6 +7,7 @@ from postgrest.base_request_builder import APIResponse
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
+from app.utils import rows_affected as _rows_affected
 from app.supabase_io import delete, read, write
 from app.supabase_io.nested_read import (
     CLASS_CHILDREN,
@@ -36,27 +37,6 @@ def _serialize_update_fields(fields: dict[str, object]) -> dict[str, Any]:
         else:
             serialized[key] = value
     return serialized
-
-
-def _rows_affected(
-    response: APIResponse | dict[str, object] | None, fallback: int = 0
-) -> int:
-    """Return rows affected from a Supabase response object or dict."""
-    if response is None:
-        return fallback
-    if isinstance(response, dict):
-        count = response.get("count")
-        data = response.get("data")
-    else:
-        count = getattr(response, "count", None)
-        data = getattr(response, "data", None)
-    if isinstance(count, int) and count >= 0:
-        return count
-    if isinstance(data, list):
-        return len(data)
-    if isinstance(data, dict):
-        return 1
-    return fallback
 
 
 def _normalize_counts(

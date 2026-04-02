@@ -8,146 +8,19 @@ import type {
   SymposiumOption,
   TimeframeRecord,
 } from "./types";
+import {
+  totalSlots,
+  formatTimeLabel,
+  formatCalendarDate,
+  toMessage,
+  buildCalendarDates,
+  buildTimeframesFromGrid,
+  gridFromTimeframes,
+} from "../lib/utils";
+import { useCalendarGrid } from "../lib/useCalendarGrid";
 
 const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
-
-const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
-function formatTimeLabel(slotIndex: number) {
-  const totalMinutes = 9 * 60 + slotIndex * 15;
-  const hour24 = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  const suffix = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-  const minutePart = minutes.toString().padStart(2, "0");
-  return `${hour12}:${minutePart} ${suffix}`;
-}
-
-function localDateString(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatCalendarDate(date: Date) {
-  return date.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function parseBackendDateTime(value: string) {
-  const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
-  // Treat timezone-less backend timestamps as UTC to prevent local timezone drift when reloading/editing.
-  return new Date(hasExplicitTimezone ? value : `${value}Z`);
-}
-
-function toMessage(detail: unknown, fallback: string): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (Array.isArray(detail)) {
-    const joined = detail
-      .map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg))
-      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      .join("; ");
-    if (joined) return joined;
-  }
-  if (detail && typeof detail === "object") {
-    const msg = (detail as { msg?: unknown }).msg;
-    if (typeof msg === "string" && msg.trim()) return msg;
-  }
-  return fallback;
-}
-
-// AI template: converts between the availability calendar grid and backend timeframe records.
-function buildCalendarDates(startDate: string, endDate: string) {
-  if (!startDate || !endDate) return [] as Date[];
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [] as Date[];
-
-  const dates: Date[] = [];
-  const cursor = new Date(start);
-  while (cursor <= end) {
-    dates.push(new Date(cursor));
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return dates;
-}
-
-function buildTimeframesFromGrid(dates: Date[], availability: boolean[][]) {
-  if (dates.length === 0) return null;
-  const tuples: [string, string][] = [];
-
-  for (let dayIndex = 0; dayIndex < dates.length; dayIndex += 1) {
-    let rangeStart: Date | null = null;
-    let rangeEnd: Date | null = null;
-
-    for (let slotIndex = 0; slotIndex < totalSlots; slotIndex += 1) {
-      if (availability[dayIndex]?.[slotIndex]) {
-        const slotStart = new Date(dates[dayIndex]);
-        const startMinutes = 9 * 60 + slotIndex * 15;
-        slotStart.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
-
-        const slotEnd = new Date(slotStart);
-        slotEnd.setMinutes(slotEnd.getMinutes() + 15);
-
-        if (!rangeStart) {
-          rangeStart = slotStart;
-          rangeEnd = slotEnd;
-        } else {
-          rangeEnd = slotEnd;
-        }
-      } else if (rangeStart && rangeEnd) {
-        tuples.push([rangeStart.toISOString(), rangeEnd.toISOString()]);
-        rangeStart = null;
-        rangeEnd = null;
-      }
-    }
-
-    if (rangeStart && rangeEnd) {
-      tuples.push([rangeStart.toISOString(), rangeEnd.toISOString()]);
-    }
-  }
-
-  return tuples;
-}
-
-function gridFromTimeframes(timeframes: TimeframeRecord[]) {
-  if (timeframes.length === 0) return { startDate: "", endDate: "", availability: [] as boolean[][] };
-
-  const dayKeys = timeframes
-    .map((tf) => localDateString(parseBackendDateTime(tf.start_time)))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const startDate = dayKeys[0];
-  const endDate = dayKeys[dayKeys.length - 1];
-  const dates = buildCalendarDates(startDate, endDate);
-
-  const dayIndexByKey = new Map<string, number>();
-  dates.forEach((date, index) => dayIndexByKey.set(localDateString(date), index));
-
-  const availability = Array.from({ length: dates.length }, () => Array.from({ length: totalSlots }, () => false));
-
-  for (const timeframe of timeframes) {
-    const start = parseBackendDateTime(timeframe.start_time);
-    const dayIndex = dayIndexByKey.get(localDateString(start));
-    if (dayIndex === undefined) continue;
-
-    const startMinutes = start.getHours() * 60 + start.getMinutes();
-    const end = timeframe.end_time ? parseBackendDateTime(timeframe.end_time) : null;
-    const endMinutes = end && !Number.isNaN(end.getTime()) ? end.getHours() * 60 + end.getMinutes() : startMinutes + 15;
-    const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
-    const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
-
-    for (let offset = 0; offset < slotSpan; offset += 1) {
-      const slotIndex = startSlot + offset;
-      if (slotIndex >= 0 && slotIndex < totalSlots) availability[dayIndex][slotIndex] = true;
-    }
-  }
-
-  return { startDate, endDate, availability };
-}
 
 export default function AdminPage({ token, onSignOut }: { token: string; onSignOut: () => void }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
@@ -160,9 +33,12 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   const [createStartDate, setCreateStartDate] = useState("");
   const [createEndDate, setCreateEndDate] = useState("");
   const [createDefaultBuffer, setCreateDefaultBuffer] = useState("");
-  const [createAvailability, setCreateAvailability] = useState<boolean[][]>([]);
-  const [isCreateDragging, setIsCreateDragging] = useState(false);
-  const [createDragValue, setCreateDragValue] = useState<boolean | null>(null);
+  const {
+    availability: createAvailability,
+    setAvailability: setCreateAvailability,
+    handleCellMouseDown: handleCreateCellMouseDown,
+    handleCellMouseEnter: handleCreateCellMouseEnter,
+  } = useCalendarGrid(buildCalendarDates(createStartDate, createEndDate).length);
   const [isSavingCreate, setIsSavingCreate] = useState(false);
   const [createSaveMessage, setCreateSaveMessage] = useState<string | null>(null);
 
@@ -177,9 +53,12 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   const [editStartDate, setEditStartDate] = useState("");
   const [editEndDate, setEditEndDate] = useState("");
   const [editDefaultBuffer, setEditDefaultBuffer] = useState("");
-  const [editAvailability, setEditAvailability] = useState<boolean[][]>([]);
-  const [isEditDragging, setIsEditDragging] = useState(false);
-  const [editDragValue, setEditDragValue] = useState<boolean | null>(null);
+  const {
+    availability: editAvailability,
+    setAvailability: setEditAvailability,
+    handleCellMouseDown: handleEditCellMouseDown,
+    handleCellMouseEnter: handleEditCellMouseEnter,
+  } = useCalendarGrid(buildCalendarDates(editStartDate, editEndDate).length);
   const [isLoadingSymposiumDetails, setIsLoadingSymposiumDetails] = useState(false);
   const [isSavingSymposiumEdit, setIsSavingSymposiumEdit] = useState(false);
   const [isDeletingSymposium, setIsDeletingSymposium] = useState(false);
@@ -205,6 +84,8 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   const [newAdminEmail, setNewAdminEmail] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
   const [newAdminConfirmPassword, setNewAdminConfirmPassword] = useState("");
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [showAdminConfirmPassword, setShowAdminConfirmPassword] = useState(false);
   const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
   const [adminMessageKind, setAdminMessageKind] = useState<"success" | "error" | null>(null);
@@ -357,18 +238,6 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   }, [editCalendarDates]);
 
   useEffect(() => {
-    const stopDragging = () => {
-      setIsCreateDragging(false);
-      setCreateDragValue(null);
-      setIsEditDragging(false);
-      setEditDragValue(null);
-    };
-
-    window.addEventListener("mouseup", stopDragging);
-    return () => window.removeEventListener("mouseup", stopDragging);
-  }, []);
-
-  useEffect(() => {
     setDepartmentMessage(null);
     setDepartmentMessageKind(null);
     setDepartmentName("");
@@ -397,22 +266,6 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setDepartmentHeadName(selectedDepartment.department_head_name);
     setDepartmentHeadEmail(selectedDepartment.email ?? "");
   }, [departmentAction, departmentToEditId, departments]);
-
-  const setCreateCell = (dayIndex: number, slotIndex: number, value: boolean) => {
-    setCreateAvailability((current) =>
-      current.map((daySlots, dIdx) =>
-        dIdx === dayIndex ? daySlots.map((slot, sIdx) => (sIdx === slotIndex ? value : slot)) : daySlots
-      )
-    );
-  };
-
-  const setEditCell = (dayIndex: number, slotIndex: number, value: boolean) => {
-    setEditAvailability((current) =>
-      current.map((daySlots, dIdx) =>
-        dIdx === dayIndex ? daySlots.map((slot, sIdx) => (sIdx === slotIndex ? value : slot)) : daySlots
-      )
-    );
-  };
 
   // AI template: creates or updates a symposium with a full set of timeframes derived from the grid.
   const handleCreateEventSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -785,8 +638,6 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setCreateStartDate("");
     setCreateEndDate("");
     setCreateAvailability([]);
-    setIsCreateDragging(false);
-    setCreateDragValue(null);
     setIsSavingCreate(false);
     setCreateSaveMessage(null);
   };
@@ -799,8 +650,6 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setEditStartDate("");
     setEditEndDate("");
     setEditAvailability([]);
-    setIsEditDragging(false);
-    setEditDragValue(null);
     setIsLoadingSymposiumDetails(false);
     setIsSavingSymposiumEdit(false);
     setIsDeletingSymposium(false);
@@ -914,25 +763,53 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
               </label>
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Password</span>
-                <input
-                  type="password"
-                  className={fieldClass}
-                  placeholder="At least 8 characters"
-                  value={newAdminPassword}
-                  onChange={(event) => setNewAdminPassword(event.target.value)}
-                  disabled={isCreatingAdmin}
-                />
+                <div className="relative">
+                  <input
+                    type={showAdminPassword ? "text" : "password"}
+                    className={fieldClass + " pr-10"}
+                    placeholder="At least 8 characters"
+                    value={newAdminPassword}
+                    onChange={(event) => setNewAdminPassword(event.target.value)}
+                    disabled={isCreatingAdmin}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPassword(!showAdminPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]"
+                    tabIndex={-1}
+                  >
+                    {showAdminPassword ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    )}
+                  </button>
+                </div>
               </label>
               <label className="flex flex-col gap-1.5">
                 <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Confirm Password</span>
-                <input
-                  type="password"
-                  className={fieldClass}
-                  placeholder="Re-enter password"
-                  value={newAdminConfirmPassword}
-                  onChange={(event) => setNewAdminConfirmPassword(event.target.value)}
-                  disabled={isCreatingAdmin}
-                />
+                <div className="relative">
+                  <input
+                    type={showAdminConfirmPassword ? "text" : "password"}
+                    className={fieldClass + " pr-10"}
+                    placeholder="Re-enter password"
+                    value={newAdminConfirmPassword}
+                    onChange={(event) => setNewAdminConfirmPassword(event.target.value)}
+                    disabled={isCreatingAdmin}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminConfirmPassword(!showAdminConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]"
+                    tabIndex={-1}
+                  >
+                    {showAdminConfirmPassword ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    )}
+                  </button>
+                </div>
               </label>
 
               <button
@@ -1050,16 +927,8 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                                 <button
                                   key={`${date.toISOString()}-${slotIndex}`}
                                   type="button"
-                                  onMouseDown={() => {
-                                    const nextValue = !available;
-                                    setCreateCell(dayIndex, slotIndex, nextValue);
-                                    setCreateDragValue(nextValue);
-                                    setIsCreateDragging(true);
-                                  }}
-                                  onMouseEnter={() => {
-                                    if (!isCreateDragging || createDragValue === null) return;
-                                    setCreateCell(dayIndex, slotIndex, createDragValue);
-                                  }}
+                                  onMouseDown={() => handleCreateCellMouseDown(dayIndex, slotIndex)}
+                                  onMouseEnter={() => handleCreateCellMouseEnter(dayIndex, slotIndex)}
                                   onDragStart={(event) => event.preventDefault()}
                                   className={`h-4 border-r border-l border-b border-[#333] ${
                                     showHourLine ? "border-t border-t-[#333]" : ""
@@ -1233,16 +1102,8 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                                     <button
                                       key={`${date.toISOString()}-${slotIndex}`}
                                       type="button"
-                                      onMouseDown={() => {
-                                        const nextValue = !available;
-                                        setEditCell(dayIndex, slotIndex, nextValue);
-                                        setEditDragValue(nextValue);
-                                        setIsEditDragging(true);
-                                      }}
-                                      onMouseEnter={() => {
-                                        if (!isEditDragging || editDragValue === null) return;
-                                        setEditCell(dayIndex, slotIndex, editDragValue);
-                                      }}
+                                      onMouseDown={() => handleEditCellMouseDown(dayIndex, slotIndex)}
+                                      onMouseEnter={() => handleEditCellMouseEnter(dayIndex, slotIndex)}
                                       onDragStart={(event) => event.preventDefault()}
                                       className={`h-4 border-r border-l border-b border-[#333] ${
                                         showHourLine ? "border-t border-t-[#333]" : ""
