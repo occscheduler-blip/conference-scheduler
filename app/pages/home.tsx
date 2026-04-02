@@ -12,6 +12,7 @@ import type {
   Timeframe,
 } from "./types";
 import { parseBackendDateTime, normalizeId, dayKey } from "../lib/utils";
+import { apiFetch } from "../lib/api";
 
 function dayLabel(key: string) {
   return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
@@ -33,8 +34,6 @@ function timeLabel(start: string, end: string) {
 
 function HomeContent() {
   const searchParams = useSearchParams();
-  const backendUrl = "/api/backend";
-  const authHeaders = undefined;
 
   const [symposia, setSymposia] = useState<SymposiumOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
@@ -68,15 +67,7 @@ function HomeContent() {
   useEffect(() => {
     async function loadSymposia() {
       try {
-        const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-        const payload = (await response.json().catch(() => ({}))) as {
-          detail?: string;
-          symposia?: SymposiumOption[];
-          symposiums?: SymposiumOption[];
-          data?: SymposiumOption[];
-        };
-        if (!response.ok) throw new Error(payload.detail ?? "Failed to load symposia.");
-        const list = payload.symposia ?? payload.symposiums ?? payload.data ?? [];
+        const list = await apiFetch<SymposiumOption>("/api/events/symposiums");
         setSymposia(list);
         setSelectedSymposiumId(list[0]?.id ?? "");
       } catch (error) {
@@ -85,7 +76,7 @@ function HomeContent() {
       }
     }
     void loadSymposia();
-  }, [authHeaders, backendUrl]);
+  }, []);
 
   // AI template: loads all symposium schedule data in parallel — departments, classes, presentations, and students — and joins them for display.
   useEffect(() => {
@@ -103,24 +94,15 @@ function HomeContent() {
 
       try {
         setMessage(null);
-        const [symposiumRes, departmentsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/symposiums/${selectedSymposiumId}`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`, {
-            headers: authHeaders,
-          }),
-        ]);
 
+        // Symposium detail returns { symposium, timeframes } — non-standard shape, so use apiFetch
+        // for the departments call and a raw fetch for the symposium detail.
+        const symposiumRes = await fetch(`/api/backend/api/events/symposiums/${selectedSymposiumId}`);
         const symposiumPayload = (await symposiumRes.json().catch(() => ({}))) as {
           detail?: string;
           symposium?: SymposiumDetails;
           timeframes?: Timeframe[];
         };
-        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as {
-          detail?: string;
-          departments?: DepartmentRecord[];
-          data?: DepartmentRecord[];
-        };
-
         if (!symposiumRes.ok) throw new Error(symposiumPayload.detail ?? "Failed to load symposium schedule.");
 
         const list = (symposiumPayload.timeframes ?? []).slice().sort((a, b) => {
@@ -132,123 +114,94 @@ function HomeContent() {
         const parsedRooms = Number(symposiumPayload.symposium?.rooms_available ?? 1);
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
 
-        if (departmentsRes.ok) {
-          const departmentRows = departmentsPayload.departments ?? departmentsPayload.data ?? [];
+        let departmentRows: DepartmentRecord[] = [];
+        try {
+          departmentRows = await apiFetch<DepartmentRecord>(
+            `/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`
+          );
+        } catch {
+          // Departments endpoint failed gracefully — continue with empty list
+        }
+
+        if (departmentRows.length > 0) {
           setDepartments(departmentRows);
 
-          const classResponses = await Promise.all(
-            departmentRows.map((department) =>
-              fetch(`${backendUrl}/api/events/classes?department_id=${encodeURIComponent(department.id)}`, {
-                headers: authHeaders,
+          const classRows = (
+            await Promise.all(
+              departmentRows.map(async (department) => {
+                try {
+                  return await apiFetch<ClassRecord>(
+                    `/api/events/classes?department_id=${encodeURIComponent(department.id)}`
+                  );
+                } catch {
+                  return [];
+                }
               })
             )
-          );
-
-          const classPayloads = await Promise.all(
-            classResponses.map((response) =>
-              response.json().catch(() => ({} as { data?: Array<{ id?: string; department_id?: string }> }))
-            )
-          );
-
-          const classRows = classPayloads.flatMap((payload, index) => {
-            if (!classResponses[index].ok) return [];
-            const list: Array<{ id?: string; department_id?: string }> = Array.isArray(payload)
-              ? payload
-              : (payload.data ?? []);
-            return list
-              .map((row) => ({
-                id: row.id ?? "",
-                department_id: row.department_id ?? "",
-              }))
-              .filter((row): row is ClassRecord => Boolean(row.id && row.department_id));
-          });
+          ).flat();
           setClasses(classRows);
 
-          const [presentationResponses, studentResponses] = await Promise.all([
+          type RawPresentation = {
+            id?: string;
+            class_id?: string;
+            title?: string;
+            presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
+          };
+          type RawStudent = { id?: string; name?: string; class_id?: string };
+
+          const [rawPresentations, rawStudents] = await Promise.all([
             Promise.all(
-              classRows.map((row) =>
-                fetch(`${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(row.id)}`, {
-                  headers: authHeaders,
-                })
-              )
+              classRows.map(async (row) => {
+                try {
+                  return await apiFetch<RawPresentation>(
+                    `/api/events/presentations?class_id=${encodeURIComponent(row.id)}`
+                  );
+                } catch {
+                  return [];
+                }
+              })
             ),
             Promise.all(
-              classRows.map((row) =>
-                fetch(`${backendUrl}/api/events/students?class_id=${encodeURIComponent(row.id)}`, {
-                  headers: authHeaders,
-                })
-              )
+              classRows.map(async (row) => {
+                try {
+                  return await apiFetch<RawStudent>(
+                    `/api/events/students?class_id=${encodeURIComponent(row.id)}`
+                  );
+                } catch {
+                  return [];
+                }
+              })
             ),
           ]);
 
-          const [presentationPayloads, studentPayloads] = await Promise.all([
-            Promise.all(
-              presentationResponses.map((response) =>
-                response.json().catch(
-                  () =>
-                    ({} as {
-                      data?: Array<{
-                        id?: string;
-                        class_id?: string;
-                        title?: string;
-                        presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
-                      }>;
-                    })
-                )
-              )
-            ),
-            Promise.all(
-              studentResponses.map((response) =>
-                response.json().catch(
-                  () => ({} as { data?: Array<{ id?: string; name?: string; class_id?: string }> })
-                )
-              )
-            ),
-          ]);
-
-          const studentRows = studentPayloads.flatMap((payload, index) => {
-            if (!studentResponses[index].ok) return [];
-            const list: Array<{ id?: string; name?: string; class_id?: string }> = Array.isArray(payload)
-              ? payload
-              : (payload.data ?? []);
-            return list
-              .map((row) => ({
-                id: row.id ?? "",
-                name: row.name?.trim() ?? "",
-              }))
-              .filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
-          });
+          const studentRows = rawStudents
+            .flat()
+            .map((row) => ({
+              id: row.id ?? "",
+              name: row.name?.trim() ?? "",
+            }))
+            .filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
           const studentNameById = new Map(studentRows.map((row) => [normalizeId(row.id), row.name]));
 
-          const presentationRows = presentationPayloads.flatMap((payload, index) => {
-            if (!presentationResponses[index].ok) return [];
-            const list: Array<{
-              id?: string;
-              class_id?: string;
-              title?: string;
-              presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
-            }> = Array.isArray(payload)
-              ? payload
-              : (payload.data ?? []);
-            return list
-              .map((row) => {
-                const presenterNames = (row.presenting_students ?? [])
-                  .map((student) => {
-                    const directName = student.name?.trim() ?? "";
-                    if (directName) return directName;
-                    const studentId = student.id ?? student.student_id ?? "";
-                    return studentNameById.get(normalizeId(studentId)) ?? "";
-                  })
-                  .filter((name) => name.length > 0);
-                return {
-                  id: row.id ?? "",
-                  class_id: row.class_id ?? "",
-                  title: row.title?.trim() ?? "",
-                  presenterNames: Array.from(new Set(presenterNames)),
-                };
-              })
-              .filter((row): row is PresentationRecord => Boolean(row.id && row.class_id));
-          });
+          const presentationRows = rawPresentations
+            .flat()
+            .map((row) => {
+              const presenterNames = (row.presenting_students ?? [])
+                .map((student) => {
+                  const directName = student.name?.trim() ?? "";
+                  if (directName) return directName;
+                  const studentId = student.id ?? student.student_id ?? "";
+                  return studentNameById.get(normalizeId(studentId)) ?? "";
+                })
+                .filter((name) => name.length > 0);
+              return {
+                id: row.id ?? "",
+                class_id: row.class_id ?? "",
+                title: row.title?.trim() ?? "",
+                presenterNames: Array.from(new Set(presenterNames)),
+              };
+            })
+            .filter((row): row is PresentationRecord => Boolean(row.id && row.class_id));
           setPresentations(presentationRows);
         } else {
           setDepartments([]);
@@ -271,7 +224,7 @@ function HomeContent() {
       }
     }
     void loadSymposiumDetails();
-  }, [authHeaders, backendUrl, selectedSymposiumId]);
+  }, [selectedSymposiumId]);
 
   // AI template: derived state — groups presentations into display cards, builds filter options, and applies search/filter logic.
   const days = useMemo(

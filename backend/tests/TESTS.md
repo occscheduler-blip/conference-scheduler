@@ -9,32 +9,6 @@ There are two categories of test:
 
 ---
 
-## `test_config.py` — Settings & CORS
-
-Tests for `app.config.Settings`, which loads environment variables via Pydantic Settings.
-
-| Test | What it checks |
-|---|---|
-| `TestSettings::test_default_values` | Default field values (`app_name`, `app_env`, `app_port`, `supabase_events_table`) are correct when no env vars are set. |
-| `TestSettings::test_cors_origins_single` | A single origin string is returned as a one-element list. |
-| `TestSettings::test_cors_origins_multiple` | A comma-separated origins string is split and whitespace-stripped into a list. |
-| `TestSettings::test_cors_origins_strips_empty` | Empty tokens (e.g. `,,`) in the origins string are discarded. |
-
----
-
-## `test_security.py` — API Key Authentication
-
-Tests for `app.security.require_api_key`, the FastAPI dependency that guards all `/api/*` routes.
-
-| Test | What it checks |
-|---|---|
-| `TestRequireApiKey::test_valid_key` | The correct API key returns `None` (no exception). |
-| `TestRequireApiKey::test_missing_key` | A missing key raises `HTTPException` with status 401. |
-| `TestRequireApiKey::test_wrong_key` | An incorrect key raises `HTTPException` with status 401. |
-| `TestRequireApiKey::test_unconfigured_backend_key` | If `BACKEND_API_KEY` is empty on the server, any request raises 500. |
-
----
-
 ## `test_helpers.py` — Router Helper Functions
 
 Unit tests for the private helper functions in `app.routers.events`.

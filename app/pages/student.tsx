@@ -5,14 +5,13 @@ import type { CalendarDay, SavedProfessorRequest, StudentOption, StudentTab } fr
 import {
   totalSlots,
   formatTimeLabel,
-  formatCalendarDate,
-  parseBackendDateTime,
+  buildCalendarFromTimeframes,
 } from "../lib/utils";
+import { apiFetch, apiPost, apiPut } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 
 // Renders the student page and manages its data and interactions.
 export default function StudentPage({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
-  const backendUrl = "/api/backend";
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
@@ -47,16 +46,7 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
       setLoadingStudents(true);
       setIdentityMessage("");
       try {
-        const studentsRes = await fetch(`${backendUrl}/api/events/students`, {
-          headers: authHeaders,
-        });
-        const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string }> }
-          | Array<{ id?: string; name?: string }>;
-        if (!studentsRes.ok) {
-          throw new Error("Failed to load students.");
-        }
-        const studentRows = Array.isArray(studentsPayload) ? studentsPayload : (studentsPayload.data ?? []);
+        const studentRows = await apiFetch<{ id?: string; name?: string }>("/api/events/students", { headers: authHeaders });
         const nextOptions = studentRows
           .filter((row) => row.id)
           .map((row) => ({
@@ -89,7 +79,7 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl]);
+  }, [authHeaders]);
 
   useEffect(() => {
     if (!selectedStudentId) {
@@ -119,34 +109,12 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
       setCalendarMessage("");
       setAvailabilityMessage("");
       try {
-        const [studentsRes, classesRes, departmentsRes, symposiaRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/students`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/classes`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
+        const [studentRows, classRows, departmentRows, symposiumInfoRows] = await Promise.all([
+          apiFetch<{ id?: string; name?: string; email?: string; class_id?: string }>("/api/events/students", { headers: authHeaders }),
+          apiFetch<{ id?: string; name?: string; department_id?: string }>("/api/events/classes", { headers: authHeaders }),
+          apiFetch<{ id?: string; symposium_id?: string }>("/api/events/departments", { headers: authHeaders }),
+          apiFetch<{ id?: string; name?: string; symposium_name?: string }>("/api/events/symposiums", { headers: authHeaders }),
         ]);
-
-        const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string; email?: string; class_id?: string }> }
-          | Array<{ id?: string; name?: string; email?: string; class_id?: string }>;
-        const classesPayload = (await classesRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string; department_id?: string }> }
-          | Array<{ id?: string; name?: string; department_id?: string }>;
-        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; symposium_id?: string }> }
-          | Array<{ id?: string; symposium_id?: string }>;
-        const symposiaPayload = (await symposiaRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
-          | Array<{ id?: string; name?: string; symposium_name?: string }>;
-
-        if (!studentsRes.ok || !classesRes.ok || !departmentsRes.ok || !symposiaRes.ok) {
-          throw new Error("Failed to load student.");
-        }
-
-        const studentRows = Array.isArray(studentsPayload) ? studentsPayload : (studentsPayload.data ?? []);
-        const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
-        const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
-        const symposiumInfoRows = Array.isArray(symposiaPayload) ? symposiaPayload : (symposiaPayload.data ?? []);
 
         const student = studentRows.find((row) => row.id === selectedStudentId);
         if (!student) {
@@ -164,23 +132,12 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
 
         let resolvedPresentationName = "";
         if (classId) {
-          const presentationsRes = await fetch(
-            `${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(classId)}`,
-            { headers: authHeaders }
-          );
-          const presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
-            | {
-                data?: Array<{
-                  id?: string;
-                  title?: string;
-                  presenting_students?: Array<{ id?: string; student_id?: string }>;
-                }>;
-              }
-            | Array<{ id?: string; title?: string; presenting_students?: Array<{ id?: string; student_id?: string }> }>;
-          if (presentationsRes.ok) {
-            const presentationRows = Array.isArray(presentationsPayload)
-              ? presentationsPayload
-              : (presentationsPayload.data ?? []);
+          try {
+            const presentationRows = await apiFetch<{
+              id?: string;
+              title?: string;
+              presenting_students?: Array<{ id?: string; student_id?: string }>;
+            }>(`/api/events/presentations?class_id=${encodeURIComponent(classId)}`, { headers: authHeaders });
             const presentingMembershipRows = presentationRows.flatMap((presentation) =>
               (presentation.presenting_students ?? []).map((presentingStudent) => ({
                 presentationId: presentation.id ?? "",
@@ -192,116 +149,30 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
               "";
             resolvedPresentationName =
               presentationRows.find((presentation) => presentation.id === matchedPresentationId)?.title ?? "";
-          }
+          } catch { /* presentations are optional context */ }
         }
 
-        const symposiumTimeframesRes = await fetch(
-          `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(symposiumId)}`,
-          { headers: authHeaders }
-        );
-        const symposiumTimeframesPayload = (await symposiumTimeframesRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ start_time?: string; end_time?: string }> }
-          | Array<{ start_time?: string; end_time?: string }>;
-        if (!symposiumTimeframesRes.ok) {
-          throw new Error("Failed to load symposium timeframe.");
-        }
-
-        const symposiumTimeframeRows = Array.isArray(symposiumTimeframesPayload)
-          ? symposiumTimeframesPayload
-          : (symposiumTimeframesPayload.data ?? []);
-        const uniqueDayKeys = new Set<string>();
-        const parsedSymposiumRows: Array<{ start: Date; end: Date | null }> = [];
-        for (const row of symposiumTimeframeRows) {
-          if (!row.start_time) continue;
-          const start = parseBackendDateTime(row.start_time);
-          if (Number.isNaN(start.getTime())) continue;
-          const end = row.end_time ? parseBackendDateTime(row.end_time) : null;
-          const key = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(
-            start.getDate()
-          ).padStart(2, "0")}`;
-          uniqueDayKeys.add(key);
-          parsedSymposiumRows.push({ start, end: end && !Number.isNaN(end.getTime()) ? end : null });
-        }
-
-        const nextCalendarDays = Array.from(uniqueDayKeys)
-          .sort()
-          .map((key) => ({
-            key,
-            label: formatCalendarDate(new Date(`${key}T00:00:00`)),
-          }));
-        const dayIndexByKey = new Map(nextCalendarDays.map((day, index) => [day.key, index]));
-        const nextEditableSlots = Array.from({ length: nextCalendarDays.length }, () =>
-          Array.from({ length: totalSlots }, () => false)
-        );
-        const nextAvailability = Array.from({ length: nextCalendarDays.length }, () =>
-          Array.from({ length: totalSlots }, () => false)
+        const symposiumTimeframeRows = await apiFetch<{ start_time?: string; end_time?: string }>(
+          `/api/events/timeframes?linked_id=${encodeURIComponent(symposiumId)}`, { headers: authHeaders }
         );
 
-        for (const row of parsedSymposiumRows) {
-          const dayKey = `${row.start.getFullYear()}-${String(row.start.getMonth() + 1).padStart(2, "0")}-${String(
-            row.start.getDate()
-          ).padStart(2, "0")}`;
-          const dayIndex = dayIndexByKey.get(dayKey);
-          if (dayIndex === undefined) continue;
-          const startMinutes = row.start.getHours() * 60 + row.start.getMinutes();
-          const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
-          const endMinutes = row.end ? row.end.getHours() * 60 + row.end.getMinutes() : startMinutes + 15;
-          const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
-          for (let offset = 0; offset < slotSpan; offset += 1) {
-            const slotIndex = startSlot + offset;
-            if (slotIndex >= 0 && slotIndex < totalSlots) {
-              nextEditableSlots[dayIndex][slotIndex] = true;
-            }
-          }
-        }
+        let studentRowsTf: Array<{ start_time?: string; end_time?: string }> = [];
+        try {
+          studentRowsTf = await apiFetch<{ start_time?: string; end_time?: string }>(
+            `/api/events/timeframes?linked_id=${encodeURIComponent(selectedStudentId)}`, { headers: authHeaders }
+          );
+        } catch { /* student availability is optional */ }
 
-        const studentTimeframesRes = await fetch(
-          `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(selectedStudentId)}`,
-          { headers: authHeaders }
-        );
-        const studentTimeframesPayload = (await studentTimeframesRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ start_time?: string; end_time?: string }> }
-          | Array<{ start_time?: string; end_time?: string }>;
-        if (studentTimeframesRes.ok) {
-          const studentRowsTf = Array.isArray(studentTimeframesPayload)
-            ? studentTimeframesPayload
-            : (studentTimeframesPayload.data ?? []);
-          for (const row of studentRowsTf) {
-            if (!row.start_time) continue;
-            const start = parseBackendDateTime(row.start_time);
-            if (Number.isNaN(start.getTime())) continue;
-            const end = row.end_time ? parseBackendDateTime(row.end_time) : null;
-            const dayKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(
-              start.getDate()
-            ).padStart(2, "0")}`;
-            const dayIndex = dayIndexByKey.get(dayKey);
-            if (dayIndex === undefined) continue;
-            const startMinutes = start.getHours() * 60 + start.getMinutes();
-            const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
-            const endMinutes = end ? end.getHours() * 60 + end.getMinutes() : startMinutes + 15;
-            const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
-            for (let offset = 0; offset < slotSpan; offset += 1) {
-              const slotIndex = startSlot + offset;
-              if (slotIndex < 0 || slotIndex >= totalSlots) continue;
-              if (!nextEditableSlots[dayIndex]?.[slotIndex]) continue;
-              nextAvailability[dayIndex][slotIndex] = true;
-            }
-          }
-        }
+        const { calendarDays: nextCalendarDays, editableSlots: nextEditableSlots, availability: nextAvailability } =
+          buildCalendarFromTimeframes(symposiumTimeframeRows, studentRowsTf);
 
         if (ignore) return;
-        const requestsRes = await fetch(
-          `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
-          { headers: authHeaders }
-        );
-        const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; name?: string; email?: string }> }
-          | Array<{ id?: string; name?: string; email?: string }>;
-        const requestRows = requestsRes.ok
-          ? Array.isArray(requestsPayload)
-            ? requestsPayload
-            : (requestsPayload.data ?? [])
-          : [];
+        let requestRows: Array<{ id?: string; name?: string; email?: string }> = [];
+        try {
+          requestRows = await apiFetch<{ id?: string; name?: string; email?: string }>(
+            `/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`, { headers: authHeaders }
+          );
+        } catch { /* requests are optional */ }
         const nextSavedRequests: SavedProfessorRequest[] = requestRows
           .filter((row) => row.id && row.name && row.email)
           .map((row) => ({
@@ -345,7 +216,7 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl, loadingStudents, selectedStudentId]);
+  }, [authHeaders, loadingStudents, selectedStudentId]);
 
   // Saves one preferred professor request for the selected student.
   const handleSavePreferences = async () => {
@@ -364,50 +235,27 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
 
     setSavingPreferences(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_request`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          name: requestName,
-          email: requestEmail,
-          student_id: selectedStudentId,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        const detail = payload.detail;
-        const text =
-          typeof detail === "string"
-            ? detail
-            : Array.isArray(detail)
-              ? detail.map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg)).join("; ")
-              : "Unable to save request.";
-        setPreferencesMessage(`Save failed: ${text}`);
-        return;
-      }
+      await apiPost("/api/events/add_request", {
+        name: requestName,
+        email: requestEmail,
+        student_id: selectedStudentId,
+      }, authHeaders);
 
-      const requestsRes = await fetch(
-        `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
-        { headers: authHeaders }
-      );
-      const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
-        | { data?: Array<{ id?: string; name?: string; email?: string }> }
-        | Array<{ id?: string; name?: string; email?: string }>;
-      if (requestsRes.ok) {
-        const requestRows = Array.isArray(requestsPayload) ? requestsPayload : (requestsPayload.data ?? []);
-        const nextSavedRequests: SavedProfessorRequest[] = requestRows
-          .filter((row) => row.id && row.name && row.email)
-          .map((row) => ({
-            id: row.id as string,
-            professorId: "",
-            professorName: row.name as string,
-            professorEmail: (row.email as string).toLowerCase(),
-          }));
-        setSavedProfessorRequests(nextSavedRequests);
-      }
+      let requestRows: Array<{ id?: string; name?: string; email?: string }> = [];
+      try {
+        requestRows = await apiFetch<{ id?: string; name?: string; email?: string }>(
+          `/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`, { headers: authHeaders }
+        );
+      } catch { /* ignore refresh failure */ }
+      const nextSavedRequests: SavedProfessorRequest[] = requestRows
+        .filter((row) => row.id && row.name && row.email)
+        .map((row) => ({
+          id: row.id as string,
+          professorId: "",
+          professorName: row.name as string,
+          professorEmail: (row.email as string).toLowerCase(),
+        }));
+      setSavedProfessorRequests(nextSavedRequests);
 
       setPreferencesMessage("Request saved.");
       setPreferredProfessorName("");
@@ -471,29 +319,10 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
 
     setSavingAvailability(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/update_timeframes`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          linked_id: selectedStudentId,
-          timeframes,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        const detail = payload.detail;
-        const text =
-          typeof detail === "string"
-            ? detail
-            : Array.isArray(detail)
-              ? detail.map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg)).join("; ")
-              : "Unable to save availability.";
-        setAvailabilityMessage(`Save failed: ${text}`);
-        return;
-      }
+      await apiPut("/api/events/update_timeframes", {
+        linked_id: selectedStudentId,
+        timeframes,
+      }, authHeaders);
       setAvailabilityMessage(`Saved ${timeframes.length} availability slot${timeframes.length === 1 ? "" : "s"}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";

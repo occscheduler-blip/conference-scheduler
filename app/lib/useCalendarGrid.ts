@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { totalSlots } from "./utils";
 
 export function useCalendarGrid(numDays: number, editableSlots?: boolean[][]) {
   const [availability, setAvailability] = useState<boolean[][]>([]);

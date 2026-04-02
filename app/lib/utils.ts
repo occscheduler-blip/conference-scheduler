@@ -1,4 +1,4 @@
-import type { TimeframeRecord } from "../pages/types";
+import type { CalendarDay, TimeframeRecord } from "../pages/types";
 
 export const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
 
@@ -105,6 +105,15 @@ export function buildTimeframesFromGrid(dates: Date[], availability: boolean[][]
   return tuples;
 }
 
+export function slotRange(start: Date, end: Date | null): { startSlot: number; slotSpan: number } {
+  const startMinutes = start.getHours() * 60 + start.getMinutes();
+  const endMinutes = end ? end.getHours() * 60 + end.getMinutes() : startMinutes + 15;
+  return {
+    startSlot: Math.floor((startMinutes - 9 * 60) / 15),
+    slotSpan: Math.max(1, Math.ceil((endMinutes - startMinutes) / 15)),
+  };
+}
+
 export function gridFromTimeframes(timeframes: TimeframeRecord[]) {
   if (timeframes.length === 0) return { startDate: "", endDate: "", availability: [] as boolean[][] };
 
@@ -125,11 +134,9 @@ export function gridFromTimeframes(timeframes: TimeframeRecord[]) {
     const di = dayIndexByKey.get(dayKey(start));
     if (di === undefined) continue;
 
-    const startMinutes = start.getHours() * 60 + start.getMinutes();
     const end = timeframe.end_time ? parseBackendDateTime(timeframe.end_time) : null;
-    const endMinutes = end && !Number.isNaN(end.getTime()) ? end.getHours() * 60 + end.getMinutes() : startMinutes + 15;
-    const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
-    const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
+    const validEnd = end && !Number.isNaN(end.getTime()) ? end : null;
+    const { startSlot, slotSpan } = slotRange(start, validEnd);
 
     for (let offset = 0; offset < slotSpan; offset += 1) {
       const slotIndex = startSlot + offset;
@@ -171,4 +178,70 @@ export function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value.trim()
   );
+}
+
+export function buildCalendarFromTimeframes(
+  symposiumTimeframes: Array<{ start_time?: string; end_time?: string }>,
+  entityTimeframes: Array<{ start_time?: string; end_time?: string }>
+): {
+  calendarDays: CalendarDay[];
+  editableSlots: boolean[][];
+  availability: boolean[][];
+} {
+  const uniqueDayKeys = new Set<string>();
+  const parsedRows: Array<{ start: Date; end: Date | null }> = [];
+  for (const row of symposiumTimeframes) {
+    if (!row.start_time) continue;
+    const start = parseBackendDateTime(row.start_time);
+    if (Number.isNaN(start.getTime())) continue;
+    const end = row.end_time && row.end_time.trim().length > 0 ? parseBackendDateTime(row.end_time) : null;
+    uniqueDayKeys.add(dayKey(start));
+    parsedRows.push({ start, end: end && !Number.isNaN(end.getTime()) ? end : null });
+  }
+
+  const calendarDays = Array.from(uniqueDayKeys)
+    .sort()
+    .map((key) => ({
+      key,
+      label: formatCalendarDate(new Date(`${key}T00:00:00`)),
+    }));
+
+  const dayIndexByKey = new Map(calendarDays.map((day, index) => [day.key, index]));
+  const editableSlots = Array.from({ length: calendarDays.length }, () =>
+    Array.from({ length: totalSlots }, () => false)
+  );
+  const availability = Array.from({ length: calendarDays.length }, () =>
+    Array.from({ length: totalSlots }, () => false)
+  );
+
+  for (const row of parsedRows) {
+    const di = dayIndexByKey.get(dayKey(row.start));
+    if (di === undefined) continue;
+    const { startSlot, slotSpan } = slotRange(row.start, row.end);
+    for (let offset = 0; offset < slotSpan; offset += 1) {
+      const slotIndex = startSlot + offset;
+      if (slotIndex >= 0 && slotIndex < totalSlots) {
+        editableSlots[di][slotIndex] = true;
+      }
+    }
+  }
+
+  for (const row of entityTimeframes) {
+    if (!row.start_time) continue;
+    const start = parseBackendDateTime(row.start_time);
+    if (Number.isNaN(start.getTime())) continue;
+    const end = row.end_time && row.end_time.trim().length > 0 ? parseBackendDateTime(row.end_time) : null;
+    const di = dayIndexByKey.get(dayKey(start));
+    if (di === undefined) continue;
+    const validEnd = end && !Number.isNaN(end.getTime()) ? end : null;
+    const { startSlot, slotSpan } = slotRange(start, validEnd);
+    for (let offset = 0; offset < slotSpan; offset += 1) {
+      const slotIndex = startSlot + offset;
+      if (slotIndex < 0 || slotIndex >= totalSlots) continue;
+      if (!editableSlots[di]?.[slotIndex]) continue;
+      availability[di][slotIndex] = true;
+    }
+  }
+
+  return { calendarDays, editableSlots, availability };
 }

@@ -11,13 +11,12 @@ import type {
 import {
   totalSlots,
   formatTimeLabel,
-  formatCalendarDate,
-  parseBackendDateTime,
-  toMessage,
   normalizeId,
   parseCsvLine,
   isUuid,
+  buildCalendarFromTimeframes,
 } from "../lib/utils";
+import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 
 // Renders the professor page and manages its data and interactions.
@@ -70,7 +69,6 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const hasSelectedProfessor = Boolean(selectedProfessorId);
   const identityReady = hasSelectedProfessor && !loadingIdentity && Boolean(professorName);
   const pageLocked = !hasSelectedProfessor || (!loadingIdentity && !professorName);
-  const backendUrl = "/api/backend";
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   // AI template: fetches and normalizes student names for a class, with URL fallback logic.
@@ -78,14 +76,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const fetchClassStudentNames = useCallback(
     async (targetClassId: string) => {
       if (!targetClassId) return [] as UploadedStudent[];
-      const response = await fetch(`${backendUrl}/api/events/students?class_id=${encodeURIComponent(targetClassId)}`, { headers: authHeaders, cache: "no-store" });
-      const payload = (await response.json().catch(() => ({}))) as
-        | { detail?: unknown; data?: Array<{ id?: string; name?: string }> }
-        | Array<{ id?: string; name?: string }>;
-      if (!response.ok) {
-        throw new Error(toMessage((payload as { detail?: unknown }).detail, "Failed to load students."));
-      }
-      const rows = Array.isArray(payload) ? payload : (payload.data ?? []);
+      const rows = await apiFetch<{ id?: string; name?: string }>(
+        `/api/events/students?class_id=${encodeURIComponent(targetClassId)}`,
+        { headers: authHeaders, cache: "no-store" }
+      );
       return rows
         .map((row, index) => ({
           id: row.id ?? `row-${index}`,
@@ -93,7 +87,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         }))
         .filter((row) => row.name.length > 0);
     },
-    [authHeaders, backendUrl]
+    [authHeaders]
   );
 
   useEffect(() => {
@@ -104,14 +98,9 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setLoadingProfessors(true);
       setIdentityMessage("");
       try {
-        const professorsRes = await fetch(`${backendUrl}/api/events/professors`, { headers: authHeaders, cache: "no-store" });
-        const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string; class_id?: string }> }
-          | Array<{ id?: string; name?: string; class_id?: string }>;
-        if (!professorsRes.ok) {
-          throw new Error(toMessage((professorsPayload as { detail?: unknown }).detail, "Failed to load professor."));
-        }
-        const professorRows = Array.isArray(professorsPayload) ? professorsPayload : (professorsPayload.data ?? []);
+        const professorRows = await apiFetch<{ id?: string; name?: string; class_id?: string }>(
+          "/api/events/professors", { headers: authHeaders, cache: "no-store" }
+        );
         const nextProfessorOptions = professorRows
           .filter((row) => row.id)
           .map((row) => ({
@@ -145,7 +134,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl]);
+  }, [authHeaders]);
 
   useEffect(() => {
     if (!selectedProfessorId) {
@@ -169,35 +158,11 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setIdentityMessage("");
       setCalendarMessage("");
       try {
-        const [classesRes, departmentsRes, symposiaRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/classes`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
+        const [classRows, departmentRows, symposiumRows] = await Promise.all([
+          apiFetch<{ id?: string; name?: string; department_id?: string }>("/api/events/classes", { headers: authHeaders }),
+          apiFetch<{ id?: string; symposium_id?: string }>("/api/events/departments", { headers: authHeaders }),
+          apiFetch<{ id?: string; name?: string; symposium_name?: string }>("/api/events/symposiums", { headers: authHeaders }),
         ]);
-
-        const classesPayload = (await classesRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; name?: string; department_id?: string }> }
-          | Array<{ id?: string; name?: string; department_id?: string }>;
-        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; symposium_id?: string }> }
-          | Array<{ id?: string; symposium_id?: string }>;
-        const symposiaPayload = (await symposiaRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
-          | Array<{ id?: string; name?: string; symposium_name?: string }>;
-
-        if (!classesRes.ok) {
-          throw new Error(toMessage((classesPayload as { detail?: unknown }).detail, "Failed to load class data."));
-        }
-        if (!departmentsRes.ok) {
-          throw new Error(toMessage((departmentsPayload as { detail?: unknown }).detail, "Failed to load departments."));
-        }
-        if (!symposiaRes.ok) {
-          throw new Error(toMessage((symposiaPayload as { detail?: unknown }).detail, "Failed to load symposium."));
-        }
-
-        const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
-        const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
-        const symposiumRows = Array.isArray(symposiaPayload) ? symposiaPayload : (symposiaPayload.data ?? []);
         const professor = professorOptions.find((row) => row.id === selectedProfessorId);
         if (!professor) {
           throw new Error("Select a professor to load data.");
@@ -213,53 +178,13 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
         let existingGroups: PresentationGroup[] = [];
         if (resolvedClassId) {
-          let presentationsRes: Response | null = null;
-          let presentationsPayload:
-            | {
-                detail?: unknown;
-                data?: Array<{
-                  id?: string;
-                  title?: string;
-                  minutes?: number;
-                  buffer?: number;
-                  presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
-                }>;
-              }
-            | Array<{
-                id?: string;
-                title?: string;
-                minutes?: number;
-                buffer?: number;
-                presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
-              }> = {};
-          presentationsRes = await fetch(`${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(resolvedClassId)}`, { headers: authHeaders });
-          presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
-            | {
-                detail?: unknown;
-                data?: Array<{
-                  id?: string;
-                  title?: string;
-                  minutes?: number;
-                  buffer?: number;
-                  presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
-                }>;
-              }
-            | Array<{
-                id?: string;
-                title?: string;
-                minutes?: number;
-                buffer?: number;
-                presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
-              }>;
-          if (!presentationsRes.ok) {
-            throw new Error(
-              toMessage((presentationsPayload as { detail?: unknown }).detail, "Failed to load presentations.")
-            );
-          }
-
-          const presentationRows = Array.isArray(presentationsPayload)
-            ? presentationsPayload
-            : (presentationsPayload.data ?? []);
+          const presentationRows = await apiFetch<{
+            id?: string;
+            title?: string;
+            minutes?: number;
+            buffer?: number;
+            presenting_students?: Array<{ id?: string; student_id?: string; studentId?: string }>;
+          }>(`/api/events/presentations?class_id=${encodeURIComponent(resolvedClassId)}`, { headers: authHeaders });
           const groups: PresentationGroup[] = [];
 
           for (const presentation of presentationRows) {
@@ -293,120 +218,15 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         let nextEditableSlots: boolean[][] = [];
         let nextAvailability: boolean[][] = [];
         if (symposiumId) {
-          const symposiumTimeframesRes = await fetch(
-            `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(symposiumId)}`,
-            { headers: authHeaders }
+          const symposiumTimeframeRows = await apiFetch<{ start_time?: string; end_time?: string }>(
+            `/api/events/timeframes?linked_id=${encodeURIComponent(symposiumId)}`, { headers: authHeaders }
           );
-          const symposiumTimeframesPayload = (await symposiumTimeframesRes.json().catch(() => ({}))) as
-            | { data?: Array<{ start_time?: string; end_time?: string }> }
-            | Array<{ start_time?: string; end_time?: string }>;
-
-          if (!symposiumTimeframesRes.ok) {
-            throw new Error(
-              toMessage((symposiumTimeframesPayload as { detail?: unknown }).detail, "Failed to load symposium dates.")
-            );
-          }
-
-          const symposiumTimeframeRows = Array.isArray(symposiumTimeframesPayload)
-            ? symposiumTimeframesPayload
-            : (symposiumTimeframesPayload.data ?? []);
-          const uniqueDayKeys = new Set<string>();
-          const parsedSymposiumRows: Array<{ start: Date; end: Date | null }> = [];
-          for (const row of symposiumTimeframeRows) {
-            if (!row.start_time) continue;
-            const start = parseBackendDateTime(row.start_time);
-            if (Number.isNaN(start.getTime())) continue;
-            const end =
-              row.end_time && row.end_time.trim().length > 0 ? parseBackendDateTime(row.end_time) : null;
-            const key = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(
-              start.getDate()
-            ).padStart(2, "0")}`;
-            uniqueDayKeys.add(key);
-            parsedSymposiumRows.push({ start, end: end && !Number.isNaN(end.getTime()) ? end : null });
-          }
-
-          nextCalendarDays = Array.from(uniqueDayKeys)
-            .sort()
-            .map((key) => {
-              const date = new Date(`${key}T00:00:00`);
-              return {
-                key,
-                label: formatCalendarDate(date),
-              };
-            });
-
-          const dayIndexByKey = new Map(nextCalendarDays.map((day, index) => [day.key, index]));
-          nextEditableSlots = Array.from({ length: nextCalendarDays.length }, () =>
-            Array.from({ length: totalSlots }, () => false)
-          );
-          nextAvailability = Array.from({ length: nextCalendarDays.length }, () =>
-            Array.from({ length: totalSlots }, () => false)
+          const professorTimeframeRows = await apiFetch<{ start_time?: string; end_time?: string }>(
+            `/api/events/timeframes?linked_id=${encodeURIComponent(selectedProfessorId)}`, { headers: authHeaders }
           );
 
-          for (const row of parsedSymposiumRows) {
-            const dayKey = `${row.start.getFullYear()}-${String(row.start.getMonth() + 1).padStart(2, "0")}-${String(
-              row.start.getDate()
-            ).padStart(2, "0")}`;
-            const dayIndex = dayIndexByKey.get(dayKey);
-            if (dayIndex === undefined) continue;
-
-            const startMinutes = row.start.getHours() * 60 + row.start.getMinutes();
-            const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
-
-            const endMinutes = row.end ? row.end.getHours() * 60 + row.end.getMinutes() : startMinutes + 15;
-            const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
-
-            for (let offset = 0; offset < slotSpan; offset += 1) {
-              const slotIndex = startSlot + offset;
-              if (slotIndex >= 0 && slotIndex < totalSlots) {
-                nextEditableSlots[dayIndex][slotIndex] = true;
-              }
-            }
-          }
-
-          const professorTimeframesRes = await fetch(
-            `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(selectedProfessorId)}`,
-            { headers: authHeaders }
-          );
-          const professorTimeframesPayload = (await professorTimeframesRes.json().catch(() => ({}))) as
-            | { data?: Array<{ start_time?: string; end_time?: string }> }
-            | Array<{ start_time?: string; end_time?: string }>;
-
-          if (!professorTimeframesRes.ok) {
-            throw new Error(
-              toMessage((professorTimeframesPayload as { detail?: unknown }).detail, "Failed to load saved availability.")
-            );
-          }
-
-          const professorTimeframeRows = Array.isArray(professorTimeframesPayload)
-            ? professorTimeframesPayload
-            : (professorTimeframesPayload.data ?? []);
-
-          for (const row of professorTimeframeRows) {
-            if (!row.start_time) continue;
-            const start = parseBackendDateTime(row.start_time);
-            if (Number.isNaN(start.getTime())) continue;
-            const end =
-              row.end_time && row.end_time.trim().length > 0 ? parseBackendDateTime(row.end_time) : null;
-
-            const dayKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(
-              start.getDate()
-            ).padStart(2, "0")}`;
-            const dayIndex = dayIndexByKey.get(dayKey);
-            if (dayIndex === undefined) continue;
-
-            const startMinutes = start.getHours() * 60 + start.getMinutes();
-            const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
-            const endMinutes = end ? end.getHours() * 60 + end.getMinutes() : startMinutes + 15;
-            const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
-
-            for (let offset = 0; offset < slotSpan; offset += 1) {
-              const slotIndex = startSlot + offset;
-              if (slotIndex < 0 || slotIndex >= totalSlots) continue;
-              if (!nextEditableSlots[dayIndex]?.[slotIndex]) continue;
-              nextAvailability[dayIndex][slotIndex] = true;
-            }
-          }
+          ({ calendarDays: nextCalendarDays, editableSlots: nextEditableSlots, availability: nextAvailability } =
+            buildCalendarFromTimeframes(symposiumTimeframeRows, professorTimeframeRows));
         }
 
         if (ignore) return;
@@ -474,7 +294,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl, fetchClassStudentNames, loadingProfessors, professorOptions, selectedProfessorId]);
+  }, [authHeaders, fetchClassStudentNames, loadingProfessors, professorOptions, selectedProfessorId]);
 
   // Saves selected availability slots to backend timeframes.
   const handleSaveAvailability = async () => {
@@ -527,30 +347,14 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     setSavingAvailability(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/update_timeframes`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          linked_id: selectedProfessorId,
-          timeframes,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        setAvailabilityMessage(`Save failed: ${toMessage(payload.detail, "Unable to save availability.")}`);
-        return;
-      }
+      await apiPut("/api/events/update_timeframes", {
+        linked_id: selectedProfessorId,
+        timeframes,
+      }, authHeaders);
       setAvailabilityMessage(`Saved ${timeframes.length} availability slot${timeframes.length === 1 ? "" : "s"}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
-        setAvailabilityMessage(`Save failed: backend is unreachable at ${backendUrl}.`);
-      } else {
-        setAvailabilityMessage(`Save failed: ${message}`);
-      }
+      setAvailabilityMessage(`Save failed: ${message}`);
     } finally {
       setSavingAvailability(false);
     }
@@ -609,30 +413,12 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         return;
       }
 
-      const response = await fetch(`${backendUrl}/api/events/add_students`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          class_id: classId,
-          students,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as {
-        detail?: unknown;
-        records_inserted?: {
-          students?: number;
-        };
-      };
+      const { raw: payload } = await apiPost<Record<string, unknown>>("/api/events/add_students", {
+        class_id: classId,
+        students,
+      }, authHeaders);
 
-      if (!response.ok) {
-        setCsvMessage(toMessage(payload.detail, "CSV upload failed."));
-        return;
-      }
-
-      const inserted = payload.records_inserted?.students ?? students.length;
+      const inserted = (payload.records_inserted as { students?: number })?.students ?? students.length;
       const skipped = Math.max(0, lines.length - 1 - students.length);
       setCsvMessage(`Upload successful: inserted ${inserted} student${inserted === 1 ? "" : "s"}${skipped > 0 ? `, skipped ${skipped}` : ""}.`);
       const refreshedStudents = await fetchClassStudentNames(classId);
@@ -685,23 +471,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     setManualStudentSubmitting(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_students`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          class_id: classId,
-          students: [{ name, email }],
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-
-      if (!response.ok) {
-        setManualStudentMessage(`Add failed: ${toMessage(payload.detail, "Unable to add student.")}`);
-        return;
-      }
+      await apiPost("/api/events/add_students", {
+        class_id: classId,
+        students: [{ name, email }],
+      }, authHeaders);
 
       const refreshedStudents = await fetchClassStudentNames(classId);
       setUploadedStudents(refreshedStudents);
@@ -710,11 +483,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setManualStudentMessage(`Added ${name}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
-        setManualStudentMessage(`Add failed: backend is unreachable at ${backendUrl}.`);
-      } else {
-        setManualStudentMessage(`Add failed: ${message}`);
-      }
+      setManualStudentMessage(`Add failed: ${message}`);
     } finally {
       setManualStudentSubmitting(false);
     }
@@ -738,27 +507,13 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     setSelectedUploadedStudentKeys((current) => current.filter((key) => key !== studentId));
     setDeletingStudentIds((current) => [...current, studentId]);
     try {
-      const response = await fetch(`${backendUrl}/api/events/delete_student?student_id=${encodeURIComponent(studentId)}`, {
-        method: "DELETE",
-        headers: authHeaders,
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        setUploadedStudents(previousStudents);
-        setSelectedUploadedStudentKeys(previousSelectedKeys);
-        setCsvMessage(`Delete failed: ${toMessage(payload.detail, "Unable to delete student.")}`);
-        return;
-      }
+      await apiDelete(`/api/events/delete_student?student_id=${encodeURIComponent(studentId)}`, authHeaders);
       setCsvMessage(`Deleted ${studentName}.`);
     } catch (error) {
       setUploadedStudents(previousStudents);
       setSelectedUploadedStudentKeys(previousSelectedKeys);
       const message = error instanceof Error ? error.message : "Unknown error";
-      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
-        setCsvMessage(`Delete failed: backend is unreachable at ${backendUrl}.`);
-      } else {
-        setCsvMessage(`Delete failed: ${message}`);
-      }
+      setCsvMessage(`Delete failed: ${message}`);
     } finally {
       setDeletingStudentIds((current) => current.filter((id) => id !== studentId));
     }
@@ -866,26 +621,12 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     setDeletingPresentationGroupIds((current) => [...current, group.id]);
     try {
-      const response = await fetch(`${backendUrl}/api/events/delete_presentation?presentation_id=${encodeURIComponent(group.id)}`, {
-        method: "DELETE",
-        headers: authHeaders,
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-
-      if (!response.ok) {
-        setDeployMessage(`Delete failed: ${toMessage(payload.detail, "Unable to delete presentation.")}`);
-        return;
-      }
-
+      await apiDelete(`/api/events/delete_presentation?presentation_id=${encodeURIComponent(group.id)}`, authHeaders);
       removePresentationGroupFromUi(group.id, source);
       setDeployMessage("Deleted presentation group.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
-        setDeployMessage(`Delete failed: backend is unreachable at ${backendUrl}.`);
-      } else {
-        setDeployMessage(`Delete failed: ${message}`);
-      }
+      setDeployMessage(`Delete failed: ${message}`);
     } finally {
       setDeletingPresentationGroupIds((current) => current.filter((id) => id !== group.id));
     }
@@ -938,26 +679,14 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     setSavingEditedPresentationId(group.id);
     try {
-      const response = await fetch(`${backendUrl}/api/events/update_presentation`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          presentation_id: group.id,
-          title,
-          class_id: classId,
-          minutes,
-          buffer,
-          presenting_students: studentIds,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        setDeployMessage(`Save failed: ${toMessage(payload.detail, "Unable to update presentation.")}`);
-        return;
-      }
+      await apiPut("/api/events/update_presentation", {
+        presentation_id: group.id,
+        title,
+        class_id: classId,
+        minutes,
+        buffer,
+        presenting_students: studentIds,
+      }, authHeaders);
 
       setDeployedPresentationGroups((current) =>
         current.map((candidate) =>
@@ -975,11 +704,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       cancelEditDeployedPresentation();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
-        setDeployMessage(`Save failed: backend is unreachable at ${backendUrl}.`);
-      } else {
-        setDeployMessage(`Save failed: ${message}`);
-      }
+      setDeployMessage(`Save failed: ${message}`);
     } finally {
       setSavingEditedPresentationId(null);
     }
@@ -1043,33 +768,17 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
           : defaultBufferDuration.trim();
         const buffer = Number.parseInt(bufferValue, 10);
 
-        const response = await fetch(`${backendUrl}/api/events/add_presentation`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(authHeaders ?? {}),
-          },
-          body: JSON.stringify({
-            title: group.presentationName.trim(),
-            class_id: classId,
-            minutes,
-            buffer,
-            presenting_students: group.studentIds,
-          }),
-        });
-        const payload = (await response.json().catch(() => ({}))) as {
-          detail?: unknown;
-          presentation_id?: string;
-        };
-
-        if (!response.ok) {
-          setDeployMessage(`Deploy failed: ${toMessage(payload.detail, "Unable to save presentations.")}`);
-          return;
-        }
+        const { raw: payload } = await apiPost<Record<string, unknown>>("/api/events/add_presentation", {
+          title: group.presentationName.trim(),
+          class_id: classId,
+          minutes,
+          buffer,
+          presenting_students: group.studentIds,
+        }, authHeaders);
         insertedCount += 1;
         nextGroups.push({
           ...group,
-          id: payload.presentation_id ?? group.id,
+          id: (payload.presentation_id as string) ?? group.id,
         });
       }
 
@@ -1087,11 +796,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setDeployMessage(`Saved ${insertedCount} presentation${insertedCount === 1 ? "" : "s"} to the database.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
-        setDeployMessage(`Deploy failed: backend is unreachable at ${backendUrl}.`);
-      } else {
-        setDeployMessage(`Deploy failed: ${message}`);
-      }
+      setDeployMessage(`Deploy failed: ${message}`);
     } finally {
       setDeployingPresentations(false);
     }
