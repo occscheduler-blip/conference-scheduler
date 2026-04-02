@@ -315,9 +315,10 @@ End-to-end HTTP tests using FastAPI's `TestClient`. Every request goes through t
 
 | Test | What it checks |
 |---|---|
-| `test_missing_key_returns_401` | A request to an `/api/` route without `X-API-Key` returns 401. |
-| `test_wrong_key_returns_401` | An incorrect `X-API-Key` returns 401. |
-| `test_valid_key_passes` | The correct `X-API-Key` returns 200. |
+| `test_public_get_no_token_ok` | GET endpoints are public — no token required (returns 200). |
+| `test_no_token_returns_401_on_protected` | A POST to a protected route without a Bearer token returns 401. |
+| `test_wrong_token_returns_401` | An invalid Bearer token returns 401. |
+| `test_wrong_role_returns_403` | A valid token with the wrong role returns 403. |
 
 ### POST endpoints
 
