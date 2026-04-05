@@ -1174,7 +1174,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                     )}
                   </div>
 
-                  <div className="mt-3">
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
                     <button
                       type="button"
                       onClick={handleDeployEvent}
@@ -1182,8 +1182,9 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                     >
                       Deploy
                     </button>
-                    {deployEventMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployEventMessage}</p> : null}
+                    {deployEventMessage ? <p className="text-sm font-semibold text-[#222]">{deployEventMessage}</p> : null}
                   </div>
+
                 </div>
 
               </>
