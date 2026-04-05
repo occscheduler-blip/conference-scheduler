@@ -1,50 +1,59 @@
 from datetime import datetime
+from typing import Any, cast
 from uuid import UUID
 
 from app.supabase_io import read
 from app.supabase_io.supabase_schemas import Presentation, Professor, Student, Symposium, Timeframe
 
+def _rows(data: Any) -> list[dict[str, Any]]:
+    return cast(list[dict[str, Any]], data)
+
+
 def fetch_symposium(symposium_uuid: UUID) -> Symposium:
-    sym_resp = read.get_symposiums()
-    return next(
-        Symposium(**s) for s in sym_resp.data if str(s["id"]) == str(symposium_uuid)
-    )
+    rows = _rows(read.get_symposiums().data)
+    return next(Symposium(**r) for r in rows if str(r["id"]) == str(symposium_uuid))
+
 
 def fetch_symposium_slots(symposium_uuid: UUID) -> list[Timeframe]:
-    sym_tf_resp = read.get_timeframes(linked_id=symposium_uuid)
-    return sorted(
-        [Timeframe(**t) for t in sym_tf_resp.data],
-        key=lambda t: t.start_time,
-    )
+    rows = _rows(read.get_timeframes(linked_id=symposium_uuid).data)
+    return sorted([Timeframe(**r) for r in rows], key=lambda t: t.start_time)
+
 
 def fetch_departments(symposium_uuid: UUID) -> list[UUID]:
-    dept_resp = read.get_departments(symposium_id=symposium_uuid)
-    return [d["id"] for d in dept_resp.data]
+    rows = _rows(read.get_departments(symposium_id=symposium_uuid).data)
+    return [UUID(str(r["id"])) for r in rows]
+
 
 def fetch_classes(department_uuids: list[UUID]) -> list[UUID]:
-    class_resp = read.get_classes(department_id=department_uuids)
-    return [c["id"] for c in class_resp.data]
+    rows = _rows(read.get_classes(department_id=department_uuids).data)
+    return [UUID(str(r["id"])) for r in rows]
+
 
 def fetch_presentations(class_uuids: list[UUID]) -> list[Presentation]:
-    pres_resp = read.get_presentations(class_id=class_uuids)
-    return [Presentation(**p) for p in pres_resp.data]
+    rows = _rows(read.get_presentations(class_id=class_uuids).data)
+    return [Presentation(**r) for r in rows]
+
 
 def fetch_professors(class_uuids: list[UUID]) -> list[Professor]:
-    prof_resp = read.get_professors(class_id=class_uuids)
-    return [Professor(**p) for p in prof_resp.data]
+    rows = _rows(read.get_professors(class_id=class_uuids).data)
+    return [Professor(**r) for r in rows]
+
 
 def fetch_students(class_uuids: list[UUID]) -> list[Student]:
-    return [Student(**s) for s in read.get_students(class_id=class_uuids).data]
+    rows = _rows(read.get_students(class_id=class_uuids).data)
+    return [Student(**r) for r in rows]
+
 
 def fetch_professor_availability(professors: list[Professor]) -> dict[UUID, set[datetime]]:
     return {
-        prof.id: {Timeframe(**t).start_time for t in read.get_timeframes(linked_id=prof.id).data}
+        prof.id: {Timeframe(**r).start_time for r in _rows(read.get_timeframes(linked_id=prof.id).data)}
         for prof in professors
     }
 
+
 def fetch_student_availability(students: list[Student]) -> dict[UUID, set[datetime]]:
     return {
-        student.id: {Timeframe(**t).start_time for t in read.get_timeframes(linked_id=student.id).data}
+        student.id: {Timeframe(**r).start_time for r in _rows(read.get_timeframes(linked_id=student.id).data)}
         for student in students
     }
 
@@ -66,6 +75,7 @@ def fetch_class_to_presentations(presentations: list[Presentation]) -> dict[UUID
     for pres in presentations:
         result.setdefault(pres.class_id, []).append(pres.id)
     return result
+
 
 def scheduler_payload(symposium_id: UUID) -> tuple[
     Symposium,

@@ -21,6 +21,7 @@ from app.supabase_io.client import supabase
 
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
+from app.scheduler_payload import scheduler_payload
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -661,11 +662,11 @@ def add_request(
         ) from exc
 
 @router.post("/schedule")
-def run_schedule(body: RunSchedulerRequest):
+def run_schedule(body: request_schemas.RunSchedulerRequest) -> dict[str, object]:
     try:
-        payload = scheduler_payload.scheduler_payload(body.symposium_id)
-        #results = scheduler.solve(payload)
-        return {"schedule": results}
+        payload = scheduler_payload(body.symposium_id)
+        # results = solver.solve(payload)
+        return {"status": "Scheduler payload built successfully"}
     except HTTPException:
         raise
     except ValueError as exc:

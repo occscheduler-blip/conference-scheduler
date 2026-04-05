@@ -1,6 +1,6 @@
 PYTEST   := .venv/bin/pytest
 MYPY     := .venv/bin/mypy
-SUPABASE := ~/.local/bin/supabase
+SUPABASE := $(shell which supabase)
 
 .PHONY: supabase-start supabase-migrate test
 
