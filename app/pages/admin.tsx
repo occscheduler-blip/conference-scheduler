@@ -834,7 +834,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                       >
                         {Array.from({ length: totalSlots }, (_, slotIndex) => (
                           <div key={slotIndex} className="contents">
-                            <div className="pr-1 pt-0.5 text-right text-[11px] font-semibold text-[#444]">
+                            <div className="h-4 overflow-hidden pr-1 text-right text-[11px] leading-4 font-semibold text-[#444]">
                               {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                             </div>
                             {createCalendarDates.map((date, dayIndex) => {
@@ -1009,7 +1009,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                           >
                             {Array.from({ length: totalSlots }, (_, slotIndex) => (
                               <div key={slotIndex} className="contents">
-                                <div className="pr-1 pt-0.5 text-right text-[11px] font-semibold text-[#444]">
+                                <div className="h-4 overflow-hidden pr-1 text-right text-[11px] leading-4 font-semibold text-[#444]">
                                   {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                                 </div>
                                 {editCalendarDates.map((date, dayIndex) => {
