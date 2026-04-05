@@ -507,6 +507,45 @@ def add_presentation(
         ) from exc
 
 
+@router.post("/schedule")
+def run_schedule(
+    body: request_schemas.RunSchedulerRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    try:
+        result = build_schedule_for_symposium(body.symposium_id)
+        
+        if result.status in ("optimal", "feasible"):
+            for assignment in result.assignments:
+                supabase.table("presentations").update({
+                    "start_time": assignment.start.isoformat(),
+                    "end_time": assignment.end.isoformat(),
+                }).eq("id", assignment.presentation_id).execute()
+        
+        return {
+            "status": result.status,
+            "assignments": [
+                {
+                    "presentation_id": a.presentation_id,
+                    "room_index": a.room_index,
+                    "start": a.start.isoformat(),
+                    "end": a.end.isoformat(),
+                }
+                for a in result.assignments
+            ],
+            "unscheduled_presentations": list(result.unscheduled_presentations),
+            "diagnostics": list(result.diagnostics),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to run scheduler: {exc}"
+        ) from exc
+    
+
 @router.put("/update_class")
 def update_class(
     payload: request_schemas.UpdateClassRequest,
@@ -697,33 +736,6 @@ def add_request(
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
-        ) from exc
-
-@router.post("/schedule")
-def run_schedule(body: request_schemas.RunSchedulerRequest) -> dict[str, object]:
-    try:
-        result = build_schedule_for_symposium(body.symposium_id)
-        return {
-            "status": result.status,
-            "assignments": [
-                {
-                    "presentation_id": a.presentation_id,
-                    "room_index": a.room_index,
-                    "start": a.start.isoformat(),
-                    "end": a.end.isoformat(),
-                }
-                for a in result.assignments
-            ],
-            "unscheduled_presentations": list(result.unscheduled_presentations),
-            "diagnostics": list(result.diagnostics),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to run scheduler: {exc}"
         ) from exc
 
 
