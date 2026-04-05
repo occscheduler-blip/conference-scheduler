@@ -226,7 +226,9 @@ def solve_schedule(
                 for option_index in range(len(eligible_starts[presentation.id])):
                     key = (presentation.id, option_index, room_index)
                     start_time, end_time = option_lookup[key]
-                    if start_time <= instant < end_time:
+                    # extend end by buffer so next presentation can't start during buffer
+                    buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
+                    if start_time <= instant < buffered_end:
                         overlapping.append(assignment_vars[key])
             if overlapping:
                 "no two presentations can overlap in the same room"
