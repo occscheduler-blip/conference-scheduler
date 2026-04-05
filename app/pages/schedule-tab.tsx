@@ -476,7 +476,7 @@ export default function ScheduleTab({
         <p className="text-sm text-[#555]">Loading schedule...</p>
       ) : null}
 
-      {/* Day tabs */}
+      {/* Day tabs + Unscheduled tab */}
       {!isLoadingSchedule && days.length > 0 ? (
         <div className="overflow-hidden rounded-lg border-2 border-[#1635a7]">
           <div className="flex">
@@ -497,12 +497,23 @@ export default function ScheduleTab({
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => setSelectedDay("unscheduled")}
+              className={`flex-1 whitespace-nowrap px-4 py-2.5 text-sm font-semibold ${
+                selectedDay === "unscheduled"
+                  ? "bg-white text-[#111]"
+                  : "bg-[#1635a7] text-white hover:bg-[#0b2a8d]"
+              }`}
+            >
+              Unscheduled{unscheduled.length > 0 ? ` (${unscheduled.length})` : ""}
+            </button>
           </div>
         </div>
       ) : null}
 
       {/* Schedule grid */}
-      {!isLoadingSchedule && selectedDay && activeSlots.size > 0 ? (
+      {!isLoadingSchedule && selectedDay && selectedDay !== "unscheduled" && activeSlots.size > 0 ? (
         <div className="overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
           <div
             className="grid"
@@ -566,7 +577,12 @@ export default function ScheduleTab({
               const gridRowStart = Math.floor(startSlotRaw - minSlot) + 2;
               const gridRowEnd = Math.ceil(endSlotRaw - minSlot) + 2;
               const gridCol = pres.room + 2; // +2 for time column offset (col 1)
-              const spanRows = gridRowEnd - gridRowStart;
+
+              // Sub-slot positioning for non-15-minute-aligned times
+              const fracStart = (startSlotRaw - minSlot) - Math.floor(startSlotRaw - minSlot);
+              const topOffset = fracStart * SLOT_HEIGHT;
+              const blockHeight = (endSlotRaw - startSlotRaw) * SLOT_HEIGHT;
+              const durationSlots = endSlotRaw - startSlotRaw;
 
               const color = colorMap.get(pres.id) ?? BLOCK_COLORS[0];
 
@@ -581,16 +597,20 @@ export default function ScheduleTab({
                     gridColumn: gridCol,
                     backgroundColor: color.bg,
                     color: color.text,
+                    position: "relative",
+                    top: `${topOffset}px`,
+                    height: `${blockHeight}px`,
+                    alignSelf: "start",
                   }}
                   title={`${pres.title} (${pres.minutes} min)\n${pres.presenterNames.join(", ")}`}
                 >
                   <div className="truncate text-xs font-semibold leading-tight">{pres.title}</div>
-                  {spanRows > 1 ? (
+                  {durationSlots > 1 ? (
                     <div className="truncate text-[10px] leading-tight opacity-80">
                       {pres.presenterNames.join(", ") || "No presenters"}
                     </div>
                   ) : null}
-                  {spanRows > 2 ? (
+                  {durationSlots > 2 ? (
                     <div className="truncate text-[10px] leading-tight opacity-60">
                       {pres.minutes} min
                     </div>
@@ -602,39 +622,40 @@ export default function ScheduleTab({
         </div>
       ) : null}
 
-      {/* Unscheduled presentations */}
-      {!isLoadingSchedule && unscheduled.length > 0 ? (
+      {/* Unscheduled presentations (tab content) */}
+      {!isLoadingSchedule && selectedDay === "unscheduled" ? (
         <div className="rounded-xl border border-[#d8e2ff] bg-white p-4">
-          <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-[#9a1f1f]">
-            Unscheduled Presentations ({unscheduled.length})
-          </h3>
-          <div className="space-y-2">
-            {unscheduled.map((pres) => (
-              <div
-                key={pres.id}
-                className="flex items-center justify-between rounded-lg border border-[#e5e7eb] bg-[#fefefe] px-4 py-2.5"
-              >
-                <div>
-                  <span className="text-sm font-semibold text-[#111]">{pres.title}</span>
-                  <span className="ml-2 text-xs text-[#666]">
-                    ({pres.minutes} min) &mdash; {pres.departmentName || "No dept"}
-                  </span>
-                  {pres.presenterNames.length > 0 ? (
-                    <span className="ml-2 text-xs text-[#888]">
-                      {pres.presenterNames.join(", ")}
-                    </span>
-                  ) : null}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleOpenEditModal(pres)}
-                  className="rounded-md border border-[#0f33a8] bg-white px-3 py-1 text-xs font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+          {unscheduled.length > 0 ? (
+            <div className="space-y-2">
+              {unscheduled.map((pres) => (
+                <div
+                  key={pres.id}
+                  className="flex items-center justify-between rounded-lg border border-[#e5e7eb] bg-[#fefefe] px-4 py-2.5"
                 >
-                  Assign
-                </button>
-              </div>
-            ))}
-          </div>
+                  <div>
+                    <span className="text-sm font-semibold text-[#111]">{pres.title}</span>
+                    <span className="ml-2 text-xs text-[#666]">
+                      ({pres.minutes} min) &mdash; {pres.departmentName || "No dept"}
+                    </span>
+                    {pres.presenterNames.length > 0 ? (
+                      <span className="ml-2 text-xs text-[#888]">
+                        {pres.presenterNames.join(", ")}
+                      </span>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditModal(pres)}
+                    className="rounded-md border border-[#0f33a8] bg-white px-3 py-1 text-xs font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+                  >
+                    Assign
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-[#555]">All presentations have been scheduled.</p>
+          )}
         </div>
       ) : null}
 
