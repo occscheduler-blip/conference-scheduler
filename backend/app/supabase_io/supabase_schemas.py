@@ -47,8 +47,7 @@ class Presentation(BaseModel):
     class_id: UUID
     minutes: int
     buffer: int | None
-    start_time: datetime | None
-    end_time: datetime | None
+    room: int | None = None
 
 
 class Timeframe(BaseModel):
