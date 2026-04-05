@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.db_helper import DbHelper
 
 # Fixed OTP used across all tests (patched into generate_otp)
 _TEST_OTP = "123456"
@@ -241,3 +242,65 @@ class TestOTPVerify:
             json={"email": "prof@hamilton.edu", "role": "professor", "otp": "222222"},
         )
         assert resp.status_code == 200
+
+
+# ── Cleanup / deletion tests ────────────────────────────────────────────
+
+
+class TestOTPCleanup:
+    def _request_otp(self, client: TestClient, email: str, role: str, code: str = _TEST_OTP) -> None:
+        with patch("app.routers.auth.generate_otp", return_value=code), \
+             patch("app.routers.auth.send_otp_email"):
+            resp = client.post(
+                "/api/auth/otp/request",
+                json={"email": email, "role": role},
+            )
+            assert resp.status_code == 200
+
+    def test_used_otp_is_deleted(self, client: TestClient, h: dict[str, str], db: DbHelper) -> None:
+        """Verifying an OTP should delete the row from the database."""
+        _seed_professor(client, h)
+        self._request_otp(client, "prof@hamilton.edu", "professor")
+        assert db.count("otp_tokens") == 1
+
+        client.post(
+            "/api/auth/otp/verify",
+            json={"email": "prof@hamilton.edu", "role": "professor", "otp": _TEST_OTP},
+        )
+        assert db.count("otp_tokens") == 0
+
+    def test_expired_otps_deleted_on_new_request(self, client: TestClient, h: dict[str, str], db: DbHelper) -> None:
+        """Requesting a new OTP should delete any expired rows."""
+        from datetime import datetime, timedelta, timezone
+        from app.supabase_io.client import supabase
+
+        _seed_professor(client, h)
+        self._request_otp(client, "prof@hamilton.edu", "professor")
+        assert db.count("otp_tokens") == 1
+
+        # Manually expire the existing token
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        supabase.table("otp_tokens").update({"expires_at": past}).eq(
+            "email", "prof@hamilton.edu"
+        ).eq("used", False).execute()
+
+        # Requesting a new OTP should clean up the expired one
+        self._request_otp(client, "prof@hamilton.edu", "professor", code="999999")
+
+        # Only the new OTP should remain
+        assert db.count("otp_tokens") == 1
+        rows = db.rows("otp_tokens")
+        assert rows[0]["used"] is False
+        expires_at = rows[0]["expires_at"]
+        assert expires_at > datetime.now(timezone.utc)
+
+    def test_old_unused_otp_deleted_on_new_request(self, client: TestClient, h: dict[str, str], db: DbHelper) -> None:
+        """Requesting a new OTP should delete (not just mark used) the previous unused OTP."""
+        _seed_professor(client, h)
+        self._request_otp(client, "prof@hamilton.edu", "professor", code="111111")
+        assert db.count("otp_tokens") == 1
+
+        self._request_otp(client, "prof@hamilton.edu", "professor", code="222222")
+
+        # Old OTP should be deleted, only the new one remains
+        assert db.count("otp_tokens") == 1

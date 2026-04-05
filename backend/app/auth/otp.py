@@ -20,9 +20,16 @@ def generate_otp() -> str:
     return str(secrets.randbelow(10**OTP_DIGITS)).zfill(OTP_DIGITS)
 
 
+def _delete_expired_otps() -> None:
+    """Delete all OTP rows that have passed their expiry time."""
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("otp_tokens").delete().lt("expires_at", now).execute()
+
+
 def store_otp(email: str, code: str, role: str) -> None:
-    """Invalidate any existing unused OTPs for this email+role, then insert a new one."""
-    supabase.table("otp_tokens").update({"used": True}).eq("email", email).eq("role", role).eq("used", False).execute()
+    """Delete any existing unused OTPs for this email+role, clean up expired rows, then insert a new one."""
+    supabase.table("otp_tokens").delete().eq("email", email).eq("role", role).eq("used", False).execute()
+    _delete_expired_otps()
 
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=OTP_TTL_MINUTES)
     supabase.table("otp_tokens").insert(
@@ -36,7 +43,7 @@ def store_otp(email: str, code: str, role: str) -> None:
 
 
 def verify_and_consume_otp(email: str, code: str, role: str) -> None:
-    """Verify the OTP is valid and unexpired, then mark it as used.
+    """Verify the OTP is valid and unexpired, then delete it.
 
     Raises HTTP 401 if the OTP is wrong, already used, or expired.
     """
@@ -68,4 +75,4 @@ def verify_and_consume_otp(email: str, code: str, role: str) -> None:
             detail="Invalid or expired OTP.",
         )
 
-    supabase.table("otp_tokens").update({"used": True}).eq("id", str(row["id"])).execute()
+    supabase.table("otp_tokens").delete().eq("id", str(row["id"])).execute()
