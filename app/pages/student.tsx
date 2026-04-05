@@ -475,7 +475,7 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
                   >
                     {Array.from({ length: totalSlots }, (_, slotIndex) => (
                       <div key={slotIndex} className="contents">
-                        <div className="pr-2 pt-1 text-right text-sm font-semibold text-[#444]">
+                        <div className="h-6 overflow-hidden pr-2 text-right text-sm leading-6 font-semibold text-[#444]">
                           {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                         </div>
 
