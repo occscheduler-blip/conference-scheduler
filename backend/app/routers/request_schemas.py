@@ -432,12 +432,34 @@ class UpdateSymposiumRequest(BaseModel):
     )
 
 
+class UpdateScheduleAssignmentRequest(BaseModel):
+    symposium_id: UUID
+    presentation_id: UUID
+    room: int
+    start_time: datetime
+    end_time: datetime
+
+    @field_validator("room")
+    @classmethod
+    def validate_room(cls, room: int) -> int:
+        if room < 0 or room >= MAX_ROOMS:
+            raise ValueError(f"Room index must be between 0 and {MAX_ROOMS - 1}.")
+        return room
+
+    @model_validator(mode="after")
+    def end_after_start(self) -> "UpdateScheduleAssignmentRequest":
+        if self.end_time <= self.start_time:
+            raise ValueError("End time must be after start time.")
+        return self
+
+
 class UpdatePresentationRequest(BaseModel):
     presentation_id: UUID
     title: str
     class_id: UUID
     minutes: int
     buffer: int
+    room: int | None = None
     presenting_students: list[UUID]
 
     @field_validator("title")

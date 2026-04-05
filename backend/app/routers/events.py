@@ -727,6 +727,172 @@ def run_schedule(body: request_schemas.RunSchedulerRequest) -> dict[str, object]
         ) from exc
 
 
+@router.put("/update_schedule_assignment")
+def update_schedule_assignment(
+    payload: request_schemas.UpdateScheduleAssignmentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int]:
+    """Atomically update a presentation's room and time slot with conflict detection."""
+    try:
+        symposium_id = str(payload.symposium_id)
+        presentation_id = str(payload.presentation_id)
+
+        # Fetch all departments -> classes -> presentations for this symposium
+        departments_resp = read.get_departments(symposium_id=payload.symposium_id)
+        departments = list(getattr(departments_resp, "data", None) or [])
+        department_ids = [UUID(str(d["id"])) for d in departments if d.get("id")]
+
+        all_classes: list[dict[str, Any]] = []
+        if department_ids:
+            classes_resp = read.get_classes(department_id=department_ids)
+            all_classes = list(getattr(classes_resp, "data", None) or [])
+        class_ids = [UUID(str(c["id"])) for c in all_classes if c.get("id")]
+
+        all_presentations: list[dict[str, Any]] = []
+        all_professors: list[dict[str, Any]] = []
+        if class_ids:
+            pres_resp = read.get_presentations(class_id=class_ids)
+            all_presentations = list(getattr(pres_resp, "data", None) or [])
+            prof_resp = read.get_professors(class_id=class_ids)
+            all_professors = list(getattr(prof_resp, "data", None) or [])
+
+        # Build professor lookup by class and name lookup by ID
+        professors_by_class: dict[str, list[str]] = {}
+        person_name_by_id: dict[str, str] = {}
+        for prof in all_professors:
+            cid = str(prof.get("class_id", ""))
+            pid = str(prof.get("id", ""))
+            if cid and pid:
+                professors_by_class.setdefault(cid, []).append(pid)
+                name = str(prof.get("name", "")).strip()
+                if name:
+                    person_name_by_id[pid] = name
+
+        # Build resource set for the target presentation
+        target_pres = None
+        for p in all_presentations:
+            if str(p.get("id", "")) == presentation_id:
+                target_pres = p
+                break
+        if target_pres is None:
+            raise HTTPException(status_code=404, detail="Presentation not found in this symposium.")
+
+        target_class_id = str(target_pres.get("class_id", ""))
+        target_resources: set[str] = set(professors_by_class.get(target_class_id, []))
+        for s in target_pres.get("presenting_students", []):
+            sid = str(s.get("id", s.get("student_id", "")))
+            if sid:
+                target_resources.add(sid)
+                name = str(s.get("name", "")).strip()
+                if name:
+                    person_name_by_id[sid] = name
+
+        new_start = payload.start_time if payload.start_time.tzinfo else payload.start_time.replace(tzinfo=timezone.utc)
+        new_end = payload.end_time if payload.end_time.tzinfo else payload.end_time.replace(tzinfo=timezone.utc)
+
+        # Check conflicts against every other scheduled presentation
+        other_pres_ids = [
+            str(p["id"]) for p in all_presentations
+            if str(p.get("id", "")) != presentation_id and p.get("id")
+        ]
+
+        if other_pres_ids:
+            tf_resp = read.get_timeframes(
+                linked_id=[UUID(pid) for pid in other_pres_ids]
+            )
+            other_timeframes = list(getattr(tf_resp, "data", None) or [])
+
+            tf_by_pres: dict[str, dict[str, Any]] = {}
+            for tf in other_timeframes:
+                linked = str(tf.get("linked_id", ""))
+                if linked:
+                    tf_by_pres[linked] = tf
+
+            for other in all_presentations:
+                other_id = str(other.get("id", ""))
+                if other_id == presentation_id or other_id not in tf_by_pres:
+                    continue
+
+                other_tf = tf_by_pres[other_id]
+                other_start_raw = datetime.fromisoformat(
+                    str(other_tf["start_time"]).replace("Z", "+00:00")
+                )
+                other_end_raw = datetime.fromisoformat(
+                    str(other_tf["end_time"]).replace("Z", "+00:00")
+                )
+                other_start = other_start_raw if other_start_raw.tzinfo else other_start_raw.replace(tzinfo=timezone.utc)
+                other_end = other_end_raw if other_end_raw.tzinfo else other_end_raw.replace(tzinfo=timezone.utc)
+                times_overlap = new_start < other_end and new_end > other_start
+
+                if not times_overlap:
+                    continue
+
+                other_room = other.get("room")
+                # Room conflict
+                if other_room is not None and int(other_room) == payload.room:
+                    other_title = other.get("title", other_id)
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Room conflict: Room {payload.room + 1} is already occupied by \"{other_title}\" at that time.",
+                    )
+
+                # Person conflict (professor or presenting student)
+                other_class_id = str(other.get("class_id", ""))
+                other_resources: set[str] = set(professors_by_class.get(other_class_id, []))
+                for s in other.get("presenting_students", []):
+                    sid = str(s.get("id", s.get("student_id", "")))
+                    if sid:
+                        other_resources.add(sid)
+                        name = str(s.get("name", "")).strip()
+                        if name:
+                            person_name_by_id[sid] = name
+
+                shared = target_resources & other_resources
+                if shared:
+                    other_title = other.get("title", other_id)
+                    conflicting_name = person_name_by_id.get(next(iter(shared)), "Someone")
+                    is_professor = next(iter(shared)) in {
+                        pid for profs in professors_by_class.values() for pid in profs
+                    }
+                    role = "Professor" if is_professor else "Student"
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Scheduling conflict: {role} \"{conflicting_name}\" is required at both "
+                            f"this presentation and \"{other_title}\" at that time. "
+                            f"They cannot be in two rooms at once."
+                        ),
+                    )
+
+        # No conflicts — save the assignment
+        supabase.table("presentations").update(
+            {"room": payload.room}
+        ).eq("id", presentation_id).execute()
+
+        delete.delete_timeframes(payload.presentation_id)
+
+        tf_row = supabase_schemas.Timeframe(
+            id=uuid4(),
+            linked_id=payload.presentation_id,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+        )
+        write.insert("timeframes", [tf_row.model_dump()])
+
+        return {
+            "status": "updated",
+            "presentation_id": presentation_id,
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update schedule assignment: {exc}"
+        ) from exc
+
+
 @router.put("/update_timeframes")
 def update_timeframes(
     payload: request_schemas.UpdateTimeframesRequest,

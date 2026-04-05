@@ -155,7 +155,18 @@ def build_problem_from_symposium(
 
 
 def _save_assignments(result: ScheduleResult) -> None:
-    from app.supabase_io import write
+    from app.supabase_io import delete, write
+
+    # Clean up old schedule assignments before re-saving
+    presentation_ids = [
+        UUID(a.presentation_id) for a in result.assignments
+    ]
+    if presentation_ids:
+        delete.delete_timeframes(presentation_ids)
+        for pid in presentation_ids:
+            supabase.table("presentations").update(
+                {"room": None}
+            ).eq("id", str(pid)).execute()
 
     timeframe_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
     for assignment in result.assignments:

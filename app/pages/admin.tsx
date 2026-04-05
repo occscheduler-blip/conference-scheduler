@@ -18,6 +18,7 @@ import {
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
+import ScheduleTab from "./schedule-tab";
 
 const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
@@ -604,6 +605,9 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       resetAdminsTabState();
       return;
     }
+    if (tab === "schedule") {
+      return;
+    }
     resetEditTabState();
     void fetchSymposia();
   };
@@ -626,7 +630,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           </h1>
         </header>
 
-        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
           <button
             type="button"
             onClick={() => handleTabSwitch("create")}
@@ -651,6 +655,17 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           </button>
           <button
             type="button"
+            onClick={() => handleTabSwitch("schedule")}
+            className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
+              activeTab === "schedule"
+                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
+            }`}
+          >
+            Schedule
+          </button>
+          <button
+            type="button"
             onClick={() => handleTabSwitch("admins")}
             className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
               activeTab === "admins"
@@ -661,6 +676,13 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
             Manage Admins
           </button>
         </nav>
+
+        {activeTab === "schedule" ? (
+          <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+            <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Schedule Editor</h2>
+            <ScheduleTab token={token} />
+          </section>
+        ) : null}
 
         {activeTab === "admins" ? (
           <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">

@@ -1,4 +1,4 @@
-export type AdminTab = "create" | "edit" | "admins";
+export type AdminTab = "create" | "edit" | "admins" | "schedule";
 export type DepartmentAction = "add" | "edit";
 // Tab state for the faculty/professor page
 export type FacultyTab = "availability" | "students";
@@ -120,6 +120,18 @@ export type SavedProfessorRequest = {
   professorId: string;
   professorName: string;
   professorEmail: string;
+};
+
+// A presentation with schedule assignment info for the schedule editor
+export type SchedulePresentation = {
+  id: string;
+  title: string;
+  class_id: string;
+  minutes: number;
+  room: number | null;
+  timeframe: Timeframe | null;
+  presenterNames: string[];
+  departmentName: string;
 };
 
 // A student entry used in dropdowns/selects
