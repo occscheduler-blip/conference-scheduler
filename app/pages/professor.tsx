@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type FacultyTab = "availability" | "students";
 const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
@@ -117,6 +118,8 @@ function isUuid(value: string) {
 
 // Renders the professor page and manages its data and interactions.
 function ProfessorPageContent() {
+  const searchParams = useSearchParams();
+  const professorIdFromLink = searchParams.get("professor_id") ?? "";
   const [activeTab, setActiveTab] = useState<FacultyTab>("availability");
   const [professorOptions, setProfessorOptions] = useState<ProfessorOption[]>([]);
   const [selectedProfessorId, setSelectedProfessorId] = useState<string>("");
@@ -233,6 +236,9 @@ function ProfessorPageContent() {
         if (ignore) return;
         setProfessorOptions(nextProfessorOptions);
         setSelectedProfessorId((current) => {
+          if (professorIdFromLink && nextProfessorOptions.some((professor) => professor.id === professorIdFromLink)) {
+            return professorIdFromLink;
+          }
           if (current && nextProfessorOptions.some((professor) => professor.id === current)) return current;
           return nextProfessorOptions[0]?.id ?? "";
         });
@@ -254,7 +260,7 @@ function ProfessorPageContent() {
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl]);
+  }, [authHeaders, backendUrl, professorIdFromLink]);
 
   useEffect(() => {
     if (!selectedProfessorId) {
@@ -1089,6 +1095,7 @@ function ProfessorPageContent() {
               title: group.presentationName.trim(),
               class_id: classId,
               minutes,
+              buffer: 0,
               presenting_students: group.studentIds,
             }),
           });

@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.supabase_io.client import supabase
 
@@ -239,6 +239,7 @@ class AddPresentationRequest(BaseModel):
     title: str
     class_id: UUID
     minutes: int
+    buffer: int = 0
     presenting_students: list[UUID]
 
     @field_validator("title")
@@ -255,6 +256,13 @@ class AddPresentationRequest(BaseModel):
         if minutes > MAX_TIME or minutes < 1:
             raise ValueError(f"Presentations must be between 1 and {MAX_TIME}")
         return minutes
+
+    @field_validator("buffer")
+    @classmethod
+    def validate_buffer(cls, buffer: int) -> int:
+        if buffer < 0:
+            raise ValueError("Buffer must be 0 or greater")
+        return buffer
 
     @field_validator("presenting_students")
     @classmethod
@@ -436,3 +444,73 @@ class UpdatePresentationRequest(BaseModel):
                 f"No more than {MAX_PRESENTING_STUDENTS} can present one presentation"
             )
         return presenting_students
+
+
+class BasicScheduleParticipant(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str) -> str:
+        name = name.strip()
+        if not name:
+            raise ValueError("Participant name cannot be empty")
+        return name
+
+
+class BasicScheduleWindow(BaseModel):
+    start_time: datetime
+    end_time: datetime
+
+    @model_validator(mode="after")
+    def end_after_start(self) -> "BasicScheduleWindow":
+        if self.end_time <= self.start_time:
+            raise ValueError("Window end time must come after start time.")
+        return self
+
+
+class BasicScheduleRequest(BaseModel):
+    day_start: datetime
+    day_end: datetime
+    presentation_minutes: int
+    students: list[BasicScheduleParticipant]
+    room_count: int = 1
+    professor_name: str | None = None
+    professor_unavailable: list[BasicScheduleWindow] = Field(default_factory=list)
+    slot_minutes: int = 5
+
+    @model_validator(mode="after")
+    def validate_day_window(self) -> "BasicScheduleRequest":
+        if self.day_end <= self.day_start:
+            raise ValueError("day_end must be after day_start.")
+        return self
+
+    @field_validator("presentation_minutes")
+    @classmethod
+    def validate_presentation_minutes(cls, presentation_minutes: int) -> int:
+        if presentation_minutes < 1 or presentation_minutes > MAX_TIME:
+            raise ValueError(f"Presentations must be between 1 and {MAX_TIME}")
+        return presentation_minutes
+
+    @field_validator("students")
+    @classmethod
+    def validate_students(
+        cls, students: list[BasicScheduleParticipant]
+    ) -> list[BasicScheduleParticipant]:
+        if not students:
+            raise ValueError("At least one student is required.")
+        return students
+
+    @field_validator("room_count")
+    @classmethod
+    def validate_room_count(cls, room_count: int) -> int:
+        if room_count < 1 or room_count > MAX_ROOMS:
+            raise ValueError(f"Room count must be between 1 and {MAX_ROOMS}.")
+        return room_count
+
+    @field_validator("slot_minutes")
+    @classmethod
+    def validate_slot_minutes(cls, slot_minutes: int) -> int:
+        if slot_minutes < 1 or slot_minutes > MAX_TIME:
+            raise ValueError(f"Slot minutes must be between 1 and {MAX_TIME}.")
+        return slot_minutes

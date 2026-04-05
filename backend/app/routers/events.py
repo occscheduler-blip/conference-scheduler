@@ -6,6 +6,12 @@ from postgrest.base_request_builder import APIResponse
 
 from fastapi import APIRouter, HTTPException
 from app.supabase_io import delete, read, write
+from app.scheduler import (
+    AvailabilityWindow,
+    PresentationInput,
+    ScheduleProblem,
+    solve_schedule,
+)
 from app.supabase_io.nested_read import (
     CLASS_CHILDREN,
     CLASS_ALLOWS,
@@ -79,6 +85,127 @@ def _sum_counts(*groups: dict[str, int]) -> int:
             if isinstance(value, int) and value >= 0:
                 total += value
     return total
+
+
+def _subtract_windows(
+    available_windows: list[request_schemas.BasicScheduleWindow],
+    blocked_windows: list[request_schemas.BasicScheduleWindow],
+) -> tuple[AvailabilityWindow, ...]:
+    remaining: list[tuple[datetime, datetime]] = [
+        (window.start_time, window.end_time) for window in available_windows
+    ]
+
+    for blocked in blocked_windows:
+        next_remaining: list[tuple[datetime, datetime]] = []
+        for current_start, current_end in remaining:
+            overlap_start = max(current_start, blocked.start_time)
+            overlap_end = min(current_end, blocked.end_time)
+            if overlap_start >= overlap_end:
+                next_remaining.append((current_start, current_end))
+                continue
+            if current_start < overlap_start:
+                next_remaining.append((current_start, overlap_start))
+            if overlap_end < current_end:
+                next_remaining.append((overlap_end, current_end))
+        remaining = next_remaining
+
+    return tuple(
+        AvailabilityWindow(start=start_time, end=end_time)
+        for start_time, end_time in remaining
+        if end_time > start_time
+    )
+
+
+@router.post("/basic_schedule")
+def basic_schedule(
+    payload: request_schemas.BasicScheduleRequest,
+) -> dict[str, object]:
+    try:
+        day_window = request_schemas.BasicScheduleWindow(
+            start_time=payload.day_start,
+            end_time=payload.day_end,
+        )
+        symposium_windows = (
+            AvailabilityWindow(start=day_window.start_time, end=day_window.end_time),
+        )
+
+        professor_id = None
+        resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
+        if payload.professor_name:
+            professor_id = "professor"
+            professor_windows = _subtract_windows(
+                available_windows=[day_window],
+                blocked_windows=payload.professor_unavailable,
+            )
+            resource_windows[professor_id] = professor_windows
+
+        presentations = tuple(
+            PresentationInput(
+                id=f"presentation-{index + 1}",
+                title=student.name,
+                duration_minutes=payload.presentation_minutes,
+                resource_ids=((professor_id,) if professor_id else ()),
+            )
+            for index, student in enumerate(payload.students)
+        )
+
+        result = solve_schedule(
+            ScheduleProblem(
+                symposium_id="basic-schedule",
+                rooms_available=payload.room_count,
+                symposium_windows=symposium_windows,
+                presentations=presentations,
+                resource_windows=resource_windows,
+                slot_minutes=payload.slot_minutes,
+            )
+        )
+
+        assignment_by_id = {
+            assignment.presentation_id: assignment for assignment in result.assignments
+        }
+        scheduled = []
+        unscheduled = []
+
+        for index, student in enumerate(payload.students):
+            presentation_id = f"presentation-{index + 1}"
+            assignment = assignment_by_id.get(presentation_id)
+            if assignment is None:
+                unscheduled.append(student.name)
+                continue
+            scheduled.append(
+                {
+                    "student_name": student.name,
+                    "presentation_id": presentation_id,
+                    "room_index": assignment.room_index,
+                    "start_time": assignment.start.isoformat(),
+                    "end_time": assignment.end.isoformat(),
+                }
+            )
+
+        scheduled.sort(key=lambda item: (item["start_time"], item["room_index"]))
+
+        return {
+            "status": result.status,
+            "scheduled": scheduled,
+            "unscheduled": unscheduled,
+            "diagnostics": list(result.diagnostics),
+            "summary": {
+                "student_count": len(payload.students),
+                "scheduled_count": len(scheduled),
+                "unscheduled_count": len(unscheduled),
+                "room_count": payload.room_count,
+                "presentation_minutes": payload.presentation_minutes,
+                "professor_name": payload.professor_name,
+            },
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to build basic schedule: {exc}"
+        ) from exc
 
 
 @router.post("/add_class")
@@ -302,6 +429,7 @@ def add_presentation(
             "title": payload.title,
             "class_id": payload.class_id,
             "minutes": payload.minutes,
+            "buffer": payload.buffer,
         }
         pres_resp = write.insert("presentations", [presentation_payload])
 

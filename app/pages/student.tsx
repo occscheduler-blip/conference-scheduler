@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type StudentTab = "availability" | "preferences";
 type CalendarDay = { key: string; label: string };
@@ -38,6 +39,8 @@ function parseBackendDateTime(value: string) {
 
 // Renders the student page and manages its data and interactions.
 export default function StudentPage() {
+  const searchParams = useSearchParams();
+  const studentIdFromLink = searchParams.get("student_id") ?? "";
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
   const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
   const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
@@ -104,6 +107,9 @@ export default function StudentPage() {
         if (ignore) return;
         setStudentOptions(nextOptions);
         setSelectedStudentId((current) => {
+          if (studentIdFromLink && nextOptions.some((option) => option.id === studentIdFromLink)) {
+            return studentIdFromLink;
+          }
           if (current && nextOptions.some((option) => option.id === current)) return current;
           return nextOptions[0]?.id ?? "";
         });
@@ -125,7 +131,7 @@ export default function StudentPage() {
     return () => {
       ignore = true;
     };
-  }, [backendApiKey, backendUrl]);
+  }, [backendApiKey, backendUrl, studentIdFromLink]);
 
   useEffect(() => {
     if (!selectedStudentId) {

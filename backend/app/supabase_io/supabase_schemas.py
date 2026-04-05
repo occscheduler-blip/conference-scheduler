@@ -45,6 +45,7 @@ class Presentation(BaseModel):
     title: str
     class_id: UUID
     minutes: int
+    buffer: int = 0
     start_time: datetime | None
     end_time: datetime | None
 

@@ -10,3 +10,4 @@ ortools==9.15.6755
 python-jose[cryptography]==3.3.0
 bcrypt==4.2.1
 mypy==1.16.0
+python-jose[cryptography]

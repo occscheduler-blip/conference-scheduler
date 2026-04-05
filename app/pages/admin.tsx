@@ -27,6 +27,15 @@ type DepartmentRecord = {
   email: string;
 };
 
+type DepartmentApiRecord = {
+  id?: string;
+  symposium?: string;
+  symposium_id?: string;
+  department_name?: string;
+  department_head_name?: string;
+  email?: string;
+};
+
 const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
 
@@ -242,13 +251,28 @@ export default function AdminPage() {
         const response = await fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`, {
           headers: authHeaders,
         });
-        const payload = (await response.json()) as { detail?: string; departments?: DepartmentRecord[] };
+        const payload = (await response.json()) as
+          | { detail?: string; data?: DepartmentApiRecord[]; departments?: DepartmentApiRecord[] }
+          | DepartmentApiRecord[];
         if (!response.ok) {
-          setDepartmentLoadError(payload.detail ?? "Failed to load departments.");
+          setDepartmentLoadError(
+            (Array.isArray(payload) ? undefined : payload.detail) ?? "Failed to load departments."
+          );
           setDepartments([]);
           return;
         }
-        const loaded = payload.departments ?? [];
+        const rows = Array.isArray(payload)
+          ? payload
+          : (payload.departments ?? payload.data ?? []);
+        const loaded = rows
+          .filter((department): department is DepartmentApiRecord & { id: string } => typeof department.id === "string")
+          .map((department) => ({
+            id: department.id,
+            symposium: department.symposium ?? department.symposium_id ?? symposiumId,
+            department_name: department.department_name ?? "",
+            department_head_name: department.department_head_name ?? "",
+            email: department.email ?? "",
+          }));
         setDepartments(loaded);
         setDepartmentToEditId((current) =>
           loaded.some((department) => department.id === current) ? current : loaded[0]?.id ?? ""

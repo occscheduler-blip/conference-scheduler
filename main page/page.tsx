@@ -92,9 +92,9 @@ function HomeContent() {
     async function loadSymposiums() {
       try {
         const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-        const payload = (await response.json().catch(() => ({}))) as { detail?: string; data?: SymposiumOption[] };
+        const payload = (await response.json().catch(() => ({}))) as { detail?: string; symposiums?: SymposiumOption[] };
         if (!response.ok) throw new Error(payload.detail ?? "Failed to load symposiums.");
-        const list = payload.data ?? [];
+        const list = payload.symposiums ?? [];
         setSymposiums(list);
         setSelectedSymposiumId(list[0]?.id ?? "");
       } catch (error) {
@@ -375,35 +375,27 @@ function HomeContent() {
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-4 py-6">
       <div className="mx-auto w-full max-w-6xl">
-        <div className="mb-4 flex justify-end">
-          <Link
-            href="/pages?view=login"
-            className="rounded-md border border-[#0f766e] bg-[#0f766e] px-4 py-2 text-sm font-semibold text-white transition hover:border-[#0b5f59] hover:bg-[#0b5f59]"
-          >
-            Login
-          </Link>
-        </div>
         <div className="mb-4 flex flex-wrap justify-center gap-2">
           <Link
-            href="/pages?view=admin"
+            href="/admin"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Admin Page
           </Link>
           <Link
-            href="/pages?view=department-head"
+            href="/department-head"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
           >
             Department Head Page
           </Link>
           <Link
-            href="/pages?view=professor"
+            href="/professor"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Professor Page
           </Link>
           <Link
-            href="/pages?view=student"
+            href="/student"
             className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
           >
             Student Page
