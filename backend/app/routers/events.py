@@ -628,6 +628,44 @@ def update_student(
         ) from exc
 
 
+@router.put("/update_professor")
+def update_professor(
+    payload: request_schemas.UpdateProfessorRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"professor_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("professors")
+            .update(update_payload)
+            .eq("id", str(payload.professor_id))
+            .execute()
+        )
+        records_updated = {
+            "professors": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
+
+        return {
+            "status": "updated",
+            "professor_id": str(payload.professor_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update professor: {exc}"
+        ) from exc
+
+
 @router.post("/add_request")
 def add_request(
     payload: request_schemas.AddReqRequest,

@@ -240,9 +240,8 @@ class AddPresentationRequest(BaseModel):
     title: str
     class_id: UUID
     minutes: int
-    buffer: int | None = None
-    presenting_students: list[UUID]
     buffer: int
+    presenting_students: list[UUID]
 
     @field_validator("title")
     @classmethod
@@ -438,9 +437,8 @@ class UpdatePresentationRequest(BaseModel):
     title: str
     class_id: UUID
     minutes: int
-    buffer: int | None = None
-    presenting_students: list[UUID]
     buffer: int
+    presenting_students: list[UUID]
 
     @field_validator("title")
     @classmethod
