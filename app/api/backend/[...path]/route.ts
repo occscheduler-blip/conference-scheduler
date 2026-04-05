@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 
 const hopByHopHeaders = new Set([
   "connection",
+  "content-encoding",
   "content-length",
   "host",
   "keep-alive",
