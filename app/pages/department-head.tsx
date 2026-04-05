@@ -468,22 +468,6 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
           </p>
 
           <form onSubmit={submitProfessors} className="mt-4 space-y-4">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Department</span>
-              <select
-                value={selectedDepartmentId}
-                onChange={(event) => { setSelectedDepartmentId(event.target.value); setIsSelfProfessor(false); setProfessors([{ name: "", email: "" }]); }}
-                disabled={loading || departments.length === 0}
-                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <option value="">Select department</option>
-                {departments.map((department) => (
-                  <option key={department.id} value={department.id}>
-                    {department.name}
-                  </option>
-                ))}
-              </select>
-            </label>
 
             <label className="flex flex-col gap-1">
               <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Class Name</span>

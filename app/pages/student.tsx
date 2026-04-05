@@ -348,22 +348,6 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
             OCC THESIS SYMPOSIUM - STUDENT
           </h1>
-          <label className="mx-auto mt-4 block w-full max-w-xl">
-            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Student</span>
-            <select
-              value={selectedStudentId}
-              onChange={(event) => setSelectedStudentId(event.target.value)}
-              disabled={loadingStudents || studentOptions.length === 0}
-              className="mt-2 w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <option value="">Select student</option>
-              {studentOptions.map((student) => (
-                <option key={student.id} value={student.id}>
-                  {student.name}
-                </option>
-              ))}
-            </select>
-          </label>
           {identityMessage ? <p className="mt-2 text-center text-sm font-semibold text-[#9a1f1f]">{identityMessage}</p> : null}
         </header>
         <p className="mb-3 text-center text-3xl font-extrabold tracking-wide text-[#0f33a8] md:text-5xl">
