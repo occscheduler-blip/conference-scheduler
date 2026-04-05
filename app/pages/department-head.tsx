@@ -39,6 +39,11 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
     [selectedSymposiumId, symposiumOptions]
   );
 
+  const selectedDepartmentName = useMemo(
+    () => departments.find((department) => department.id === selectedDepartmentId)?.name ?? "",
+    [selectedDepartmentId, departments]
+  );
+
 
   useEffect(() => {
     let ignore = false;
@@ -59,6 +64,10 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
           }));
 
         let initialSymposiumId = symposiumIdFromLink;
+        if (!initialSymposiumId && entityId) {
+          const linkedDepartment = departmentRows.find((row) => row.id === entityId);
+          initialSymposiumId = linkedDepartment?.symposium_id ?? "";
+        }
         if (!initialSymposiumId && departmentIdFromLink) {
           const linkedDepartment = departmentRows.find((row) => row.id === departmentIdFromLink);
           initialSymposiumId = linkedDepartment?.symposium_id ?? "";
@@ -86,7 +95,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl, departmentIdFromLink, symposiumIdFromLink]);
+  }, [authHeaders, backendUrl, departmentIdFromLink, entityId, symposiumIdFromLink]);
 
   useEffect(() => {
     if (!selectedSymposiumId) {
@@ -447,25 +456,14 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
 
         <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
           <h2 className="text-xl font-bold text-[#111] md:text-2xl">Add Classes</h2>
-          <label className="mt-4 flex flex-col gap-1">
-            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Symposium</span>
-            <select
-              value={selectedSymposiumId}
-              onChange={(event) => setSelectedSymposiumId(event.target.value)}
-              disabled={loading || symposiumOptions.length === 0}
-              className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <option value="">Select symposium</option>
-              {symposiumOptions.map((symposium) => (
-                <option key={symposium.id} value={symposium.id}>
-                  {symposium.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="mt-2 text-sm font-semibold text-[#2d3d7a]">
-            Symposium: {selectedSymposiumName || "Select a symposium"}
-          </p>
+          <div className="mt-4 space-y-1">
+            <p className="text-sm font-semibold text-[#2d3d7a]">
+              Symposium: {selectedSymposiumName || (loading ? "Loading..." : "None")}
+            </p>
+            <p className="text-sm font-semibold text-[#2d3d7a]">
+              Department: {selectedDepartmentName || (loading ? "Loading..." : "None")}
+            </p>
+          </div>
 
           <form onSubmit={submitProfessors} className="mt-4 space-y-4">
 

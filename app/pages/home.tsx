@@ -145,6 +145,7 @@ function HomeContent() {
             id?: string;
             class_id?: string;
             title?: string;
+            room?: number | null;
             presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
           };
           type RawStudent = { id?: string; name?: string; class_id?: string };
@@ -183,9 +184,25 @@ function HomeContent() {
             .filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
           const studentNameById = new Map(studentRows.map((row) => [normalizeId(row.id), row.name]));
 
-          const presentationRows = rawPresentations
-            .flat()
-            .map((row) => {
+          const flatPresentations = rawPresentations.flat();
+
+          // Fetch scheduled timeframes for all presentations in parallel
+          const presentationTimeframes = await Promise.all(
+            flatPresentations.map(async (row) => {
+              if (!row.id) return null;
+              try {
+                const tfs = await apiFetch<Timeframe>(
+                  `/api/events/timeframes?linked_id=${encodeURIComponent(row.id)}`
+                );
+                return tfs[0] ?? null;
+              } catch {
+                return null;
+              }
+            })
+          );
+
+          const presentationRows = flatPresentations
+            .map((row, i) => {
               const presenterNames = (row.presenting_students ?? [])
                 .map((student) => {
                   const directName = student.name?.trim() ?? "";
@@ -199,6 +216,8 @@ function HomeContent() {
                 class_id: row.class_id ?? "",
                 title: row.title?.trim() ?? "",
                 presenterNames: Array.from(new Set(presenterNames)),
+                room: row.room ?? null,
+                timeframe: presentationTimeframes[i] ?? null,
               };
             })
             .filter((row): row is PresentationRecord => Boolean(row.id && row.class_id));
@@ -247,16 +266,20 @@ function HomeContent() {
       const departmentIdByClassId = new Map(classes.map((classRow) => [classRow.id, classRow.department_id]));
 
       const cardsFromPresentations = presentations
-        .map((presentation, index) => {
+        .map((presentation) => {
           const departmentId = departmentIdByClassId.get(presentation.class_id);
           const department = departmentId ? departmentById.get(departmentId) : undefined;
           if (!department) return null;
+          const scheduled = presentation.timeframe != null;
+          const tf = presentation.timeframe ?? null;
+          const room = presentation.room != null ? `Room ${presentation.room + 1}` : "Room TBD";
           return {
             department,
-            timeframe: visibleRows[index] ?? null,
-            room: `Room ${(index % roomsAvailable) + 1}`,
+            timeframe: tf,
+            room,
             title: presentation.title || `${department.department_name} Presentation`,
             presenterNames: Array.isArray(presentation.presenterNames) ? presentation.presenterNames : [],
+            scheduled,
           };
         })
         .filter(
@@ -264,24 +287,26 @@ function HomeContent() {
             card
           ): card is {
             department: DepartmentRecord;
-            timeframe: Timeframe;
+            timeframe: Timeframe | null;
             room: string;
             title: string;
             presenterNames: string[];
+            scheduled: boolean;
           } => Boolean(card)
         );
 
       if (cardsFromPresentations.length > 0) return cardsFromPresentations;
 
-      return departments.map((department, index) => ({
+      return departments.map((department) => ({
         department,
-        timeframe: visibleRows[index] ?? null,
-        room: `Room ${(index % roomsAvailable) + 1}`,
+        timeframe: null as Timeframe | null,
+        room: "Room TBD",
         title: `${department.department_name} Presentation`,
         presenterNames: [],
+        scheduled: false,
       }));
     },
-    [classes, departments, presentations, roomsAvailable, visibleRows]
+    [classes, departments, presentations]
   );
 
   const filterOptions = useMemo(() => {
@@ -295,6 +320,12 @@ function HomeContent() {
   const filteredCards = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return cards.filter((card) => {
+      // Filter by selected day using the card's own timeframe
+      if (selectedDay && card.timeframe) {
+        const cardDay = dayKey(parseBackendDateTime(card.timeframe.start_time));
+        if (cardDay !== selectedDay) return false;
+      }
+      // Cards with no timeframe (unscheduled) always show
       const haystack = [
         card.title,
         ...(card.presenterNames ?? []),
@@ -310,7 +341,7 @@ function HomeContent() {
       const matchesDepartment = departmentFilter ? card.department.department_name === departmentFilter : true;
       return matchesQuery && matchesLocation && matchesProfessor && matchesDepartment;
     });
-  }, [cards, departmentFilter, locationFilter, professorFilter, searchQuery]);
+  }, [cards, departmentFilter, locationFilter, professorFilter, searchQuery, selectedDay]);
 
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-4 py-6">

@@ -50,6 +50,8 @@ export type PresentationRecord = {
   class_id: string;
   title: string;
   presenterNames: string[];
+  room: number | null;
+  timeframe: Timeframe | null;
 };
 
 // Core details about a symposium, including optional room count
