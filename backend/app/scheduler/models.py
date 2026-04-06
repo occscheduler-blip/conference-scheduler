@@ -29,6 +29,10 @@ class ScheduleProblem:
     resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = field(
         default_factory=dict
     )
+    soft_resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = field(
+        default_factory=dict
+    )
+    professor_resource_ids: tuple[str, ...] = ()
     slot_minutes: int = 5
 
 
@@ -46,3 +50,4 @@ class ScheduleResult:
     assignments: tuple[ScheduledPresentation, ...]
     unscheduled_presentations: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
+    suggestions: tuple[str, ...] = ()

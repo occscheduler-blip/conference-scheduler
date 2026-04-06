@@ -528,6 +528,7 @@ def run_schedule(
             ],
             "unscheduled_presentations": list(result.unscheduled_presentations),
             "diagnostics": list(result.diagnostics),
+            "suggestions": list(result.suggestions),
         }
     except HTTPException:
         raise

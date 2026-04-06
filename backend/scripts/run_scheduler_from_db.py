@@ -34,6 +34,11 @@ def main() -> int:
         for message in result.diagnostics:
             print(f"- {message}")
 
+    if result.suggestions:
+        print("\nSuggestions")
+        for message in result.suggestions:
+            print(f"- {message}")
+
     if result.assignments:
         presentation_by_id = {item.id: item for item in problem.presentations}
         print("\nSchedule")

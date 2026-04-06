@@ -101,11 +101,14 @@ def build_problem_from_symposium(
 
     professors_by_class: dict[str, list[str]] = defaultdict(list)
     person_ids: set[str] = set()
+    professor_ids: set[str] = set()
+    student_ids: set[str] = set()
     for professor in professors:
         professor_id = str(professor["id"])
         class_id = str(professor["class_id"])
         professors_by_class[class_id].append(professor_id)
         person_ids.add(professor_id)
+        professor_ids.add(professor_id)
 
     scheduler_presentations: list[PresentationInput] = []
     for presentation in presentations:
@@ -119,6 +122,7 @@ def build_problem_from_symposium(
             student_id = str(student["id"])
             resource_ids.append(student_id)
             person_ids.add(student_id)
+            student_ids.add(student_id)
 
         scheduler_presentations.append(
             PresentationInput(
@@ -132,6 +136,7 @@ def build_problem_from_symposium(
         )
 
     resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
+    soft_resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
     if person_ids:
         timeframe_resp = read.get_timeframes(linked_id=[UUID(person_id) for person_id in person_ids])
         timeframe_rows = list(getattr(timeframe_resp, "data", None) or [])
@@ -139,10 +144,14 @@ def build_problem_from_symposium(
         for row in timeframe_rows:
             grouped_rows[str(row["linked_id"])].append(row)
         for person_id, rows in grouped_rows.items():
-            resource_windows[person_id] = _window_rows_to_models(rows)
+            windows = _window_rows_to_models(rows)
+            if person_id in professor_ids:
+                resource_windows[person_id] = windows
+            elif person_id in student_ids:
+                soft_resource_windows[person_id] = windows
 
-    # Anyone with no timeframes is treated as fully available
-    for person_id in person_ids:
+    # Professors with no timeframes are treated as fully available.
+    for person_id in professor_ids:
         if person_id not in resource_windows:
             resource_windows[person_id] = symposium_windows
 
@@ -152,6 +161,8 @@ def build_problem_from_symposium(
         symposium_windows=symposium_windows,
         presentations=tuple(scheduler_presentations),
         resource_windows=resource_windows,
+        soft_resource_windows=soft_resource_windows,
+        professor_resource_ids=tuple(sorted(professor_ids)),
         slot_minutes=slot_minutes,
     )
 

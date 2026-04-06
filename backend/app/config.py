@@ -11,6 +11,7 @@ class Settings(BaseSettings):
         env_file=(_ENV_PATH, ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     app_name: str = "Conference Scheduler API"
