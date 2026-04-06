@@ -1,187 +1,64 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-type AdminTab = "create" | "edit";
-type DepartmentAction = "add" | "edit";
-
-type SymposiumOption = {
-  id: string;
-  name: string;
-  created_at?: string;
-};
-
-type TimeframeRecord = {
-  id: string;
-  start_time: string;
-  end_time: string;
-  symposium_id: string;
-};
-
-type DepartmentRecord = {
-  id: string;
-  symposium: string;
-  department_name: string;
-  department_head_name: string;
-  email: string;
-};
-
-type DepartmentApiRecord = {
-  id?: string;
-  symposium?: string;
-  symposium_id?: string;
-  department_name?: string;
-  department_head_name?: string;
-  email?: string;
-};
+import type {
+  AdminTab,
+  DepartmentAction,
+  DepartmentRecord,
+  SymposiumOption,
+  TimeframeRecord,
+} from "./types";
+import {
+  totalSlots,
+  formatTimeLabel,
+  formatCalendarDate,
+  buildCalendarDates,
+  buildTimeframesFromGrid,
+  gridFromTimeframes,
+} from "../lib/utils";
+import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
+import { useCalendarGrid } from "../lib/useCalendarGrid";
+import ScheduleTab from "./schedule-tab";
 
 const fieldClass =
   "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
 
-const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
-const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-function formatTimeLabel(slotIndex: number) {
-  const totalMinutes = 9 * 60 + slotIndex * 15;
-  const hour24 = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  const suffix = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-  const minutePart = minutes.toString().padStart(2, "0");
-  return `${hour12}:${minutePart} ${suffix}`;
-}
-
-function localDateString(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatCalendarDate(date: Date) {
-  return date.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function parseBackendDateTime(value: string) {
-  const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
-  // Treat timezone-less backend timestamps as UTC to prevent local timezone drift when reloading/editing.
-  return new Date(hasExplicitTimezone ? value : `${value}Z`);
-}
-
-function toMessage(detail: unknown, fallback: string): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (Array.isArray(detail)) {
-    const joined = detail
-      .map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg))
-      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      .join("; ");
-    if (joined) return joined;
-  }
-  if (detail && typeof detail === "object") {
-    const msg = (detail as { msg?: unknown }).msg;
-    if (typeof msg === "string" && msg.trim()) return msg;
-  }
-  return fallback;
-}
-
-function buildCalendarDates(startDate: string, endDate: string) {
-  if (!startDate || !endDate) return [] as Date[];
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [] as Date[];
-
-  const dates: Date[] = [];
-  const cursor = new Date(start);
-  while (cursor <= end) {
-    dates.push(new Date(cursor));
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return dates;
-}
-
-function buildTimeframesFromGrid(dates: Date[], availability: boolean[][]) {
-  if (dates.length === 0) return null;
-  const tuples: [string, string][] = [];
-
-  for (let dayIndex = 0; dayIndex < dates.length; dayIndex += 1) {
-    for (let slotIndex = 0; slotIndex < totalSlots; slotIndex += 1) {
-      if (!availability[dayIndex]?.[slotIndex]) continue;
-
-      const start = new Date(dates[dayIndex]);
-      const startMinutes = 9 * 60 + slotIndex * 15;
-      start.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
-
-      const end = new Date(start);
-      end.setMinutes(end.getMinutes() + 15);
-      tuples.push([start.toISOString(), end.toISOString()]);
-    }
-  }
-
-  return tuples;
-}
-
-function gridFromTimeframes(timeframes: TimeframeRecord[]) {
-  if (timeframes.length === 0) return { startDate: "", endDate: "", availability: [] as boolean[][] };
-
-  const dayKeys = timeframes
-    .map((tf) => localDateString(parseBackendDateTime(tf.start_time)))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const startDate = dayKeys[0];
-  const endDate = dayKeys[dayKeys.length - 1];
-  const dates = buildCalendarDates(startDate, endDate);
-
-  const dayIndexByKey = new Map<string, number>();
-  dates.forEach((date, index) => dayIndexByKey.set(localDateString(date), index));
-
-  const availability = Array.from({ length: dates.length }, () => Array.from({ length: totalSlots }, () => false));
-
-  for (const timeframe of timeframes) {
-    const start = parseBackendDateTime(timeframe.start_time);
-    const dayIndex = dayIndexByKey.get(localDateString(start));
-    if (dayIndex === undefined) continue;
-
-    const minutesFromStart = start.getHours() * 60 + start.getMinutes() - 9 * 60;
-    if (minutesFromStart < 0) continue;
-    const slotIndex = Math.floor(minutesFromStart / 15);
-    if (slotIndex >= 0 && slotIndex < totalSlots) availability[dayIndex][slotIndex] = true;
-  }
-
-  return { startDate, endDate, availability };
-}
-
-export default function AdminPage() {
+export default function AdminPage({ token, onSignOut }: { token: string; onSignOut: () => void }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   // Create event state
   const [createSymposiumName, setCreateSymposiumName] = useState("");
   const [createRooms, setCreateRooms] = useState("");
   const [createStartDate, setCreateStartDate] = useState("");
   const [createEndDate, setCreateEndDate] = useState("");
-  const [createAvailability, setCreateAvailability] = useState<boolean[][]>([]);
-  const [isCreateDragging, setIsCreateDragging] = useState(false);
-  const [createDragValue, setCreateDragValue] = useState<boolean | null>(null);
+  const [createDefaultBuffer, setCreateDefaultBuffer] = useState("");
+  const {
+    availability: createAvailability,
+    setAvailability: setCreateAvailability,
+    handleCellMouseDown: handleCreateCellMouseDown,
+    handleCellMouseEnter: handleCreateCellMouseEnter,
+  } = useCalendarGrid(buildCalendarDates(createStartDate, createEndDate).length);
   const [isSavingCreate, setIsSavingCreate] = useState(false);
   const [createSaveMessage, setCreateSaveMessage] = useState<string | null>(null);
 
   // Edit event selection + details
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
   const [symposiumOptions, setSymposiumOptions] = useState<SymposiumOption[]>([]);
-  const [isLoadingSymposiums, setIsLoadingSymposiums] = useState(false);
+  const [isLoadingSymposia, setIsLoadingSymposia] = useState(false);
   const [symposiumLoadError, setSymposiumLoadError] = useState<string | null>(null);
 
   const [editSymposiumName, setEditSymposiumName] = useState("");
   const [editRooms, setEditRooms] = useState("");
   const [editStartDate, setEditStartDate] = useState("");
   const [editEndDate, setEditEndDate] = useState("");
-  const [editAvailability, setEditAvailability] = useState<boolean[][]>([]);
-  const [isEditDragging, setIsEditDragging] = useState(false);
-  const [editDragValue, setEditDragValue] = useState<boolean | null>(null);
+  const [editDefaultBuffer, setEditDefaultBuffer] = useState("");
+  const {
+    availability: editAvailability,
+    setAvailability: setEditAvailability,
+    handleCellMouseDown: handleEditCellMouseDown,
+    handleCellMouseEnter: handleEditCellMouseEnter,
+  } = useCalendarGrid(buildCalendarDates(editStartDate, editEndDate).length);
   const [isLoadingSymposiumDetails, setIsLoadingSymposiumDetails] = useState(false);
   const [isSavingSymposiumEdit, setIsSavingSymposiumEdit] = useState(false);
   const [isDeletingSymposium, setIsDeletingSymposium] = useState(false);
@@ -203,13 +80,19 @@ export default function AdminPage() {
   const [departmentMessageKind, setDepartmentMessageKind] = useState<"success" | "error" | null>(null);
   const [deployEventMessage, setDeployEventMessage] = useState<string | null>(null);
 
+  // Manage Admins tab state
+  const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [newAdminConfirmPassword, setNewAdminConfirmPassword] = useState("");
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [showAdminConfirmPassword, setShowAdminConfirmPassword] = useState(false);
+  const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
+  const [adminMessage, setAdminMessage] = useState<string | null>(null);
+  const [adminMessageKind, setAdminMessageKind] = useState<"success" | "error" | null>(null);
+
   const isCreateTab = activeTab === "create";
+  const isEditTab = activeTab === "edit";
   const hasSelectedSymposium = Boolean(selectedSymposiumId.trim());
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(
-    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
-    [backendApiKey]
-  );
 
   const createCalendarDates = useMemo(
     () => buildCalendarDates(createStartDate, createEndDate),
@@ -217,24 +100,19 @@ export default function AdminPage() {
   );
   const editCalendarDates = useMemo(() => buildCalendarDates(editStartDate, editEndDate), [editStartDate, editEndDate]);
 
-  const fetchSymposiums = useCallback(async () => {
-    setIsLoadingSymposiums(true);
+  const fetchSymposia = useCallback(async () => {
+    setIsLoadingSymposia(true);
     setSymposiumLoadError(null);
     try {
-      const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-      const payload = (await response.json()) as { detail?: string; data?: SymposiumOption[] };
-      if (!response.ok) {
-        setSymposiumLoadError(payload.detail ?? "Failed to load symposiums.");
-        return;
-      }
-      setSymposiumOptions(payload.data ?? []);
+      const rows = await apiFetch<SymposiumOption>("/api/events/symposiums", { headers: authHeaders });
+      setSymposiumOptions(rows);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumLoadError(`Load failed: ${message}`);
     } finally {
-      setIsLoadingSymposiums(false);
+      setIsLoadingSymposia(false);
     }
-  }, [authHeaders, backendUrl]);
+  }, [authHeaders]);
 
   const fetchDepartments = useCallback(
     async (symposiumId: string) => {
@@ -248,31 +126,10 @@ export default function AdminPage() {
       setIsLoadingDepartments(true);
       setDepartmentLoadError(null);
       try {
-        const response = await fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`, {
-          headers: authHeaders,
-        });
-        const payload = (await response.json()) as
-          | { detail?: string; data?: DepartmentApiRecord[]; departments?: DepartmentApiRecord[] }
-          | DepartmentApiRecord[];
-        if (!response.ok) {
-          setDepartmentLoadError(
-            (Array.isArray(payload) ? undefined : payload.detail) ?? "Failed to load departments."
-          );
-          setDepartments([]);
-          return;
-        }
-        const rows = Array.isArray(payload)
-          ? payload
-          : (payload.departments ?? payload.data ?? []);
-        const loaded = rows
-          .filter((department): department is DepartmentApiRecord & { id: string } => typeof department.id === "string")
-          .map((department) => ({
-            id: department.id,
-            symposium: department.symposium ?? department.symposium_id ?? symposiumId,
-            department_name: department.department_name ?? "",
-            department_head_name: department.department_head_name ?? "",
-            email: department.email ?? "",
-          }));
+        const loaded = await apiFetch<DepartmentRecord>(
+          `/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`,
+          { headers: authHeaders }
+        );
         setDepartments(loaded);
         setDepartmentToEditId((current) =>
           loaded.some((department) => department.id === current) ? current : loaded[0]?.id ?? ""
@@ -285,7 +142,7 @@ export default function AdminPage() {
         setIsLoadingDepartments(false);
       }
     },
-    [authHeaders, backendUrl]
+    [authHeaders]
   );
 
   const fetchSymposiumDetails = useCallback(
@@ -293,6 +150,7 @@ export default function AdminPage() {
       if (!symposiumId.trim()) {
         setEditSymposiumName("");
         setEditRooms("");
+        setEditDefaultBuffer("");
         setEditStartDate("");
         setEditEndDate("");
         setEditAvailability([]);
@@ -302,10 +160,15 @@ export default function AdminPage() {
       setIsLoadingSymposiumDetails(true);
       setSymposiumEditMessage(null);
       try {
-        const response = await fetch(`${backendUrl}/api/events/symposiums/${symposiumId}`, { headers: authHeaders });
+        // This endpoint returns {symposium, timeframes} — a non-standard shape
+        // incompatible with apiFetch (which expects an array or {data:[]}), so
+        // we use a direct fetch here.
+        const response = await fetch(`/api/backend/api/events/symposiums/${symposiumId}`, {
+          headers: { "Content-Type": "application/json", ...authHeaders },
+        });
         const payload = (await response.json()) as {
           detail?: string;
-          symposium?: { id: string; name: string; rooms_available: number };
+          symposium?: { id: string; name: string; rooms_available: number; default_buffer?: number };
           timeframes?: TimeframeRecord[];
         };
         if (!response.ok || !payload.symposium) {
@@ -315,6 +178,7 @@ export default function AdminPage() {
 
         setEditSymposiumName(payload.symposium.name ?? "");
         setEditRooms(String(payload.symposium.rooms_available ?? ""));
+        setEditDefaultBuffer(String(payload.symposium.default_buffer ?? "0"));
 
         const grid = gridFromTimeframes(payload.timeframes ?? []);
         setEditStartDate(grid.startDate);
@@ -327,12 +191,12 @@ export default function AdminPage() {
         setIsLoadingSymposiumDetails(false);
       }
     },
-    [authHeaders, backendUrl]
+    [authHeaders]
   );
 
   useEffect(() => {
-    void fetchSymposiums();
-  }, [fetchSymposiums]);
+    void fetchSymposia();
+  }, [fetchSymposia]);
 
   useEffect(() => {
     if (createCalendarDates.length === 0) {
@@ -357,18 +221,6 @@ export default function AdminPage() {
       )
     );
   }, [editCalendarDates]);
-
-  useEffect(() => {
-    const stopDragging = () => {
-      setIsCreateDragging(false);
-      setCreateDragValue(null);
-      setIsEditDragging(false);
-      setEditDragValue(null);
-    };
-
-    window.addEventListener("mouseup", stopDragging);
-    return () => window.removeEventListener("mouseup", stopDragging);
-  }, []);
 
   useEffect(() => {
     setDepartmentMessage(null);
@@ -397,25 +249,10 @@ export default function AdminPage() {
 
     setDepartmentName(selectedDepartment.department_name);
     setDepartmentHeadName(selectedDepartment.department_head_name);
-    setDepartmentHeadEmail(selectedDepartment.email);
+    setDepartmentHeadEmail(selectedDepartment.email ?? "");
   }, [departmentAction, departmentToEditId, departments]);
 
-  const setCreateCell = (dayIndex: number, slotIndex: number, value: boolean) => {
-    setCreateAvailability((current) =>
-      current.map((daySlots, dIdx) =>
-        dIdx === dayIndex ? daySlots.map((slot, sIdx) => (sIdx === slotIndex ? value : slot)) : daySlots
-      )
-    );
-  };
-
-  const setEditCell = (dayIndex: number, slotIndex: number, value: boolean) => {
-    setEditAvailability((current) =>
-      current.map((daySlots, dIdx) =>
-        dIdx === dayIndex ? daySlots.map((slot, sIdx) => (sIdx === slotIndex ? value : slot)) : daySlots
-      )
-    );
-  };
-
+  // AI template: creates or updates a symposium with a full set of timeframes derived from the grid.
   const handleCreateEventSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setCreateSaveMessage(null);
@@ -432,6 +269,12 @@ export default function AdminPage() {
       return;
     }
 
+    const parsedBuffer = Number.parseInt(createDefaultBuffer, 10);
+    if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0) {
+      setCreateSaveMessage("Enter a valid default buffer (0 or more minutes).");
+      return;
+    }
+
     const timeframes = buildTimeframesFromGrid(createCalendarDates, createAvailability);
     if (!timeframes || timeframes.length === 0) {
       setCreateSaveMessage("Select at least one available time slot.");
@@ -440,29 +283,20 @@ export default function AdminPage() {
 
     setIsSavingCreate(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_symposium`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
-        body: JSON.stringify({
-          symposium_name: trimmedName,
-          rooms_available: parsedRooms,
-          timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
-        }),
-      });
-
-      const payload = (await response.json()) as { detail?: string; status?: string; symposium_id?: string };
-      if (!response.ok) {
-        setCreateSaveMessage(payload.detail ?? "Failed to save symposium.");
-        return;
-      }
+      const { raw } = await apiPost("/api/events/add_symposium", {
+        symposium_name: trimmedName,
+        rooms_available: parsedRooms,
+        default_buffer: parsedBuffer,
+        timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
+      }, authHeaders);
 
       setCreateSaveMessage("Event created successfully.");
-      await fetchSymposiums();
-      if (payload.symposium_id) setSelectedSymposiumId(payload.symposium_id);
+      await fetchSymposia();
+      if (raw.symposium_id) setSelectedSymposiumId(String(raw.symposium_id));
       setActiveTab("edit");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setCreateSaveMessage(`Save failed: ${message}`);
+      setCreateSaveMessage(message);
     } finally {
       setIsSavingCreate(false);
     }
@@ -489,6 +323,12 @@ export default function AdminPage() {
       return;
     }
 
+    const parsedBuffer = Number.parseInt(editDefaultBuffer, 10);
+    if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0) {
+      setSymposiumEditMessage("Enter a valid default buffer (0 or more minutes).");
+      return;
+    }
+
     const timeframes = buildTimeframesFromGrid(editCalendarDates, editAvailability);
     if (!timeframes || timeframes.length === 0) {
       setSymposiumEditMessage("Select at least one available time slot.");
@@ -497,27 +337,19 @@ export default function AdminPage() {
 
     setIsSavingSymposiumEdit(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/symposiums/${selectedSymposiumId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
-        body: JSON.stringify({
-          symposium_name: trimmedName,
-          rooms_available: parsedRooms,
-          timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
-        }),
-      });
-
-      const payload = (await response.json()) as { detail?: string; status?: string };
-      if (!response.ok) {
-        setSymposiumEditMessage(payload.detail ?? "Failed to update event.");
-        return;
-      }
+      await apiPut("/api/events/update_symposium", {
+        symposium_id: selectedSymposiumId,
+        symposium_name: trimmedName,
+        rooms_available: parsedRooms,
+        default_buffer: parsedBuffer,
+        timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
+      }, authHeaders);
 
       setSymposiumEditMessage("Event updated successfully.");
-      await fetchSymposiums();
+      await fetchSymposia();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setSymposiumEditMessage(`Update failed: ${message}`);
+      setSymposiumEditMessage(message);
     } finally {
       setIsSavingSymposiumEdit(false);
     }
@@ -531,25 +363,17 @@ export default function AdminPage() {
     setIsDeletingSymposium(true);
     setSymposiumEditMessage(null);
     try {
-      const response = await fetch(
-        `${backendUrl}/api/events/delete_symposium?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
-        {
-        method: "DELETE",
-        headers: authHeaders,
-        }
+      await apiDelete(
+        `/api/events/delete_symposium?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
+        authHeaders
       );
-      const payload = (await response.json()) as { detail?: string; status?: string };
-      if (!response.ok) {
-        setSymposiumEditMessage(payload.detail ?? "Failed to delete event.");
-        return;
-      }
 
       setSymposiumEditMessage("Event deleted.");
       setSelectedSymposiumId("");
-      await fetchSymposiums();
+      await fetchSymposia();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setSymposiumEditMessage(`Delete failed: ${message}`);
+      setSymposiumEditMessage(message);
     } finally {
       setIsDeletingSymposium(false);
     }
@@ -594,23 +418,12 @@ export default function AdminPage() {
     setIsSavingDepartment(true);
     try {
       if (departmentAction === "add") {
-        const response = await fetch(`${backendUrl}/api/events/add_department`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
-          body: JSON.stringify({
-            symposium_id: selectedSymposiumId,
-            department_name: departmentName.trim(),
-            department_head_name: departmentHeadName.trim(),
-            email: departmentHeadEmail.trim().toLowerCase(),
-          }),
-        });
-
-        const payload = (await response.json()) as { detail?: unknown; status?: string };
-        if (!response.ok) {
-          setDepartmentMessage(toMessage(payload.detail, "Failed to add department."));
-          setDepartmentMessageKind("error");
-          return;
-        }
+        await apiPost("/api/events/add_department", {
+          symposium_id: selectedSymposiumId,
+          department_name: departmentName.trim(),
+          department_head_name: departmentHeadName.trim(),
+          email: departmentHeadEmail.trim().toLowerCase(),
+        }, authHeaders);
 
         setDepartmentName("");
         setDepartmentHeadName("");
@@ -618,23 +431,12 @@ export default function AdminPage() {
         setDepartmentMessage("Department added.");
         setDepartmentMessageKind("success");
       } else if (departmentAction === "edit") {
-        const response = await fetch(`${backendUrl}/api/events/update_department`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", ...(authHeaders ?? {}) },
-          body: JSON.stringify({
-            department_id: departmentToEditId,
-            department_name: departmentName.trim(),
-            department_head_name: departmentHeadName.trim(),
-            email: departmentHeadEmail.trim().toLowerCase(),
-          }),
-        });
-
-        const payload = (await response.json()) as { detail?: unknown; status?: string };
-        if (!response.ok) {
-          setDepartmentMessage(toMessage(payload.detail, "Failed to update department."));
-          setDepartmentMessageKind("error");
-          return;
-        }
+        await apiPut("/api/events/update_department", {
+          department_id: departmentToEditId,
+          department_name: departmentName.trim(),
+          department_head_name: departmentHeadName.trim(),
+          email: departmentHeadEmail.trim().toLowerCase(),
+        }, authHeaders);
 
         setDepartmentMessage("Department updated.");
         setDepartmentMessageKind("success");
@@ -648,7 +450,7 @@ export default function AdminPage() {
       await fetchDepartments(selectedSymposiumId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setDepartmentMessage(`Request failed: ${message}`);
+      setDepartmentMessage(message);
       setDepartmentMessageKind("error");
     } finally {
       setIsSavingDepartment(false);
@@ -663,26 +465,17 @@ export default function AdminPage() {
     setDepartmentMessage(null);
     setDepartmentMessageKind(null);
     try {
-      const response = await fetch(
-        `${backendUrl}/api/events/delete_department?department_id=${encodeURIComponent(department.id)}`,
-        {
-          method: "DELETE",
-          headers: authHeaders,
-        }
+      await apiDelete(
+        `/api/events/delete_department?department_id=${encodeURIComponent(department.id)}`,
+        authHeaders
       );
-      const payload = (await response.json()) as { detail?: unknown; status?: string };
-      if (!response.ok) {
-        setDepartmentMessage(toMessage(payload.detail, "Failed to delete department."));
-        setDepartmentMessageKind("error");
-        return;
-      }
 
       setDepartmentMessage("Department deleted.");
       setDepartmentMessageKind("success");
       await fetchDepartments(selectedSymposiumId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setDepartmentMessage(`Request failed: ${message}`);
+      setDepartmentMessage(message);
       setDepartmentMessageKind("error");
     } finally {
       setDeletingDepartmentId("");
@@ -694,9 +487,54 @@ export default function AdminPage() {
     setDepartmentToEditId(department.id);
     setDepartmentName(department.department_name);
     setDepartmentHeadName(department.department_head_name);
-    setDepartmentHeadEmail(department.email);
+    setDepartmentHeadEmail(department.email ?? "");
     setDepartmentMessage(null);
     setDepartmentMessageKind(null);
+  };
+
+  const handleCreateAdmin = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAdminMessage(null);
+    setAdminMessageKind(null);
+
+    const trimmedEmail = newAdminEmail.trim().toLowerCase();
+    if (!trimmedEmail || !/^[^\s@]+@hamilton\.edu$/i.test(trimmedEmail)) {
+      setAdminMessage("Enter a valid @hamilton.edu email.");
+      setAdminMessageKind("error");
+      return;
+    }
+
+    if (!newAdminPassword || newAdminPassword.length < 8) {
+      setAdminMessage("Password must be at least 8 characters.");
+      setAdminMessageKind("error");
+      return;
+    }
+
+    if (newAdminPassword !== newAdminConfirmPassword) {
+      setAdminMessage("Passwords do not match.");
+      setAdminMessageKind("error");
+      return;
+    }
+
+    setIsCreatingAdmin(true);
+    try {
+      await apiPost("/api/auth/admin/create", {
+        email: trimmedEmail,
+        password: newAdminPassword,
+      }, authHeaders);
+
+      setAdminMessage(`Admin created successfully (${trimmedEmail}).`);
+      setAdminMessageKind("success");
+      setNewAdminEmail("");
+      setNewAdminPassword("");
+      setNewAdminConfirmPassword("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setAdminMessage(message);
+      setAdminMessageKind("error");
+    } finally {
+      setIsCreatingAdmin(false);
+    }
   };
 
   const handleDeployEvent = () => {
@@ -709,7 +547,7 @@ export default function AdminPage() {
       setDeployEventMessage("Add at least one department before deploying.");
       return;
     }
-    setDeployEventMessage("Deploy Event is not connected yet.");
+    setDeployEventMessage("Deploy is not connected yet.");
   };
 
   const resetCreateTabState = () => {
@@ -718,8 +556,6 @@ export default function AdminPage() {
     setCreateStartDate("");
     setCreateEndDate("");
     setCreateAvailability([]);
-    setIsCreateDragging(false);
-    setCreateDragValue(null);
     setIsSavingCreate(false);
     setCreateSaveMessage(null);
   };
@@ -728,11 +564,10 @@ export default function AdminPage() {
     setSelectedSymposiumId("");
     setEditSymposiumName("");
     setEditRooms("");
+    setEditDefaultBuffer("");
     setEditStartDate("");
     setEditEndDate("");
     setEditAvailability([]);
-    setIsEditDragging(false);
-    setEditDragValue(null);
     setIsLoadingSymposiumDetails(false);
     setIsSavingSymposiumEdit(false);
     setIsDeletingSymposium(false);
@@ -751,26 +586,43 @@ export default function AdminPage() {
     setDeployEventMessage(null);
   };
 
+  const resetAdminsTabState = () => {
+    setNewAdminEmail("");
+    setNewAdminPassword("");
+    setNewAdminConfirmPassword("");
+    setIsCreatingAdmin(false);
+    setAdminMessage(null);
+    setAdminMessageKind(null);
+  };
+
   const handleTabSwitch = (tab: AdminTab) => {
     setActiveTab(tab);
     if (tab === "create") {
       resetCreateTabState();
       return;
     }
+    if (tab === "admins") {
+      resetAdminsTabState();
+      return;
+    }
+    if (tab === "schedule") {
+      return;
+    }
     resetEditTabState();
-    void fetchSymposiums();
+    void fetchSymposia();
   };
 
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
-          <Link
-            href="/pages?view=home"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-red-500 hover:bg-red-500 hover:text-white"
           >
-            Home
-          </Link>
+            Sign Out
+          </button>
         </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
@@ -778,7 +630,7 @@ export default function AdminPage() {
           </h1>
         </header>
 
-        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
           <button
             type="button"
             onClick={() => handleTabSwitch("create")}
@@ -794,16 +646,131 @@ export default function AdminPage() {
             type="button"
             onClick={() => handleTabSwitch("edit")}
             className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
-              isCreateTab
-                ? "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
-                : "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+              isEditTab
+                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
             }`}
           >
             Edit Existing Event
           </button>
+          <button
+            type="button"
+            onClick={() => handleTabSwitch("schedule")}
+            className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
+              activeTab === "schedule"
+                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
+            }`}
+          >
+            Schedule
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTabSwitch("admins")}
+            className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
+              activeTab === "admins"
+                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
+            }`}
+          >
+            Manage Admins
+          </button>
         </nav>
 
-        {isCreateTab ? (
+        {activeTab === "schedule" ? (
+          <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+            <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Schedule Editor</h2>
+            <ScheduleTab token={token} />
+          </section>
+        ) : null}
+
+        {activeTab === "admins" ? (
+          <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+            <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Create New Admin</h2>
+
+            <form onSubmit={handleCreateAdmin} className="max-w-md space-y-4">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Email</span>
+                <input
+                  type="email"
+                  className={fieldClass}
+                  placeholder="name@hamilton.edu"
+                  value={newAdminEmail}
+                  onChange={(event) => setNewAdminEmail(event.target.value)}
+                  disabled={isCreatingAdmin}
+                />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Password</span>
+                <div className="relative">
+                  <input
+                    type={showAdminPassword ? "text" : "password"}
+                    className={fieldClass + " pr-10"}
+                    placeholder="At least 8 characters"
+                    value={newAdminPassword}
+                    onChange={(event) => setNewAdminPassword(event.target.value)}
+                    disabled={isCreatingAdmin}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPassword(!showAdminPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]"
+                    tabIndex={-1}
+                  >
+                    {showAdminPassword ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    )}
+                  </button>
+                </div>
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Confirm Password</span>
+                <div className="relative">
+                  <input
+                    type={showAdminConfirmPassword ? "text" : "password"}
+                    className={fieldClass + " pr-10"}
+                    placeholder="Re-enter password"
+                    value={newAdminConfirmPassword}
+                    onChange={(event) => setNewAdminConfirmPassword(event.target.value)}
+                    disabled={isCreatingAdmin}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminConfirmPassword(!showAdminConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]"
+                    tabIndex={-1}
+                  >
+                    {showAdminConfirmPassword ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    )}
+                  </button>
+                </div>
+              </label>
+
+              <button
+                type="submit"
+                disabled={isCreatingAdmin}
+                className="rounded-lg bg-[#0f33a8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60 md:text-base"
+              >
+                {isCreatingAdmin ? "Creating..." : "Create Admin"}
+              </button>
+
+              {adminMessage ? (
+                <p
+                  className={`text-sm font-semibold ${
+                    adminMessageKind === "error" ? "text-[#9a1f1f]" : "text-[#1f5132]"
+                  }`}
+                >
+                  {adminMessage}
+                </p>
+              ) : null}
+            </form>
+          </section>
+        ) : isCreateTab ? (
           <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
             <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Create New Event</h2>
 
@@ -828,6 +795,17 @@ export default function AdminPage() {
                       placeholder="Ex. 5"
                       value={createRooms}
                       onChange={(event) => setCreateRooms(event.target.value)}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5">
+                    <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Default Buffer (Minutes)</span>
+                    <input
+                      type="number"
+                      min={0}
+                      className={fieldClass}
+                      placeholder="Ex. 5"
+                      value={createDefaultBuffer}
+                      onChange={(event) => setCreateDefaultBuffer(event.target.value)}
                     />
                   </label>
                 </div>
@@ -878,7 +856,7 @@ export default function AdminPage() {
                       >
                         {Array.from({ length: totalSlots }, (_, slotIndex) => (
                           <div key={slotIndex} className="contents">
-                            <div className="pr-1 pt-0.5 text-right text-[11px] font-semibold text-[#444]">
+                            <div className="h-4 overflow-hidden pr-1 text-right text-[11px] leading-4 font-semibold text-[#444]">
                               {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                             </div>
                             {createCalendarDates.map((date, dayIndex) => {
@@ -888,16 +866,8 @@ export default function AdminPage() {
                                 <button
                                   key={`${date.toISOString()}-${slotIndex}`}
                                   type="button"
-                                  onMouseDown={() => {
-                                    const nextValue = !available;
-                                    setCreateCell(dayIndex, slotIndex, nextValue);
-                                    setCreateDragValue(nextValue);
-                                    setIsCreateDragging(true);
-                                  }}
-                                  onMouseEnter={() => {
-                                    if (!isCreateDragging || createDragValue === null) return;
-                                    setCreateCell(dayIndex, slotIndex, createDragValue);
-                                  }}
+                                  onMouseDown={() => handleCreateCellMouseDown(dayIndex, slotIndex)}
+                                  onMouseEnter={() => handleCreateCellMouseEnter(dayIndex, slotIndex)}
                                   onDragStart={(event) => event.preventDefault()}
                                   className={`h-4 border-r border-l border-b border-[#333] ${
                                     showHourLine ? "border-t border-t-[#333]" : ""
@@ -937,7 +907,7 @@ export default function AdminPage() {
                   className={fieldClass}
                   value={selectedSymposiumId}
                   onChange={(event) => setSelectedSymposiumId(event.target.value)}
-                  disabled={isLoadingSymposiums}
+                  disabled={isLoadingSymposia}
                 >
                   <option value="">Select an event...</option>
                   {symposiumOptions.map((option) => (
@@ -951,11 +921,11 @@ export default function AdminPage() {
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => void fetchSymposiums()}
-                  disabled={isLoadingSymposiums}
+                  onClick={() => void fetchSymposia()}
+                  disabled={isLoadingSymposia}
                   className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isLoadingSymposiums ? "Loading..." : "Refresh Symposium List"}
+                  {isLoadingSymposia ? "Loading..." : "Refresh Symposium List"}
                 </button>
                 <button
                   type="button"
@@ -999,6 +969,17 @@ export default function AdminPage() {
                           className={fieldClass}
                           value={editRooms}
                           onChange={(event) => setEditRooms(event.target.value)}
+                          disabled={isLoadingSymposiumDetails}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1.5">
+                        <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Default Buffer (Minutes)</span>
+                        <input
+                          type="number"
+                          min={0}
+                          className={fieldClass}
+                          value={editDefaultBuffer}
+                          onChange={(event) => setEditDefaultBuffer(event.target.value)}
                           disabled={isLoadingSymposiumDetails}
                         />
                       </label>
@@ -1050,7 +1031,7 @@ export default function AdminPage() {
                           >
                             {Array.from({ length: totalSlots }, (_, slotIndex) => (
                               <div key={slotIndex} className="contents">
-                                <div className="pr-1 pt-0.5 text-right text-[11px] font-semibold text-[#444]">
+                                <div className="h-4 overflow-hidden pr-1 text-right text-[11px] leading-4 font-semibold text-[#444]">
                                   {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                                 </div>
                                 {editCalendarDates.map((date, dayIndex) => {
@@ -1060,16 +1041,8 @@ export default function AdminPage() {
                                     <button
                                       key={`${date.toISOString()}-${slotIndex}`}
                                       type="button"
-                                      onMouseDown={() => {
-                                        const nextValue = !available;
-                                        setEditCell(dayIndex, slotIndex, nextValue);
-                                        setEditDragValue(nextValue);
-                                        setIsEditDragging(true);
-                                      }}
-                                      onMouseEnter={() => {
-                                        if (!isEditDragging || editDragValue === null) return;
-                                        setEditCell(dayIndex, slotIndex, editDragValue);
-                                      }}
+                                      onMouseDown={() => handleEditCellMouseDown(dayIndex, slotIndex)}
+                                      onMouseEnter={() => handleEditCellMouseEnter(dayIndex, slotIndex)}
                                       onDragStart={(event) => event.preventDefault()}
                                       className={`h-4 border-r border-l border-b border-[#333] ${
                                         showHourLine ? "border-t border-t-[#333]" : ""
@@ -1223,16 +1196,17 @@ export default function AdminPage() {
                     )}
                   </div>
 
-                  <div className="mt-3">
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
                     <button
                       type="button"
                       onClick={handleDeployEvent}
                       className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#155622]"
                     >
-                      Deploy Event
+                      Deploy
                     </button>
-                    {deployEventMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployEventMessage}</p> : null}
+                    {deployEventMessage ? <p className="text-sm font-semibold text-[#222]">{deployEventMessage}</p> : null}
                   </div>
+
                 </div>
 
               </>

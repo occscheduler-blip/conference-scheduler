@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.scheduler.cp_sat import solve_schedule
 from app.scheduler.models import (
@@ -65,7 +65,7 @@ def _get_symposium_row(symposium_id: UUID) -> dict[str, Any]:
     rows = list(getattr(response, "data", None) or [])
     if not rows:
         raise ValueError(f"Symposium {symposium_id} was not found.")
-    return rows[0]
+    return dict(rows[0])
 
 
 def build_problem_from_symposium(
@@ -125,6 +125,8 @@ def build_problem_from_symposium(
                 id=presentation_id,
                 title=title,
                 duration_minutes=duration_minutes,
+                buffer_minutes=int(presentation.get("buffer") or 0),
+                class_id=class_id,
                 resource_ids=tuple(dict.fromkeys(resource_ids)),
             )
         )
@@ -139,6 +141,11 @@ def build_problem_from_symposium(
         for person_id, rows in grouped_rows.items():
             resource_windows[person_id] = _window_rows_to_models(rows)
 
+    # Anyone with no timeframes is treated as fully available
+    for person_id in person_ids:
+        if person_id not in resource_windows:
+            resource_windows[person_id] = symposium_windows
+
     return ScheduleProblem(
         symposium_id=str(symposium_uuid),
         rooms_available=rooms_available,
@@ -149,6 +156,36 @@ def build_problem_from_symposium(
     )
 
 
+def _save_assignments(result: ScheduleResult) -> None:
+    from app.supabase_io import delete, write
+
+    # Clean up old schedule assignments before re-saving
+    presentation_ids = [
+        UUID(a.presentation_id) for a in result.assignments
+    ]
+    if presentation_ids:
+        delete.delete_timeframes(presentation_ids)
+        for pid in presentation_ids:
+            supabase.table("presentations").update(
+                {"room": None}
+            ).eq("id", str(pid)).execute()
+
+    timeframe_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
+    for assignment in result.assignments:
+        timeframe_rows.append({
+            "id": uuid4(),
+            "linked_id": UUID(assignment.presentation_id),
+            "start_time": assignment.start.isoformat(),
+            "end_time": assignment.end.isoformat(),
+        })
+        supabase.table("presentations").update({
+            "room": assignment.room_index,
+        }).eq("id", assignment.presentation_id).execute()
+
+    if timeframe_rows:
+        write.insert("timeframes", timeframe_rows)
+
+
 def build_schedule_for_symposium(
     symposium_id: str | UUID, slot_minutes: int = 5, time_limit_seconds: float = 10.0
 ) -> ScheduleResult:
@@ -156,4 +193,7 @@ def build_schedule_for_symposium(
         symposium_id=symposium_id,
         slot_minutes=slot_minutes,
     )
-    return solve_schedule(problem, time_limit_seconds=time_limit_seconds)
+    result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
+    if result.status in ("optimal", "feasible"):
+        _save_assignments(result)
+    return result

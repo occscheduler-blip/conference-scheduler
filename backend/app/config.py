@@ -18,15 +18,15 @@ class Settings(BaseSettings):
     app_port: int = 8000
 
     backend_cors_origins: str = "http://localhost:3000"
-    backend_api_key: str = ""
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_db_url: str = ""
-    supabase_events_table: str = "events"
-    supabase_symposiums_table: str = "symposiums"
-    supabase_departments_table: str = "departments"
-    supabase_timeframes_table: str = "timeframes"
-    supabase_students_table: str = "students"
+
+    jwt_secret_key: str = ""
+    jwt_ttl_hours: int = 24
+
+    resend_api_key: str = ""
+    resend_from: str = "noreply@hamilton.edu"
 
     jwt_secret_key: str = ""
     jwt_ttl_hours: int = 24

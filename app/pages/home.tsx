@@ -3,45 +3,16 @@
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-
-type SymposiumOption = { id: string; name: string };
-type Timeframe = { id: string; start_time: string; end_time: string };
-type DepartmentRecord = {
-  id: string;
-  department_name: string;
-  department_head_name: string;
-};
-type ClassRecord = {
-  id: string;
-  department_id: string;
-};
-type PresentationRecord = {
-  id: string;
-  class_id: string;
-  title: string;
-  presenterNames: string[];
-};
-type SymposiumDetails = {
-  id: string;
-  name: string;
-  rooms_available?: number | null;
-};
-
-function parseBackendDateTime(value: string) {
-  const normalized = value.includes(" ") ? value.replace(" ", "T") : value;
-  return new Date(normalized);
-}
-
-function normalizeId(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function dayKey(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+import type {
+  ClassRecord,
+  DepartmentRecord,
+  PresentationRecord,
+  SymposiumDetails,
+  SymposiumOption,
+  Timeframe,
+} from "./types";
+import { parseBackendDateTime, normalizeId, dayKey } from "../lib/utils";
+import { apiFetch } from "../lib/api";
 
 function dayLabel(key: string) {
   return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
@@ -63,11 +34,8 @@ function timeLabel(start: string, end: string) {
 
 function HomeContent() {
   const searchParams = useSearchParams();
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(() => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined), [backendApiKey]);
 
-  const [symposiums, setSymposiums] = useState<SymposiumOption[]>([]);
+  const [symposia, setSymposia] = useState<SymposiumOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
   const [timeframes, setTimeframes] = useState<Timeframe[]>([]);
   const [departments, setDepartments] = useState<DepartmentRecord[]>([]);
@@ -75,11 +43,19 @@ function HomeContent() {
   const [presentations, setPresentations] = useState<PresentationRecord[]>([]);
   const [roomsAvailable, setRoomsAvailable] = useState(1);
   const [selectedDay, setSelectedDay] = useState("");
+  const [dayPage, setDayPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [locationFilter, setLocationFilter] = useState("");
   const [professorFilter, setProfessorFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [popupCard, setPopupCard] = useState<{
+    title: string;
+    timeframe: Timeframe | null;
+    room: string;
+    presenterNames: string[];
+    department: DepartmentRecord;
+  } | null>(null);
 
   const isLoggedIn = Boolean(
     searchParams.get("student_id") ||
@@ -89,22 +65,20 @@ function HomeContent() {
   );
 
   useEffect(() => {
-    async function loadSymposiums() {
+    async function loadSymposia() {
       try {
-        const response = await fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders });
-        const payload = (await response.json().catch(() => ({}))) as { detail?: string; data?: SymposiumOption[] };
-        if (!response.ok) throw new Error(payload.detail ?? "Failed to load symposiums.");
-        const list = payload.data ?? [];
-        setSymposiums(list);
+        const list = await apiFetch<SymposiumOption>("/api/events/symposiums");
+        setSymposia(list);
         setSelectedSymposiumId(list[0]?.id ?? "");
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         setMessage(msg);
       }
     }
-    void loadSymposiums();
-  }, [authHeaders, backendUrl]);
+    void loadSymposia();
+  }, []);
 
+  // AI template: loads all symposium schedule data in parallel — departments, classes, presentations, and students — and joins them for display.
   useEffect(() => {
     async function loadSymposiumDetails() {
       if (!selectedSymposiumId) {
@@ -114,28 +88,21 @@ function HomeContent() {
         setPresentations([]);
         setRoomsAvailable(1);
         setSelectedDay("");
+        setDayPage(0);
         return;
       }
 
       try {
         setMessage(null);
-        const [symposiumRes, departmentsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/symposiums/${selectedSymposiumId}`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`, {
-            headers: authHeaders,
-          }),
-        ]);
 
+        // Symposium detail returns { symposium, timeframes } — non-standard shape, so use apiFetch
+        // for the departments call and a raw fetch for the symposium detail.
+        const symposiumRes = await fetch(`/api/backend/api/events/symposiums/${selectedSymposiumId}`);
         const symposiumPayload = (await symposiumRes.json().catch(() => ({}))) as {
           detail?: string;
           symposium?: SymposiumDetails;
           timeframes?: Timeframe[];
         };
-        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as {
-          detail?: string;
-          departments?: DepartmentRecord[];
-        };
-
         if (!symposiumRes.ok) throw new Error(symposiumPayload.detail ?? "Failed to load symposium schedule.");
 
         const list = (symposiumPayload.timeframes ?? []).slice().sort((a, b) => {
@@ -147,123 +114,113 @@ function HomeContent() {
         const parsedRooms = Number(symposiumPayload.symposium?.rooms_available ?? 1);
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
 
-        if (departmentsRes.ok) {
-          const departmentRows = departmentsPayload.departments ?? [];
+        let departmentRows: DepartmentRecord[] = [];
+        try {
+          departmentRows = await apiFetch<DepartmentRecord>(
+            `/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`
+          );
+        } catch {
+          // Departments endpoint failed gracefully — continue with empty list
+        }
+
+        if (departmentRows.length > 0) {
           setDepartments(departmentRows);
 
-          const classResponses = await Promise.all(
-            departmentRows.map((department) =>
-              fetch(`${backendUrl}/api/events/classes?department_id=${encodeURIComponent(department.id)}`, {
-                headers: authHeaders,
+          const classRows = (
+            await Promise.all(
+              departmentRows.map(async (department) => {
+                try {
+                  return await apiFetch<ClassRecord>(
+                    `/api/events/classes?department_id=${encodeURIComponent(department.id)}`
+                  );
+                } catch {
+                  return [];
+                }
               })
             )
-          );
-
-          const classPayloads = await Promise.all(
-            classResponses.map((response) =>
-              response.json().catch(() => ({} as { data?: Array<{ id?: string; department_id?: string }> }))
-            )
-          );
-
-          const classRows = classPayloads.flatMap((payload, index) => {
-            if (!classResponses[index].ok) return [];
-            const list: Array<{ id?: string; department_id?: string }> = Array.isArray(payload)
-              ? payload
-              : (payload.data ?? []);
-            return list
-              .map((row) => ({
-                id: row.id ?? "",
-                department_id: row.department_id ?? "",
-              }))
-              .filter((row): row is ClassRecord => Boolean(row.id && row.department_id));
-          });
+          ).flat();
           setClasses(classRows);
 
-          const [presentationResponses, studentResponses] = await Promise.all([
+          type RawPresentation = {
+            id?: string;
+            class_id?: string;
+            title?: string;
+            room?: number | null;
+            presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
+          };
+          type RawStudent = { id?: string; name?: string; class_id?: string };
+
+          const [rawPresentations, rawStudents] = await Promise.all([
             Promise.all(
-              classRows.map((row) =>
-                fetch(`${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(row.id)}`, {
-                  headers: authHeaders,
-                })
-              )
+              classRows.map(async (row) => {
+                try {
+                  return await apiFetch<RawPresentation>(
+                    `/api/events/presentations?class_id=${encodeURIComponent(row.id)}`
+                  );
+                } catch {
+                  return [];
+                }
+              })
             ),
             Promise.all(
-              classRows.map((row) =>
-                fetch(`${backendUrl}/api/events/students?class_id=${encodeURIComponent(row.id)}`, {
-                  headers: authHeaders,
-                })
-              )
+              classRows.map(async (row) => {
+                try {
+                  return await apiFetch<RawStudent>(
+                    `/api/events/students?class_id=${encodeURIComponent(row.id)}`
+                  );
+                } catch {
+                  return [];
+                }
+              })
             ),
           ]);
 
-          const [presentationPayloads, studentPayloads] = await Promise.all([
-            Promise.all(
-              presentationResponses.map((response) =>
-                response.json().catch(
-                  () =>
-                    ({} as {
-                      data?: Array<{
-                        id?: string;
-                        class_id?: string;
-                        title?: string;
-                        presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
-                      }>;
-                    })
-                )
-              )
-            ),
-            Promise.all(
-              studentResponses.map((response) =>
-                response.json().catch(
-                  () => ({} as { data?: Array<{ id?: string; name?: string; class_id?: string }> })
-                )
-              )
-            ),
-          ]);
-
-          const studentRows = studentPayloads.flatMap((payload, index) => {
-            if (!studentResponses[index].ok) return [];
-            const list: Array<{ id?: string; name?: string; class_id?: string }> = Array.isArray(payload)
-              ? payload
-              : (payload.data ?? []);
-            return list
-              .map((row) => ({
-                id: row.id ?? "",
-                name: row.name?.trim() ?? "",
-              }))
-              .filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
-          });
+          const studentRows = rawStudents
+            .flat()
+            .map((row) => ({
+              id: row.id ?? "",
+              name: row.name?.trim() ?? "",
+            }))
+            .filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
           const studentNameById = new Map(studentRows.map((row) => [normalizeId(row.id), row.name]));
 
-          const presentationRows = presentationPayloads.flatMap((payload, index) => {
-            if (!presentationResponses[index].ok) return [];
-            const list: Array<{
-              id?: string;
-              class_id?: string;
-              title?: string;
-              presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
-            }> = Array.isArray(payload)
-              ? payload
-              : (payload.data ?? []);
-            return list
-              .map((row) => {
-                const presenterNames = (row.presenting_students ?? [])
-                  .map((student) => {
-                    const directName = student.name?.trim() ?? "";
-                    if (directName) return directName;
-                    const studentId = student.id ?? student.student_id ?? "";
-                    return studentNameById.get(normalizeId(studentId)) ?? "";
-                  })
-                  .filter((name) => name.length > 0);
-                return {
-                  id: row.id ?? "",
-                  class_id: row.class_id ?? "",
-                  title: row.title?.trim() ?? "",
-                  presenterNames: Array.from(new Set(presenterNames)),
-                };
-              })
-              .filter((row): row is PresentationRecord => Boolean(row.id && row.class_id));
-          });
+          const flatPresentations = rawPresentations.flat();
+
+          // Fetch scheduled timeframes for all presentations in parallel
+          const presentationTimeframes = await Promise.all(
+            flatPresentations.map(async (row) => {
+              if (!row.id) return null;
+              try {
+                const tfs = await apiFetch<Timeframe>(
+                  `/api/events/timeframes?linked_id=${encodeURIComponent(row.id)}`
+                );
+                return tfs[0] ?? null;
+              } catch {
+                return null;
+              }
+            })
+          );
+
+          const presentationRows = flatPresentations
+            .map((row, i) => {
+              const presenterNames = (row.presenting_students ?? [])
+                .map((student) => {
+                  const directName = student.name?.trim() ?? "";
+                  if (directName) return directName;
+                  const studentId = student.id ?? student.student_id ?? "";
+                  return studentNameById.get(normalizeId(studentId)) ?? "";
+                })
+                .filter((name) => name.length > 0);
+              return {
+                id: row.id ?? "",
+                class_id: row.class_id ?? "",
+                title: row.title?.trim() ?? "",
+                presenterNames: Array.from(new Set(presenterNames)),
+                room: row.room ?? null,
+                timeframe: presentationTimeframes[i] ?? null,
+              };
+            })
+            .filter((row): row is PresentationRecord => Boolean(row.id && row.class_id));
           setPresentations(presentationRows);
         } else {
           setDepartments([]);
@@ -273,6 +230,7 @@ function HomeContent() {
 
         const days = Array.from(new Set(list.map((item) => dayKey(parseBackendDateTime(item.start_time)))));
         setSelectedDay(days[0] ?? "");
+        setDayPage(0);
         if (list.length === 0) setMessage("No presentation times posted for this symposium yet.");
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Unknown error";
@@ -285,8 +243,9 @@ function HomeContent() {
       }
     }
     void loadSymposiumDetails();
-  }, [authHeaders, backendUrl, selectedSymposiumId]);
+  }, [selectedSymposiumId]);
 
+  // AI template: derived state — groups presentations into display cards, builds filter options, and applies search/filter logic.
   const days = useMemo(
     () => Array.from(new Set(timeframes.map((item) => dayKey(parseBackendDateTime(item.start_time))))),
     [timeframes]
@@ -307,16 +266,20 @@ function HomeContent() {
       const departmentIdByClassId = new Map(classes.map((classRow) => [classRow.id, classRow.department_id]));
 
       const cardsFromPresentations = presentations
-        .map((presentation, index) => {
+        .map((presentation) => {
           const departmentId = departmentIdByClassId.get(presentation.class_id);
           const department = departmentId ? departmentById.get(departmentId) : undefined;
           if (!department) return null;
+          const scheduled = presentation.timeframe != null;
+          const tf = presentation.timeframe ?? null;
+          const room = presentation.room != null ? `Room ${presentation.room + 1}` : "Room TBD";
           return {
             department,
-            timeframe: visibleRows[index] ?? null,
-            room: `Room ${(index % roomsAvailable) + 1}`,
+            timeframe: tf,
+            room,
             title: presentation.title || `${department.department_name} Presentation`,
             presenterNames: Array.isArray(presentation.presenterNames) ? presentation.presenterNames : [],
+            scheduled,
           };
         })
         .filter(
@@ -324,24 +287,26 @@ function HomeContent() {
             card
           ): card is {
             department: DepartmentRecord;
-            timeframe: Timeframe;
+            timeframe: Timeframe | null;
             room: string;
             title: string;
             presenterNames: string[];
+            scheduled: boolean;
           } => Boolean(card)
         );
 
       if (cardsFromPresentations.length > 0) return cardsFromPresentations;
 
-      return departments.map((department, index) => ({
+      return departments.map((department) => ({
         department,
-        timeframe: visibleRows[index] ?? null,
-        room: `Room ${(index % roomsAvailable) + 1}`,
+        timeframe: null as Timeframe | null,
+        room: "Room TBD",
         title: `${department.department_name} Presentation`,
         presenterNames: [],
+        scheduled: false,
       }));
     },
-    [classes, departments, presentations, roomsAvailable, visibleRows]
+    [classes, departments, presentations]
   );
 
   const filterOptions = useMemo(() => {
@@ -355,6 +320,12 @@ function HomeContent() {
   const filteredCards = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return cards.filter((card) => {
+      // Filter by selected day using the card's own timeframe
+      if (selectedDay && card.timeframe) {
+        const cardDay = dayKey(parseBackendDateTime(card.timeframe.start_time));
+        if (cardDay !== selectedDay) return false;
+      }
+      // Cards with no timeframe (unscheduled) always show
       const haystack = [
         card.title,
         ...(card.presenterNames ?? []),
@@ -370,43 +341,17 @@ function HomeContent() {
       const matchesDepartment = departmentFilter ? card.department.department_name === departmentFilter : true;
       return matchesQuery && matchesLocation && matchesProfessor && matchesDepartment;
     });
-  }, [cards, departmentFilter, locationFilter, professorFilter, searchQuery]);
+  }, [cards, departmentFilter, locationFilter, professorFilter, searchQuery, selectedDay]);
 
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-4 py-6">
       <div className="mx-auto w-full max-w-6xl">
-        <div className="mb-4 flex justify-end">
+        <div className="mb-4 flex justify-center">
           <Link
             href="/pages?view=login"
-            className="rounded-md border border-[#0f766e] bg-[#0f766e] px-4 py-2 text-sm font-semibold text-white transition hover:border-[#0b5f59] hover:bg-[#0b5f59]"
+            className="rounded-md border border-[#0f33a8] bg-[#0f33a8] px-6 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] md:text-base"
           >
-            Login
-          </Link>
-        </div>
-        <div className="mb-4 flex flex-wrap justify-center gap-2">
-          <Link
-            href="/pages?view=admin"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
-          >
-            Admin Page
-          </Link>
-          <Link
-            href="/pages?view=department-head"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-5 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white md:text-base"
-          >
-            Department Head Page
-          </Link>
-          <Link
-            href="/pages?view=professor"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
-          >
-            Professor Page
-          </Link>
-          <Link
-            href="/pages?view=student"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-2 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
-          >
-            Student Page
+            Sign In
           </Link>
         </div>
 
@@ -419,8 +364,8 @@ function HomeContent() {
             onChange={(event) => setSelectedSymposiumId(event.target.value)}
             className="mt-2 w-full rounded-lg border-2 border-[#1635a7] bg-white px-3 py-2.5 text-xl text-black"
           >
-            {symposiums.length === 0 ? <option value="">Select an event...</option> : null}
-            {symposiums.map((symposium) => (
+            {symposia.length === 0 ? <option value="">Select an event...</option> : null}
+            {symposia.map((symposium) => (
               <option key={symposium.id} value={symposium.id}>
                 {symposium.name}
               </option>
@@ -429,49 +374,70 @@ function HomeContent() {
         </div>
 
         <section className="overflow-hidden rounded-lg border-4 border-[#1635a7] bg-[#1635a7]">
-          <div className="grid grid-cols-1 md:grid-cols-5">
-            {days.map((day) => {
-              const active = day === selectedDay;
-              return (
-                <button
-                  key={day}
-                  type="button"
-                  onClick={() => setSelectedDay(day)}
-                  className={`border-b border-r border-[#1635a7] px-4 py-3 text-left text-lg leading-tight ${
-                    active ? "bg-white text-[#111]" : "bg-[#1635a7] text-white"
-                  }`}
-                >
-                  {dayLabel(day)}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto]">
-            <button type="button" className="border-r border-t border-[#1635a7] bg-white px-4 py-2 text-xl font-semibold text-[#111]">
-              Filter
-            </button>
-            {isLoggedIn ? (
-              <button type="button" className="border-t border-[#1635a7] bg-white px-6 py-2 text-xl font-semibold text-[#111]">
-                My Itinerary
+          <div className="flex items-stretch">
+            {days.length > 4 ? (
+              <button
+                type="button"
+                onClick={() => setDayPage((p) => p - 1)}
+                disabled={dayPage === 0}
+                className="flex items-center justify-center px-3 text-white disabled:opacity-30 hover:bg-[#0b2a8d]"
+                aria-label="Previous days"
+              >
+                &#8592;
+              </button>
+            ) : null}
+            <div className="grid flex-1 grid-cols-1 md:grid-cols-4">
+              {days.slice(dayPage * 4, (dayPage + 1) * 4).map((day) => {
+                const active = day === selectedDay;
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => setSelectedDay(day)}
+                    className={`whitespace-nowrap border-b border-r border-[#1635a7] px-4 py-3 text-left text-lg leading-tight ${
+                      active ? "bg-white text-[#111]" : "bg-[#1635a7] text-white"
+                    }`}
+                  >
+                    {dayLabel(day)}
+                  </button>
+                );
+              })}
+            </div>
+            {days.length > 4 ? (
+              <button
+                type="button"
+                onClick={() => setDayPage((p) => p + 1)}
+                disabled={(dayPage + 1) * 4 >= days.length}
+                className="flex items-center justify-center px-3 text-white disabled:opacity-30 hover:bg-[#0b2a8d]"
+                aria-label="Next days"
+              >
+                &#8594;
               </button>
             ) : null}
           </div>
+
+          {isLoggedIn ? (
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto]">
+              <button type="button" className="border-t border-[#1635a7] bg-white px-6 py-2 text-xl font-semibold text-[#111]">
+                My Itinerary
+              </button>
+            </div>
+          ) : null}
         </section>
 
         <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
           <input
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search title, professor, or department"
-            className="rounded-full border border-[#d7b980] bg-white px-4 py-2 text-xl"
+            placeholder="Search title, student, professor, or department"
+            className="rounded-full border border-[#d7b980] bg-white px-4 py-2 text-xl text-[#111]"
           />
           <div className="rounded-3xl border border-[#d7b980] bg-white p-3 text-lg">
             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
               <select
                 value={locationFilter}
                 onChange={(event) => setLocationFilter(event.target.value)}
-                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base"
+                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base text-[#111]"
               >
                 <option value="">Location</option>
                 {filterOptions.locations.map((option) => (
@@ -483,7 +449,7 @@ function HomeContent() {
               <select
                 value={professorFilter}
                 onChange={(event) => setProfessorFilter(event.target.value)}
-                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base"
+                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base text-[#111]"
               >
                 <option value="">Advisor/Professor</option>
                 {filterOptions.professors.map((option) => (
@@ -495,7 +461,7 @@ function HomeContent() {
               <select
                 value={departmentFilter}
                 onChange={(event) => setDepartmentFilter(event.target.value)}
-                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base"
+                className="rounded-md border border-[#ddd] bg-white px-2 py-2 text-base text-[#111]"
               >
                 <option value="">Department</option>
                 {filterOptions.departments.map((option) => (
@@ -532,7 +498,15 @@ function HomeContent() {
                   {timeframe ? timeLabel(timeframe.start_time, timeframe.end_time) : "Time TBD"}
                 </div>
                 <div className="px-4 py-3">
-                  <h3 className="text-3xl font-extrabold text-[#111]">{title}</h3>
+                  <h3 className="text-3xl font-extrabold text-[#111]">
+                    <button
+                      type="button"
+                      onClick={() => setPopupCard({ title, timeframe, room, presenterNames: safePresenterNames, department })}
+                      className="text-left underline hover:text-[#1635a7]"
+                    >
+                      {title}
+                    </button>
+                  </h3>
                   <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xl text-[#111]">
                     <span>{room}</span>
                     {safePresenterNames.length > 0 ? (
@@ -549,6 +523,41 @@ function HomeContent() {
           })}
         </div>
       </div>
+
+      {popupCard ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setPopupCard(null)}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border border-[#d6b676] bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-[#1635a7] px-5 py-3 text-xl font-semibold text-white">
+              {popupCard.timeframe ? timeLabel(popupCard.timeframe.start_time, popupCard.timeframe.end_time) : "Time TBD"}
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <h2 className="text-2xl font-extrabold text-[#111]">{popupCard.title}</h2>
+              <div className="text-lg text-[#333] space-y-1">
+                <p><span className="font-semibold">Location:</span> {popupCard.room}</p>
+                <p><span className="font-semibold">Department:</span> {popupCard.department.department_name}</p>
+                <p><span className="font-semibold">Advisor:</span> {popupCard.department.department_head_name}</p>
+                <p>
+                  <span className="font-semibold">Presenters:</span>{" "}
+                  {popupCard.presenterNames.length > 0 ? popupCard.presenterNames.join(", ") : "TBD"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPopupCard(null)}
+                className="mt-2 rounded-lg bg-[#1635a7] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b2a8d]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

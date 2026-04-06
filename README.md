@@ -14,10 +14,11 @@ npm run dev
 
 To view local frontend, visit: http://localhost:3000
 
-Optional frontend env (`.env.local`):
+Root app env (`.env.local`):
 
 ```bash
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+BACKEND_URL=http://localhost:8000
+BACKEND_API_KEY=your-backend-api-key
 ```
 
 ## Backend Setup

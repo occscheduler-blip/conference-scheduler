@@ -46,7 +46,6 @@ _service_key = _get_local_service_key()
 # Force-set — override any production values already in the environment.
 os.environ["SUPABASE_URL"] = _LOCAL_URL
 os.environ["SUPABASE_KEY"] = _service_key
-os.environ.setdefault("BACKEND_API_KEY", "test-api-key")
 os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-key-for-testing-only")
 
 
@@ -88,5 +87,7 @@ def client():
 
 @pytest.fixture()
 def h():
-    """Valid API key headers shorthand."""
-    return {"X-API-Key": "test-api-key"}
+    """Valid admin JWT Bearer header shorthand."""
+    from app.auth.jwt_utils import encode_jwt
+    token = encode_jwt("00000000-0000-0000-0000-000000000001", "admin@hamilton.edu", "admin")
+    return {"Authorization": f"Bearer {token}"}

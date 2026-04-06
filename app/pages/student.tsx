@@ -1,58 +1,26 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-
-type StudentTab = "availability" | "preferences";
-type CalendarDay = { key: string; label: string };
-type SavedProfessorRequest = { id: string; professorId: string; professorName: string; professorEmail: string };
-type StudentOption = { id: string; name: string };
-
-const totalSlots = 32; // 9:00 AM to 5:00 PM in 15-minute increments
-
-// Converts a 15-minute slot index into a human-readable time label.
-function formatTimeLabel(slotIndex: number) {
-  const totalMinutes = 9 * 60 + slotIndex * 15;
-  const hour24 = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  const suffix = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-  const minutePart = minutes.toString().padStart(2, "0");
-  return `${hour12}:${minutePart} ${suffix}`;
-}
-
-// Formats a date for calendar column headers.
-function formatCalendarDate(date: Date) {
-  return date.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-// Parses backend date strings and defaults timezone-less values to UTC.
-function parseBackendDateTime(value: string) {
-  const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
-  return new Date(hasExplicitTimezone ? value : `${value}Z`);
-}
+import { useEffect, useMemo, useState } from "react";
+import type { CalendarDay, SavedProfessorRequest, StudentOption, StudentTab } from "./types";
+import {
+  totalSlots,
+  formatTimeLabel,
+  buildCalendarFromTimeframes,
+} from "../lib/utils";
+import { apiFetch, apiPost, apiPut } from "../lib/api";
+import { useCalendarGrid } from "../lib/useCalendarGrid";
 
 // Renders the student page and manages its data and interactions.
-export default function StudentPage() {
-  const searchParams = useSearchParams();
-  const studentIdFromLink = searchParams.get("student_id") ?? "";
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
+export default function StudentPage({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
+  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [activeTab, setActiveTab] = useState<StudentTab>("availability");
-  const [availability, setAvailability] = useState<boolean[][]>([]);
   const [editableSlots, setEditableSlots] = useState<boolean[][]>([]);
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const [calendarMessage, setCalendarMessage] = useState("");
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragValue, setDragValue] = useState<boolean | null>(null);
+  const { availability, setAvailability, handleCellMouseDown, handleCellMouseEnter } = useCalendarGrid(calendarDays.length, editableSlots);
   const hasSelectedStudent = Boolean(selectedStudentId);
   const [studentName, setStudentName] = useState("");
   const [symposiumName, setSymposiumName] = useState("");
@@ -65,20 +33,11 @@ export default function StudentPage() {
   const [savedProfessorRequests, setSavedProfessorRequests] = useState<SavedProfessorRequest[]>([]);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesMessage, setPreferencesMessage] = useState("");
+  const [savingAvailability, setSavingAvailability] = useState(false);
+  const [availabilityMessage, setAvailabilityMessage] = useState("");
   const identityReady = hasSelectedStudent && !loadingIdentity && Boolean(studentName);
 
   const isAvailabilityTab = activeTab === "availability";
-
-  useEffect(() => {
-    // Stops drag-edit mode when the mouse is released anywhere on the page.
-    const stopDragging = () => {
-      setIsDragging(false);
-      setDragValue(null);
-    };
-
-    window.addEventListener("mouseup", stopDragging);
-    return () => window.removeEventListener("mouseup", stopDragging);
-  }, []);
 
   useEffect(() => {
     let ignore = false;
@@ -87,16 +46,7 @@ export default function StudentPage() {
       setLoadingStudents(true);
       setIdentityMessage("");
       try {
-        const studentsRes = await fetch(`${backendUrl}/api/events/students`, {
-          headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-        });
-        const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string }> }
-          | Array<{ id?: string; name?: string }>;
-        if (!studentsRes.ok) {
-          throw new Error("Failed to load students.");
-        }
-        const studentRows = Array.isArray(studentsPayload) ? studentsPayload : (studentsPayload.data ?? []);
+        const studentRows = await apiFetch<{ id?: string; name?: string }>("/api/events/students", { headers: authHeaders });
         const nextOptions = studentRows
           .filter((row) => row.id)
           .map((row) => ({
@@ -107,10 +57,8 @@ export default function StudentPage() {
         if (ignore) return;
         setStudentOptions(nextOptions);
         setSelectedStudentId((current) => {
-          if (studentIdFromLink && nextOptions.some((option) => option.id === studentIdFromLink)) {
-            return studentIdFromLink;
-          }
           if (current && nextOptions.some((option) => option.id === current)) return current;
+          if (entityId && nextOptions.some((option) => option.id === entityId)) return entityId;
           return nextOptions[0]?.id ?? "";
         });
         if (nextOptions.length === 0) {
@@ -131,7 +79,7 @@ export default function StudentPage() {
     return () => {
       ignore = true;
     };
-  }, [backendApiKey, backendUrl, studentIdFromLink]);
+  }, [authHeaders]);
 
   useEffect(() => {
     if (!selectedStudentId) {
@@ -146,6 +94,7 @@ export default function StudentPage() {
       setEditableSlots([]);
       setAvailability([]);
       setCalendarMessage("");
+      setAvailabilityMessage("");
       setPreferredProfessorName("");
       setPreferredProfessorEmail("");
       setSavedProfessorRequests([]);
@@ -153,48 +102,19 @@ export default function StudentPage() {
     }
 
     let ignore = false;
-    // Loads identity data, schedule data, and saved requests for the selected student.
+    // AI template: loads student identity, resolves the class/symposium chain, maps timeframes to calendar slots, and fetches saved preference requests.
     const loadStudent = async () => {
       setLoadingIdentity(true);
       setIdentityMessage("");
       setCalendarMessage("");
+      setAvailabilityMessage("");
       try {
-        const [studentsRes, classesRes, departmentsRes, symposiumsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/students`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/classes`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/departments`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
-          fetch(`${backendUrl}/api/events/symposiums`, {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }),
+        const [studentRows, classRows, departmentRows, symposiumInfoRows] = await Promise.all([
+          apiFetch<{ id?: string; name?: string; email?: string; class_id?: string }>("/api/events/students", { headers: authHeaders }),
+          apiFetch<{ id?: string; name?: string; department_id?: string }>("/api/events/classes", { headers: authHeaders }),
+          apiFetch<{ id?: string; symposium_id?: string }>("/api/events/departments", { headers: authHeaders }),
+          apiFetch<{ id?: string; name?: string; symposium_name?: string }>("/api/events/symposiums", { headers: authHeaders }),
         ]);
-
-        const studentsPayload = (await studentsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string; email?: string; class_id?: string }> }
-          | Array<{ id?: string; name?: string; email?: string; class_id?: string }>;
-        const classesPayload = (await classesRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string; department_id?: string }> }
-          | Array<{ id?: string; name?: string; department_id?: string }>;
-        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; symposium_id?: string }> }
-          | Array<{ id?: string; symposium_id?: string }>;
-        const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
-          | Array<{ id?: string; name?: string; symposium_name?: string }>;
-
-        if (!studentsRes.ok || !classesRes.ok || !departmentsRes.ok || !symposiumsRes.ok) {
-          throw new Error("Failed to load student.");
-        }
-
-        const studentRows = Array.isArray(studentsPayload) ? studentsPayload : (studentsPayload.data ?? []);
-        const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
-        const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
-        const symposiumInfoRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
 
         const student = studentRows.find((row) => row.id === selectedStudentId);
         if (!student) {
@@ -212,25 +132,12 @@ export default function StudentPage() {
 
         let resolvedPresentationName = "";
         if (classId) {
-          const presentationsRes = await fetch(
-            `${backendUrl}/api/events/presentations?class_id=${encodeURIComponent(classId)}`,
-            {
-              headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-            }
-          );
-          const presentationsPayload = (await presentationsRes.json().catch(() => ({}))) as
-            | {
-                data?: Array<{
-                  id?: string;
-                  title?: string;
-                  presenting_students?: Array<{ id?: string; student_id?: string }>;
-                }>;
-              }
-            | Array<{ id?: string; title?: string; presenting_students?: Array<{ id?: string; student_id?: string }> }>;
-          if (presentationsRes.ok) {
-            const presentationRows = Array.isArray(presentationsPayload)
-              ? presentationsPayload
-              : (presentationsPayload.data ?? []);
+          try {
+            const presentationRows = await apiFetch<{
+              id?: string;
+              title?: string;
+              presenting_students?: Array<{ id?: string; student_id?: string }>;
+            }>(`/api/events/presentations?class_id=${encodeURIComponent(classId)}`, { headers: authHeaders });
             const presentingMembershipRows = presentationRows.flatMap((presentation) =>
               (presentation.presenting_students ?? []).map((presentingStudent) => ({
                 presentationId: presentation.id ?? "",
@@ -242,122 +149,30 @@ export default function StudentPage() {
               "";
             resolvedPresentationName =
               presentationRows.find((presentation) => presentation.id === matchedPresentationId)?.title ?? "";
-          }
+          } catch { /* presentations are optional context */ }
         }
 
-        const symposiumTimeframesRes = await fetch(
-          `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(symposiumId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
-        );
-        const symposiumTimeframesPayload = (await symposiumTimeframesRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ start_time?: string; end_time?: string }> }
-          | Array<{ start_time?: string; end_time?: string }>;
-        if (!symposiumTimeframesRes.ok) {
-          throw new Error("Failed to load symposium timeframe.");
-        }
-
-        const symposiumTimeframeRows = Array.isArray(symposiumTimeframesPayload)
-          ? symposiumTimeframesPayload
-          : (symposiumTimeframesPayload.data ?? []);
-        const uniqueDayKeys = new Set<string>();
-        const parsedSymposiumRows: Array<{ start: Date; end: Date | null }> = [];
-        for (const row of symposiumTimeframeRows) {
-          if (!row.start_time) continue;
-          const start = parseBackendDateTime(row.start_time);
-          if (Number.isNaN(start.getTime())) continue;
-          const end = row.end_time ? parseBackendDateTime(row.end_time) : null;
-          const key = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(
-            start.getDate()
-          ).padStart(2, "0")}`;
-          uniqueDayKeys.add(key);
-          parsedSymposiumRows.push({ start, end: end && !Number.isNaN(end.getTime()) ? end : null });
-        }
-
-        const nextCalendarDays = Array.from(uniqueDayKeys)
-          .sort()
-          .map((key) => ({
-            key,
-            label: formatCalendarDate(new Date(`${key}T00:00:00`)),
-          }));
-        const dayIndexByKey = new Map(nextCalendarDays.map((day, index) => [day.key, index]));
-        const nextEditableSlots = Array.from({ length: nextCalendarDays.length }, () =>
-          Array.from({ length: totalSlots }, () => false)
-        );
-        const nextAvailability = Array.from({ length: nextCalendarDays.length }, () =>
-          Array.from({ length: totalSlots }, () => false)
+        const symposiumTimeframeRows = await apiFetch<{ start_time?: string; end_time?: string }>(
+          `/api/events/timeframes?linked_id=${encodeURIComponent(symposiumId)}`, { headers: authHeaders }
         );
 
-        for (const row of parsedSymposiumRows) {
-          const dayKey = `${row.start.getFullYear()}-${String(row.start.getMonth() + 1).padStart(2, "0")}-${String(
-            row.start.getDate()
-          ).padStart(2, "0")}`;
-          const dayIndex = dayIndexByKey.get(dayKey);
-          if (dayIndex === undefined) continue;
-          const startMinutes = row.start.getHours() * 60 + row.start.getMinutes();
-          const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
-          const endMinutes = row.end ? row.end.getHours() * 60 + row.end.getMinutes() : startMinutes + 15;
-          const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
-          for (let offset = 0; offset < slotSpan; offset += 1) {
-            const slotIndex = startSlot + offset;
-            if (slotIndex >= 0 && slotIndex < totalSlots) {
-              nextEditableSlots[dayIndex][slotIndex] = true;
-            }
-          }
-        }
+        let studentRowsTf: Array<{ start_time?: string; end_time?: string }> = [];
+        try {
+          studentRowsTf = await apiFetch<{ start_time?: string; end_time?: string }>(
+            `/api/events/timeframes?linked_id=${encodeURIComponent(selectedStudentId)}`, { headers: authHeaders }
+          );
+        } catch { /* student availability is optional */ }
 
-        const studentTimeframesRes = await fetch(
-          `${backendUrl}/api/events/timeframes?linked_id=${encodeURIComponent(selectedStudentId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
-        );
-        const studentTimeframesPayload = (await studentTimeframesRes.json().catch(() => ({}))) as
-          | { detail?: unknown; data?: Array<{ start_time?: string; end_time?: string }> }
-          | Array<{ start_time?: string; end_time?: string }>;
-        if (studentTimeframesRes.ok) {
-          const studentRowsTf = Array.isArray(studentTimeframesPayload)
-            ? studentTimeframesPayload
-            : (studentTimeframesPayload.data ?? []);
-          for (const row of studentRowsTf) {
-            if (!row.start_time) continue;
-            const start = parseBackendDateTime(row.start_time);
-            if (Number.isNaN(start.getTime())) continue;
-            const end = row.end_time ? parseBackendDateTime(row.end_time) : null;
-            const dayKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(
-              start.getDate()
-            ).padStart(2, "0")}`;
-            const dayIndex = dayIndexByKey.get(dayKey);
-            if (dayIndex === undefined) continue;
-            const startMinutes = start.getHours() * 60 + start.getMinutes();
-            const startSlot = Math.floor((startMinutes - 9 * 60) / 15);
-            const endMinutes = end ? end.getHours() * 60 + end.getMinutes() : startMinutes + 15;
-            const slotSpan = Math.max(1, Math.ceil((endMinutes - startMinutes) / 15));
-            for (let offset = 0; offset < slotSpan; offset += 1) {
-              const slotIndex = startSlot + offset;
-              if (slotIndex < 0 || slotIndex >= totalSlots) continue;
-              if (!nextEditableSlots[dayIndex]?.[slotIndex]) continue;
-              nextAvailability[dayIndex][slotIndex] = true;
-            }
-          }
-        }
+        const { calendarDays: nextCalendarDays, editableSlots: nextEditableSlots, availability: nextAvailability } =
+          buildCalendarFromTimeframes(symposiumTimeframeRows, studentRowsTf);
 
         if (ignore) return;
-        const requestsRes = await fetch(
-          `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
-          {
-            headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-          }
-        );
-        const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; name?: string; email?: string }> }
-          | Array<{ id?: string; name?: string; email?: string }>;
-        const requestRows = requestsRes.ok
-          ? Array.isArray(requestsPayload)
-            ? requestsPayload
-            : (requestsPayload.data ?? [])
-          : [];
+        let requestRows: Array<{ id?: string; name?: string; email?: string }> = [];
+        try {
+          requestRows = await apiFetch<{ id?: string; name?: string; email?: string }>(
+            `/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`, { headers: authHeaders }
+          );
+        } catch { /* requests are optional */ }
         const nextSavedRequests: SavedProfessorRequest[] = requestRows
           .filter((row) => row.id && row.name && row.email)
           .map((row) => ({
@@ -401,18 +216,7 @@ export default function StudentPage() {
     return () => {
       ignore = true;
     };
-  }, [backendApiKey, backendUrl, loadingStudents, selectedStudentId]);
-
-  // Updates one availability cell in the grid.
-  const setCell = (dayIndex: number, slotIndex: number, value: boolean) => {
-    setAvailability((current) =>
-      Array.from({ length: calendarDays.length }, (_, dIdx) =>
-        Array.from({ length: totalSlots }, (_, sIdx) =>
-          dIdx === dayIndex && sIdx === slotIndex ? value : (current[dIdx]?.[sIdx] ?? false)
-        )
-      )
-    );
-  };
+  }, [authHeaders, loadingStudents, selectedStudentId]);
 
   // Saves one preferred professor request for the selected student.
   const handleSavePreferences = async () => {
@@ -431,52 +235,27 @@ export default function StudentPage() {
 
     setSavingPreferences(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_request`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(backendApiKey ? { "X-API-Key": backendApiKey } : {}),
-        },
-        body: JSON.stringify({
-          name: requestName,
-          email: requestEmail,
-          student_id: selectedStudentId,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        const detail = payload.detail;
-        const text =
-          typeof detail === "string"
-            ? detail
-            : Array.isArray(detail)
-              ? detail.map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg)).join("; ")
-              : "Unable to save request.";
-        setPreferencesMessage(`Save failed: ${text}`);
-        return;
-      }
+      await apiPost("/api/events/add_request", {
+        name: requestName,
+        email: requestEmail,
+        student_id: selectedStudentId,
+      }, authHeaders);
 
-      const requestsRes = await fetch(
-        `${backendUrl}/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`,
-        {
-          headers: backendApiKey ? { "X-API-Key": backendApiKey } : undefined,
-        }
-      );
-      const requestsPayload = (await requestsRes.json().catch(() => ({}))) as
-        | { data?: Array<{ id?: string; name?: string; email?: string }> }
-        | Array<{ id?: string; name?: string; email?: string }>;
-      if (requestsRes.ok) {
-        const requestRows = Array.isArray(requestsPayload) ? requestsPayload : (requestsPayload.data ?? []);
-        const nextSavedRequests: SavedProfessorRequest[] = requestRows
-          .filter((row) => row.id && row.name && row.email)
-          .map((row) => ({
-            id: row.id as string,
-            professorId: "",
-            professorName: row.name as string,
-            professorEmail: (row.email as string).toLowerCase(),
-          }));
-        setSavedProfessorRequests(nextSavedRequests);
-      }
+      let requestRows: Array<{ id?: string; name?: string; email?: string }> = [];
+      try {
+        requestRows = await apiFetch<{ id?: string; name?: string; email?: string }>(
+          `/api/events/requests?student_id=${encodeURIComponent(selectedStudentId)}`, { headers: authHeaders }
+        );
+      } catch { /* ignore refresh failure */ }
+      const nextSavedRequests: SavedProfessorRequest[] = requestRows
+        .filter((row) => row.id && row.name && row.email)
+        .map((row) => ({
+          id: row.id as string,
+          professorId: "",
+          professorName: row.name as string,
+          professorEmail: (row.email as string).toLowerCase(),
+        }));
+      setSavedProfessorRequests(nextSavedRequests);
 
       setPreferencesMessage("Request saved.");
       setPreferredProfessorName("");
@@ -489,53 +268,86 @@ export default function StudentPage() {
     }
   };
 
-  // Starts drag-editing availability from the clicked cell.
-  const handleCellMouseDown = (dayIndex: number, slotIndex: number) => {
-    if (!editableSlots[dayIndex]?.[slotIndex]) return;
-    const nextValue = !(availability[dayIndex]?.[slotIndex] ?? false);
-    setCell(dayIndex, slotIndex, nextValue);
-    setDragValue(nextValue);
-    setIsDragging(true);
-  };
+  // Saves selected availability slots to the backend.
+  const handleSaveAvailability = async () => {
+    setAvailabilityMessage("");
+    if (!selectedStudentId) {
+      setAvailabilityMessage("Select a student first.");
+      return;
+    }
+    if (calendarDays.length === 0) {
+      setAvailabilityMessage("No symposium dates are configured yet.");
+      return;
+    }
 
-  // Applies drag-editing to a cell while moving across the grid.
-  const handleCellMouseEnter = (dayIndex: number, slotIndex: number) => {
-    if (!isDragging || dragValue === null) return;
-    if (!editableSlots[dayIndex]?.[slotIndex]) return;
-    setCell(dayIndex, slotIndex, dragValue);
+    const timeframes: Array<{ start_time: string; end_time: string }> = [];
+    for (let dayIndex = 0; dayIndex < calendarDays.length; dayIndex += 1) {
+      const day = calendarDays[dayIndex];
+      const [year, month, dayOfMonth] = day.key.split("-").map((part) => Number.parseInt(part, 10));
+      if (!year || !month || !dayOfMonth) continue;
+
+      let rangeStart: Date | null = null;
+      let rangeEnd: Date | null = null;
+
+      for (let slotIndex = 0; slotIndex < totalSlots; slotIndex += 1) {
+        const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
+        const available = availability[dayIndex]?.[slotIndex] ?? false;
+
+        if (editable && available) {
+          const slotStart = new Date(year, month - 1, dayOfMonth, 9, 0, 0, 0);
+          slotStart.setMinutes(slotStart.getMinutes() + slotIndex * 15);
+          const slotEnd = new Date(slotStart);
+          slotEnd.setMinutes(slotEnd.getMinutes() + 15);
+
+          if (!rangeStart) {
+            rangeStart = slotStart;
+            rangeEnd = slotEnd;
+          } else {
+            rangeEnd = slotEnd;
+          }
+        } else if (rangeStart && rangeEnd) {
+          timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
+          rangeStart = null;
+          rangeEnd = null;
+        }
+      }
+
+      if (rangeStart && rangeEnd) {
+        timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
+      }
+    }
+
+    setSavingAvailability(true);
+    try {
+      await apiPut("/api/events/update_timeframes", {
+        linked_id: selectedStudentId,
+        timeframes,
+      }, authHeaders);
+      setAvailabilityMessage(`Saved ${timeframes.length} availability slot${timeframes.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setAvailabilityMessage(`Save failed: ${message}`);
+    } finally {
+      setSavingAvailability(false);
+    }
   };
 
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
-          <Link
-            href="/pages?view=home"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-red-500 hover:bg-red-500 hover:text-white"
           >
-            Home
-          </Link>
+            Sign Out
+          </button>
         </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
             OCC THESIS SYMPOSIUM - STUDENT
           </h1>
-          <label className="mx-auto mt-4 block w-full max-w-xl">
-            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Student</span>
-            <select
-              value={selectedStudentId}
-              onChange={(event) => setSelectedStudentId(event.target.value)}
-              disabled={loadingStudents || studentOptions.length === 0}
-              className="mt-2 w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <option value="">Select student</option>
-              {studentOptions.map((student) => (
-                <option key={student.id} value={student.id}>
-                  {student.name}
-                </option>
-              ))}
-            </select>
-          </label>
           {identityMessage ? <p className="mt-2 text-center text-sm font-semibold text-[#9a1f1f]">{identityMessage}</p> : null}
         </header>
         <p className="mb-3 text-center text-3xl font-extrabold tracking-wide text-[#0f33a8] md:text-5xl">
@@ -543,18 +355,24 @@ export default function StudentPage() {
         </p>
         {identityReady ? (
           <div className="mb-3 overflow-hidden rounded-xl border border-[#d7e0ff] bg-white text-sm text-[#2d3d7a] md:grid md:grid-cols-3">
-            <p className="px-3 py-2.5 font-semibold md:border-r md:border-[#e4ebff]">
-              <span className="mr-1 font-bold">Symposium:</span>
-              <span>{symposiumName || "Unknown"}</span>
-            </p>
-            <p className="border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0 md:border-r md:border-[#e4ebff]">
-              <span className="mr-1 font-bold">Class:</span>
-              <span>{className || "Unknown"}</span>
-            </p>
-            <p className="border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0">
-              <span className="mr-1 font-bold">Presentation:</span>
-              <span>{presentationName || "Unknown"}</span>
-            </p>
+            <div className="grid grid-cols-[auto_1fr] px-3 py-2.5 font-semibold md:border-r md:border-[#e4ebff]">
+              <span className="border-r border-[#e4ebff] bg-[#eef3ff] px-3 py-2 text-sm font-bold uppercase tracking-wide text-[#1e3a8a]">
+                Symposium
+              </span>
+              <span className="px-4 py-2 text-base font-semibold">{symposiumName || "Unknown"}</span>
+            </div>
+            <div className="grid grid-cols-[auto_1fr] border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0 md:border-r md:border-[#e4ebff]">
+              <span className="border-r border-[#e4ebff] bg-[#eef3ff] px-3 py-2 text-sm font-bold uppercase tracking-wide text-[#1e3a8a]">
+                Class
+              </span>
+              <span className="px-4 py-2 text-base font-semibold">{className || "Unknown"}</span>
+            </div>
+            <div className="grid grid-cols-[auto_1fr] border-t border-[#e4ebff] px-3 py-2.5 font-semibold md:border-t-0">
+              <span className="border-r border-[#e4ebff] bg-[#eef3ff] px-3 py-2 text-sm font-bold uppercase tracking-wide text-[#1e3a8a]">
+                Presentation
+              </span>
+              <span className="px-4 py-2 text-base font-semibold">{presentationName || "Unknown"}</span>
+            </div>
           </div>
         ) : null}
 
@@ -599,6 +417,7 @@ export default function StudentPage() {
             </p>
           ) : null}
 
+          {/* AI template: drag-to-edit availability calendar grid */}
           {isAvailabilityTab && identityReady ? (
             <div className="mt-4">
               <div className="mb-4 flex flex-wrap items-center gap-5 text-sm font-semibold text-[#333] md:text-base">
@@ -640,7 +459,7 @@ export default function StudentPage() {
                   >
                     {Array.from({ length: totalSlots }, (_, slotIndex) => (
                       <div key={slotIndex} className="contents">
-                        <div className="pr-2 pt-1 text-right text-sm font-semibold text-[#444]">
+                        <div className="h-6 overflow-hidden pr-2 text-right text-sm leading-6 font-semibold text-[#444]">
                           {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                         </div>
 
@@ -671,8 +490,20 @@ export default function StudentPage() {
                 </div>
               </div>
               {calendarMessage ? <p className="mt-3 text-sm font-semibold text-[#9a1f1f]">{calendarMessage}</p> : null}
+              <div className="mt-4 flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveAvailability()}
+                  disabled={savingAvailability}
+                  className="rounded-lg bg-[#0f33a8] px-6 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingAvailability ? "Saving..." : "Save"}
+                </button>
+                {availabilityMessage ? <p className="text-sm font-semibold text-[#222]">{availabilityMessage}</p> : null}
+              </div>
             </div>
           ) : identityReady ? (
+            
             <div className="mt-4 w-full max-w-4xl rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-4">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label className="flex flex-col gap-1">

@@ -1,17 +1,14 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4, UUID
 from postgrest.base_request_builder import APIResponse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from app.auth.dependencies import require_jwt
+from app.auth.jwt_utils import JWTClaims
+from app.utils import rows_affected as _rows_affected
 from app.supabase_io import delete, read, write
-from app.scheduler import (
-    AvailabilityWindow,
-    PresentationInput,
-    ScheduleProblem,
-    solve_schedule,
-)
 from app.supabase_io.nested_read import (
     CLASS_CHILDREN,
     CLASS_ALLOWS,
@@ -24,6 +21,7 @@ from app.supabase_io.client import supabase
 
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
+from app.scheduler import build_schedule_for_symposium
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -40,25 +38,6 @@ def _serialize_update_fields(fields: dict[str, object]) -> dict[str, Any]:
         else:
             serialized[key] = value
     return serialized
-
-
-def _rows_affected(response: APIResponse | dict[str, object] | None, fallback: int = 0) -> int:
-    """Return rows affected from a Supabase response object or dict."""
-    if response is None:
-        return fallback
-    if isinstance(response, dict):
-        count = response.get("count")
-        data = response.get("data")
-    else:
-        count = getattr(response, "count", None)
-        data = getattr(response, "data", None)
-    if isinstance(count, int) and count >= 0:
-        return count
-    if isinstance(data, list):
-        return len(data)
-    if isinstance(data, dict):
-        return 1
-    return fallback
 
 
 def _normalize_counts(
@@ -87,116 +66,60 @@ def _sum_counts(*groups: dict[str, int]) -> int:
     return total
 
 
-def _subtract_windows(
-    available_windows: list[request_schemas.BasicScheduleWindow],
-    blocked_windows: list[request_schemas.BasicScheduleWindow],
-) -> tuple[AvailabilityWindow, ...]:
-    remaining: list[tuple[datetime, datetime]] = [
-        (window.start_time, window.end_time) for window in available_windows
-    ]
-
-    for blocked in blocked_windows:
-        next_remaining: list[tuple[datetime, datetime]] = []
-        for current_start, current_end in remaining:
-            overlap_start = max(current_start, blocked.start_time)
-            overlap_end = min(current_end, blocked.end_time)
-            if overlap_start >= overlap_end:
-                next_remaining.append((current_start, current_end))
-                continue
-            if current_start < overlap_start:
-                next_remaining.append((current_start, overlap_start))
-            if overlap_end < current_end:
-                next_remaining.append((overlap_end, current_end))
-        remaining = next_remaining
-
-    return tuple(
-        AvailabilityWindow(start=start_time, end=end_time)
-        for start_time, end_time in remaining
-        if end_time > start_time
-    )
+# Admin Only
 
 
-@router.post("/basic_schedule")
-def basic_schedule(
-    payload: request_schemas.BasicScheduleRequest,
-) -> dict[str, object]:
+@router.post("/add_symposium")
+def add_symposium(
+    payload: request_schemas.AddSymposiumRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
+    """Create a new symposium with timeframes.
+
+    Args:
+        payload (schemas.AddSymposiumRequest): symposium request payload.
+
+    Returns:
+        dict[str, Any]: status payload with inserted record counts.
+    """
     try:
-        day_window = request_schemas.BasicScheduleWindow(
-            start_time=payload.day_start,
-            end_time=payload.day_end,
+        symposium_id = uuid4()
+        symposium = supabase_schemas.Symposium(
+            id=symposium_id,
+            name=payload.symposium_name,
+            created_at=datetime.now(timezone.utc),
+            rooms_available=payload.rooms_available,
+            default_buffer=payload.default_buffer
         )
-        symposium_windows = (
-            AvailabilityWindow(start=day_window.start_time, end=day_window.end_time),
-        )
+        symposium_payload = symposium.model_dump()
+        symposium_insert_resp = write.insert("symposiums", [symposium_payload])
+        symposiums_inserted = _rows_affected(symposium_insert_resp, fallback=1)
 
-        professor_id = None
-        resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
-        if payload.professor_name:
-            professor_id = "professor"
-            professor_windows = _subtract_windows(
-                available_windows=[day_window],
-                blocked_windows=payload.professor_unavailable,
+        timeframes = [
+            supabase_schemas.Timeframe(
+                id=uuid4(),
+                linked_id=symposium_id,
+                start_time=timeframe.start_time,
+                end_time=timeframe.end_time,
             )
-            resource_windows[professor_id] = professor_windows
-
-        presentations = tuple(
-            PresentationInput(
-                id=f"presentation-{index + 1}",
-                title=student.name,
-                duration_minutes=payload.presentation_minutes,
-                resource_ids=((professor_id,) if professor_id else ()),
-            )
-            for index, student in enumerate(payload.students)
+            for timeframe in payload.timeframes
+        ]
+        timeframe_payloads = [item.model_dump() for item in timeframes]
+        timeframe_response = write.insert("timeframes", timeframe_payloads)
+        timeframes_inserted = _rows_affected(
+            timeframe_response, fallback=len(timeframes)
         )
-
-        result = solve_schedule(
-            ScheduleProblem(
-                symposium_id="basic-schedule",
-                rooms_available=payload.room_count,
-                symposium_windows=symposium_windows,
-                presentations=presentations,
-                resource_windows=resource_windows,
-                slot_minutes=payload.slot_minutes,
-            )
-        )
-
-        assignment_by_id = {
-            assignment.presentation_id: assignment for assignment in result.assignments
+        records_inserted = {
+            "symposiums": symposiums_inserted,
+            "timeframes": timeframes_inserted,
         }
-        scheduled = []
-        unscheduled = []
-
-        for index, student in enumerate(payload.students):
-            presentation_id = f"presentation-{index + 1}"
-            assignment = assignment_by_id.get(presentation_id)
-            if assignment is None:
-                unscheduled.append(student.name)
-                continue
-            scheduled.append(
-                {
-                    "student_name": student.name,
-                    "presentation_id": presentation_id,
-                    "room_index": assignment.room_index,
-                    "start_time": assignment.start.isoformat(),
-                    "end_time": assignment.end.isoformat(),
-                }
-            )
-
-        scheduled.sort(key=lambda item: (item["start_time"], item["room_index"]))
 
         return {
-            "status": result.status,
-            "scheduled": scheduled,
-            "unscheduled": unscheduled,
-            "diagnostics": list(result.diagnostics),
-            "summary": {
-                "student_count": len(payload.students),
-                "scheduled_count": len(scheduled),
-                "unscheduled_count": len(unscheduled),
-                "room_count": payload.room_count,
-                "presentation_minutes": payload.presentation_minutes,
-                "professor_name": payload.professor_name,
-            },
+            "status": "created",
+            "symposium_id": symposium_id,
+            "name": payload.symposium_name,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
         }
     except HTTPException:
         raise
@@ -204,13 +127,160 @@ def basic_schedule(
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
         raise HTTPException(
-            status_code=400, detail=f"Failed to build basic schedule: {exc}"
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
+
+
+@router.post("/add_department")
+def add_department(
+    payload: request_schemas.AddDepartmentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
+    try:
+        department = supabase_schemas.Department(
+            id=uuid4(),
+            department_name=payload.department_name,
+            department_head_name=payload.department_head_name,
+            email=payload.email,
+            symposium_id=payload.symposium_id,
+        )
+
+        resp = write.insert("departments", [department.model_dump()])
+        departments_inserted = _rows_affected(resp, fallback=1)
+        records_inserted = {"departments": departments_inserted}
+
+        return {
+            "status": "Inserted",
+            "department_id": department.id,
+            "symposium_id": department.symposium_id,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+        ) from exc
+
+
+@router.put("/update_symposium")
+def update_symposium(
+    payload: request_schemas.UpdateSymposiumRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"symposium_id", "timeframes"},
+        )
+        if "symposium_name" in updates:
+            updates["name"] = updates.pop("symposium_name")
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("symposiums")
+            .update(update_payload)
+            .eq("id", str(payload.symposium_id))
+            .execute()
+        )
+        records_updated = {
+            "symposiums": _rows_affected(
+                update_resp, fallback=1 if update_payload else 0
+            )
+        }
+
+        deleted_timeframes = delete.delete_timeframes(payload.symposium_id)
+        timeframes = [
+            supabase_schemas.Timeframe(
+                id=uuid4(),
+                linked_id=payload.symposium_id,
+                start_time=timeframe.start_time,
+                end_time=timeframe.end_time,
+            )
+            for timeframe in payload.timeframes
+        ]
+        timeframe_payloads = [item.model_dump() for item in timeframes]
+        timeframe_response = write.insert("timeframes", timeframe_payloads)
+        timeframes_inserted = _rows_affected(
+            timeframe_response, fallback=len(timeframes)
+        )
+        records_deleted = {"timeframes": deleted_timeframes}
+        records_inserted = {"timeframes": timeframes_inserted}
+
+        return {
+            "status": "updated",
+            "symposium_id": str(payload.symposium_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "records_deleted": records_deleted,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(
+                records_updated, records_deleted, records_inserted
+            ),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update symposium: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_symposium")
+def delete_symposium(
+    symposium_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(
+            delete.delete_symposium(symposium_id), {"symposiums": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete symposium: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_department")
+def delete_department(
+    department_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(
+            delete.delete_department(department_id), {"departments": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete department: {exc}"
+        ) from exc
+
+
+# Admins and Department Heads
 
 
 @router.post("/add_class")
 def add_class(
     payload: request_schemas.AddClassRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
 ) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     try:
         class_id = uuid4()
@@ -255,122 +325,35 @@ def add_class(
         ) from exc
 
 
-@router.post("/add_department")
-def add_department(
-    payload: request_schemas.AddDepartmentRequest,
-) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
+@router.put("/update_department")
+def update_department(
+    payload: request_schemas.UpdateDepartmentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
-        department = supabase_schemas.Department(
-            id=uuid4(),
-            department_name=payload.department_name,
-            department_head_name=payload.department_head_name,
-            email=payload.email,
-            symposium_id=payload.symposium_id,
-        )
-
-        resp = write.insert("departments", [department.model_dump()])
-        departments_inserted = _rows_affected(resp, fallback=1)
-        records_inserted = {"departments": departments_inserted}
-
-        return {
-            "status": "Inserted",
-            "department_id": department.id,
-            "symposium_id": department.symposium_id,
-            "records_inserted": records_inserted,
-            "lines_edited": _sum_counts(records_inserted),
+        update_payload = {
+            "department_name": payload.department_name,
+            "department_head_name": payload.department_head_name,
+            "email": payload.email,
         }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
-        ) from exc
-
-
-@router.post("/add_symposium")
-def add_symposium(
-    payload: request_schemas.AddSymposiumRequest,
-) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
-    """Validate symposium + timeframe data and insert into Supabase tables.
-
-    Args:
-        payload (schemas.AddSymposiumRequest): symposium request payload.
-
-    Returns:
-        dict[str, Any]: status payload with inserted record counts.
-    """
-    try:
-        symposium_id = payload.symposium_id or uuid4()
-        symposium = supabase_schemas.Symposium(
-            id=symposium_id,
-            name=payload.symposium_name,
-            created_at=datetime.now(timezone.utc),
-            rooms_available=payload.rooms_available,
-        )
-        symposium_payload = symposium.model_dump()
-
-        # If the symposium already exists (fixed UUID edit flow), update it instead of failing.
-        existing = (
-            supabase.table("symposiums")
-            .select("id")
-            .eq("id", str(symposium_id))
-            .limit(1)
+        update_resp = (
+            supabase.table("departments")
+            .update(update_payload)
+            .eq("id", str(payload.department_id))
             .execute()
         )
-        symposiums_inserted = 0
-        symposiums_updated = 0
-        if existing.data:
-            symposium_update_resp = (
-                supabase.table("symposiums")
-                .update(
-                    {
-                        "name": symposium_payload["name"],
-                        "rooms_available": symposium_payload["rooms_available"],
-                    }
-                )
-                .eq("id", str(symposium_id))
-                .execute()
+        records_updated = {
+            "departments": _rows_affected(
+                update_resp, fallback=1 if update_payload else 0
             )
-            symposiums_updated = _rows_affected(symposium_update_resp, fallback=1)
-        else:
-            symposium_insert_resp = write.insert("symposiums", [symposium_payload])
-            symposiums_inserted = _rows_affected(symposium_insert_resp, fallback=1)
-
-        # Replace all existing timeframes for this symposium with the newly submitted set.
-        deleted_timeframes = delete.delete_timeframes(symposium_id)
-        timeframes = [
-            supabase_schemas.Timeframe(
-                id=uuid4(),
-                linked_id=symposium_id,
-                start_time=timeframe.start_time,
-                end_time=timeframe.end_time,
-            )
-            for timeframe in payload.timeframes
-        ]
-        timeframe_payloads = [item.model_dump() for item in timeframes]
-        timeframe_response = write.insert("timeframes", timeframe_payloads)
-        timeframes_inserted = _rows_affected(
-            timeframe_response, fallback=len(timeframes)
-        )
-        records_inserted = {
-            "symposiums": symposiums_inserted,
-            "timeframes": timeframes_inserted,
         }
-        records_updated = {"symposiums": symposiums_updated}
-        records_deleted = {"timeframes": deleted_timeframes}
 
         return {
-            "status": "saved",
-            "symposium_id": symposium_id,
-            "name": payload.symposium_name,
-            "records_inserted": records_inserted,
+            "status": "updated",
+            "department_id": str(payload.department_id),
+            "fields_updated": sorted(update_payload.keys()),
             "records_updated": records_updated,
-            "records_deleted": records_deleted,
-            "lines_edited": _sum_counts(
-                records_inserted, records_updated, records_deleted
-            ),
+            "lines_edited": _sum_counts(records_updated),
         }
     except HTTPException:
         raise
@@ -378,12 +361,60 @@ def add_symposium(
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
         raise HTTPException(
-            status_code=500, detail=f"Failed to validate symposium payload: {exc}"
+            status_code=400, detail=f"Failed to update department: {exc}"
         ) from exc
+
+
+@router.delete("/delete_professor")
+def delete_professor(
+    professor_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(
+            delete.delete_professor(professor_id), {"professors": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete professor: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_class")
+def delete_class(
+    class_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete class: {exc}"
+        ) from exc
+
+
+# Admins, Department Heads, and Professors
 
 
 @router.post("/add_students")
-def add_students(payload: request_schemas.AddStudentsRequest) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
+def add_students(
+    payload: request_schemas.AddStudentsRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     """Adds a list of students to the students table in the database."""
     try:
         students: list[supabase_schemas.Student] = []
@@ -421,10 +452,11 @@ def add_students(payload: request_schemas.AddStudentsRequest) -> dict[str, str |
 @router.post("/add_presentation")
 def add_presentation(
     payload: request_schemas.AddPresentationRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         presentation_id = uuid4()
-        presentation_payload = {
+        presentation_payload: dict[str, str | int | UUID | datetime | date | None] = {
             "id": presentation_id,
             "title": payload.title,
             "class_id": payload.class_id,
@@ -475,8 +507,202 @@ def add_presentation(
         ) from exc
 
 
+@router.post("/schedule")
+def run_schedule(
+    body: request_schemas.RunSchedulerRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    try:
+        result = build_schedule_for_symposium(body.symposium_id, slot_minutes=1)
+
+        return {
+            "status": result.status,
+            "assignments": [
+                {
+                    "presentation_id": a.presentation_id,
+                    "room_index": a.room_index,
+                    "start": a.start.isoformat(),
+                    "end": a.end.isoformat(),
+                }
+                for a in result.assignments
+            ],
+            "unscheduled_presentations": list(result.unscheduled_presentations),
+            "diagnostics": list(result.diagnostics),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to run scheduler: {exc}"
+        ) from exc
+    
+
+@router.put("/update_class")
+def update_class(
+    payload: request_schemas.UpdateClassRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"class_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("classes")
+            .update(update_payload)
+            .eq("id", str(payload.class_id))
+            .execute()
+        )
+        records_updated = {
+            "classes": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
+
+        return {
+            "status": "updated",
+            "class_id": str(payload.class_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update class: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_presentation")
+def delete_presentation(
+    presentation_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(
+            delete.delete_presentation(presentation_id), {"presentations": 1}
+        )
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete presentation: {exc}"
+        ) from exc
+
+
+@router.delete("/delete_student")
+def delete_student(
+    student_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | dict[str, int]]:
+    try:
+        counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
+        return {
+            "status": "deleted",
+            "records_deleted": counts,
+            "lines_edited": _sum_counts(counts),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to delete student: {exc}"
+        ) from exc
+
+
+# Admins, Department Heads, Professors, and Students
+
+
+@router.put("/update_student")
+def update_student(
+    payload: request_schemas.UpdateStudentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"student_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("students")
+            .update(update_payload)
+            .eq("id", str(payload.student_id))
+            .execute()
+        )
+        records_updated = {
+            "students": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
+
+        return {
+            "status": "updated",
+            "student_id": str(payload.student_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update student: {exc}"
+        ) from exc
+
+
+@router.put("/update_professor")
+def update_professor(
+    payload: request_schemas.UpdateProfessorRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> dict[str, str | int | list[str] | dict[str, int]]:
+    try:
+        updates = payload.model_dump(
+            exclude_none=True,
+            exclude={"professor_id"},
+        )
+        update_payload = _serialize_update_fields(updates)
+        update_resp = (
+            supabase.table("professors")
+            .update(update_payload)
+            .eq("id", str(payload.professor_id))
+            .execute()
+        )
+        records_updated = {
+            "professors": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+        }
+
+        return {
+            "status": "updated",
+            "professor_id": str(payload.professor_id),
+            "fields_updated": sorted(update_payload.keys()),
+            "records_updated": records_updated,
+            "lines_edited": _sum_counts(records_updated),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to update professor: {exc}"
+        ) from exc
+
+
 @router.post("/add_request")
-def add_prof_request(payload: request_schemas.AddReqRequest) -> dict[str, str | int | dict[str, int]]:
+def add_request(
+    payload: request_schemas.AddReqRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+) -> dict[str, str | int | dict[str, int]]:
     try:
         request = supabase_schemas.Request(
             id=uuid4(),
@@ -506,8 +732,177 @@ def add_prof_request(payload: request_schemas.AddReqRequest) -> dict[str, str | 
         ) from exc
 
 
+@router.put("/update_schedule_assignment")
+def update_schedule_assignment(
+    payload: request_schemas.UpdateScheduleAssignmentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str | int]:
+    """Atomically update a presentation's room and time slot with conflict detection."""
+    try:
+        symposium_id = str(payload.symposium_id)
+        presentation_id = str(payload.presentation_id)
+
+        # Fetch all departments -> classes -> presentations for this symposium
+        departments_resp = read.get_departments(symposium_id=payload.symposium_id)
+        departments = list(getattr(departments_resp, "data", None) or [])
+        department_ids = [UUID(str(d["id"])) for d in departments if d.get("id")]
+
+        all_classes: list[dict[str, Any]] = []
+        if department_ids:
+            classes_resp = read.get_classes(department_id=department_ids)
+            all_classes = list(getattr(classes_resp, "data", None) or [])
+        class_ids = [UUID(str(c["id"])) for c in all_classes if c.get("id")]
+
+        all_presentations: list[dict[str, Any]] = []
+        all_professors: list[dict[str, Any]] = []
+        if class_ids:
+            pres_resp = read.get_presentations(class_id=class_ids)
+            all_presentations = list(getattr(pres_resp, "data", None) or [])
+            prof_resp = read.get_professors(class_id=class_ids)
+            all_professors = list(getattr(prof_resp, "data", None) or [])
+
+        # Build professor lookup by class and name lookup by ID
+        professors_by_class: dict[str, list[str]] = {}
+        person_name_by_id: dict[str, str] = {}
+        for prof in all_professors:
+            cid = str(prof.get("class_id", ""))
+            pid = str(prof.get("id", ""))
+            if cid and pid:
+                professors_by_class.setdefault(cid, []).append(pid)
+                name = str(prof.get("name", "")).strip()
+                if name:
+                    person_name_by_id[pid] = name
+
+        # Build resource set for the target presentation
+        target_pres = None
+        for p in all_presentations:
+            if str(p.get("id", "")) == presentation_id:
+                target_pres = p
+                break
+        if target_pres is None:
+            raise HTTPException(status_code=404, detail="Presentation not found in this symposium.")
+
+        target_class_id = str(target_pres.get("class_id", ""))
+        target_resources: set[str] = set(professors_by_class.get(target_class_id, []))
+        for s in target_pres.get("presenting_students", []):
+            sid = str(s.get("id", s.get("student_id", "")))
+            if sid:
+                target_resources.add(sid)
+                name = str(s.get("name", "")).strip()
+                if name:
+                    person_name_by_id[sid] = name
+
+        new_start = payload.start_time if payload.start_time.tzinfo else payload.start_time.replace(tzinfo=timezone.utc)
+        new_end = payload.end_time if payload.end_time.tzinfo else payload.end_time.replace(tzinfo=timezone.utc)
+
+        # Check conflicts against every other scheduled presentation
+        other_pres_ids = [
+            str(p["id"]) for p in all_presentations
+            if str(p.get("id", "")) != presentation_id and p.get("id")
+        ]
+
+        if other_pres_ids:
+            tf_resp = read.get_timeframes(
+                linked_id=[UUID(pid) for pid in other_pres_ids]
+            )
+            other_timeframes = list(getattr(tf_resp, "data", None) or [])
+
+            tf_by_pres: dict[str, dict[str, Any]] = {}
+            for tf in other_timeframes:
+                linked = str(tf.get("linked_id", ""))
+                if linked:
+                    tf_by_pres[linked] = tf
+
+            for other in all_presentations:
+                other_id = str(other.get("id", ""))
+                if other_id == presentation_id or other_id not in tf_by_pres:
+                    continue
+
+                other_tf = tf_by_pres[other_id]
+                other_start_raw = datetime.fromisoformat(
+                    str(other_tf["start_time"]).replace("Z", "+00:00")
+                )
+                other_end_raw = datetime.fromisoformat(
+                    str(other_tf["end_time"]).replace("Z", "+00:00")
+                )
+                other_start = other_start_raw if other_start_raw.tzinfo else other_start_raw.replace(tzinfo=timezone.utc)
+                other_end = other_end_raw if other_end_raw.tzinfo else other_end_raw.replace(tzinfo=timezone.utc)
+                times_overlap = new_start < other_end and new_end > other_start
+
+                if not times_overlap:
+                    continue
+
+                other_room = other.get("room")
+                # Room conflict
+                if other_room is not None and int(other_room) == payload.room:
+                    other_title = other.get("title", other_id)
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Room conflict: Room {payload.room + 1} is already occupied by \"{other_title}\" at that time.",
+                    )
+
+                # Person conflict (professor or presenting student)
+                other_class_id = str(other.get("class_id", ""))
+                other_resources: set[str] = set(professors_by_class.get(other_class_id, []))
+                for s in other.get("presenting_students", []):
+                    sid = str(s.get("id", s.get("student_id", "")))
+                    if sid:
+                        other_resources.add(sid)
+                        name = str(s.get("name", "")).strip()
+                        if name:
+                            person_name_by_id[sid] = name
+
+                shared = target_resources & other_resources
+                if shared:
+                    other_title = other.get("title", other_id)
+                    conflicting_name = person_name_by_id.get(next(iter(shared)), "Someone")
+                    is_professor = next(iter(shared)) in {
+                        pid for profs in professors_by_class.values() for pid in profs
+                    }
+                    role = "Professor" if is_professor else "Student"
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Scheduling conflict: {role} \"{conflicting_name}\" is required at both "
+                            f"this presentation and \"{other_title}\" at that time. "
+                            f"They cannot be in two rooms at once."
+                        ),
+                    )
+
+        # No conflicts — save the assignment
+        supabase.table("presentations").update(
+            {"room": payload.room}
+        ).eq("id", presentation_id).execute()
+
+        delete.delete_timeframes(payload.presentation_id)
+
+        tf_row = supabase_schemas.Timeframe(
+            id=uuid4(),
+            linked_id=payload.presentation_id,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+        )
+        write.insert("timeframes", [tf_row.model_dump()])
+
+        return {
+            "status": "updated",
+            "presentation_id": presentation_id,
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update schedule assignment: {exc}"
+        ) from exc
+
+
 @router.put("/update_timeframes")
-def update_timeframes(payload: request_schemas.UpdateTimeframesRequest) -> dict[str, str | int | UUID | dict[str, int]]:
+def update_timeframes(
+    payload: request_schemas.UpdateTimeframesRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         deleted_timeframes = delete.delete_timeframes(payload.linked_id)
 
@@ -545,191 +940,11 @@ def update_timeframes(payload: request_schemas.UpdateTimeframesRequest) -> dict[
         ) from exc
 
 
-@router.put("/update_student")
-def update_student(payload: request_schemas.UpdateStudentRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"student_id"},
-        )
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("students")
-            .update(update_payload)
-            .eq("id", str(payload.student_id))
-            .execute()
-        )
-        records_updated = {
-            "students": _rows_affected(update_resp, fallback=1 if update_payload else 0)
-        }
-
-        return {
-            "status": "updated",
-            "student_id": str(payload.student_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update student: {exc}"
-        ) from exc
-
-
-@router.put("/update_professor")
-def update_professor(payload: request_schemas.UpdateProfessorRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"professor_id"},
-        )
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("professors")
-            .update(update_payload)
-            .eq("id", str(payload.professor_id))
-            .execute()
-        )
-        records_updated = {
-            "professors": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
-            )
-        }
-
-        return {
-            "status": "updated",
-            "professor_id": str(payload.professor_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update professor: {exc}"
-        ) from exc
-
-
-@router.put("/update_class")
-def update_class(payload: request_schemas.UpdateClassRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"class_id"},
-        )
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("classes")
-            .update(update_payload)
-            .eq("id", str(payload.class_id))
-            .execute()
-        )
-        records_updated = {
-            "classes": _rows_affected(update_resp, fallback=1 if update_payload else 0)
-        }
-
-        return {
-            "status": "updated",
-            "class_id": str(payload.class_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update class: {exc}"
-        ) from exc
-
-
-@router.put("/update_department")
-def update_department(payload: request_schemas.UpdateDepartmentRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        update_payload = {
-            "department_name": payload.department_name,
-            "department_head_name": payload.department_head_name,
-            "email": payload.email,
-        }
-        update_resp = (
-            supabase.table("departments")
-            .update(update_payload)
-            .eq("id", str(payload.department_id))
-            .execute()
-        )
-        records_updated = {
-            "departments": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
-            )
-        }
-
-        return {
-            "status": "updated",
-            "department_id": str(payload.department_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update department: {exc}"
-        ) from exc
-
-
-@router.put("/update_symposium")
-def update_symposium(payload: request_schemas.UpdateSymposiumRequest) -> dict[str, str | int | list[str] | dict[str, int]]:
-    try:
-        updates = payload.model_dump(
-            exclude_none=True,
-            exclude={"symposium_id"},
-        )
-        if "symposium_name" in updates:
-            updates["name"] = updates.pop("symposium_name")
-        update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("symposiums")
-            .update(update_payload)
-            .eq("id", str(payload.symposium_id))
-            .execute()
-        )
-        records_updated = {
-            "symposiums": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
-            )
-        }
-
-        return {
-            "status": "updated",
-            "symposium_id": str(payload.symposium_id),
-            "fields_updated": sorted(update_payload.keys()),
-            "records_updated": records_updated,
-            "lines_edited": _sum_counts(records_updated),
-        }
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to update symposium: {exc}"
-        ) from exc
-
-
 @router.put("/update_presentation")
-def update_presentation(payload: request_schemas.UpdatePresentationRequest) -> dict[str, str | int | bool | list[str] | dict[str, int]]:
+def update_presentation(
+    payload: request_schemas.UpdatePresentationRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+) -> dict[str, str | int | bool | list[str] | dict[str, int]]:
     try:
         updates = payload.model_dump(
             exclude_none=True,
@@ -800,6 +1015,9 @@ def update_presentation(payload: request_schemas.UpdatePresentationRequest) -> d
         raise HTTPException(
             status_code=400, detail=f"Failed to update presentation: {exc}"
         ) from exc
+
+
+# Undecided/Not Sure
 
 
 @router.get("/symposiums")
@@ -937,114 +1155,4 @@ def get_requests(student_id: UUID | None = None) -> APIResponse:
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Failed to get requests: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_symposium")
-def delete_symposium(symposium_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(
-            delete.delete_symposium(symposium_id), {"symposiums": 1}
-        )
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete symposium: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_department")
-def delete_department(department_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(
-            delete.delete_department(department_id), {"departments": 1}
-        )
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete department: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_class")
-def delete_class(class_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete class: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_student")
-def delete_student(student_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete student: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_professor")
-def delete_professor(professor_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(
-            delete.delete_professor(professor_id), {"professors": 1}
-        )
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete professor: {exc}"
-        ) from exc
-
-
-@router.delete("/delete_presentation")
-def delete_presentation(presentation_id: UUID) -> dict[str, str | int | dict[str, int]]:
-    try:
-        counts = _normalize_counts(
-            delete.delete_presentation(presentation_id), {"presentations": 1}
-        )
-        return {
-            "status": "deleted",
-            "records_deleted": counts,
-            "lines_edited": _sum_counts(counts),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to delete presentation: {exc}"
         ) from exc

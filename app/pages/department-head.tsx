@@ -1,47 +1,16 @@
 "use client";
 
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import type { DepartmentOption, ProfessorRow, SavedClass } from "./types";
+import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 
-type DepartmentOption = { id: string; name: string };
-type ProfessorRow = { id?: string; name: string; email: string };
-type SavedClass = {
-  localId: string;
-  classId: string;
-  professorIds: string[];
-  departmentId: string;
-  departmentName: string;
-  className: string;
-  professors: ProfessorRow[];
-};
-
-function toMessage(detail: unknown, fallback: string): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (Array.isArray(detail)) {
-    const joined = detail
-      .map((item) => (typeof item === "string" ? item : (item as { msg?: unknown })?.msg))
-      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      .join("; ");
-    if (joined) return joined;
-  }
-  if (detail && typeof detail === "object") {
-    const msg = (detail as { msg?: unknown }).msg;
-    if (typeof msg === "string" && msg.trim()) return msg;
-  }
-  return fallback;
-}
-
-function DepartmentHeadPageContent() {
+function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   const searchParams = useSearchParams();
   const symposiumIdFromLink = searchParams.get("symposium_id") ?? "";
   const departmentIdFromLink = searchParams.get("department_id") ?? "";
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-  const backendApiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-  const authHeaders = useMemo(
-    () => (backendApiKey ? { "X-API-Key": backendApiKey } : undefined),
-    [backendApiKey]
-  );
+  const backendUrl = "/api/backend";
+  const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   const [symposiumOptions, setSymposiumOptions] = useState<DepartmentOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState<string>("");
@@ -50,13 +19,15 @@ function DepartmentHeadPageContent() {
   const [className, setClassName] = useState("");
   const [professors, setProfessors] = useState<ProfessorRow[]>([{ name: "", email: "" }]);
   const [savedClasses, setSavedClasses] = useState<SavedClass[]>([]);
-  const [deployedClassIds, setDeployedClassIds] = useState<string[]>([]);
+  const [deployMessage, setDeployMessage] = useState<string>("");
 
   const [editingLocalId, setEditingLocalId] = useState<string>("");
   const [editingClassName, setEditingClassName] = useState<string>("");
   const [editingDepartmentId, setEditingDepartmentId] = useState<string>("");
   const [editingProfessors, setEditingProfessors] = useState<ProfessorRow[]>([]);
 
+  const [departmentHeadById, setDepartmentHeadById] = useState<Map<string, { name: string; email: string }>>(new Map());
+  const [isSelfProfessor, setIsSelfProfessor] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingLocalId, setDeletingLocalId] = useState<string>("");
@@ -68,43 +39,23 @@ function DepartmentHeadPageContent() {
     [selectedSymposiumId, symposiumOptions]
   );
 
-  const deployedStorageKey = useMemo(
-    () => `deployed_classes_${selectedSymposiumId || departmentIdFromLink || "global"}`,
-    [departmentIdFromLink, selectedSymposiumId]
+  const selectedDepartmentName = useMemo(
+    () => departments.find((department) => department.id === selectedDepartmentId)?.name ?? "",
+    [selectedDepartmentId, departments]
   );
+
 
   useEffect(() => {
     let ignore = false;
 
-    const loadSymposiums = async () => {
+    const loadSymposia = async () => {
       setLoading(true);
       setMessage("");
       try {
-        const [symposiumsRes, allDepartmentsRes] = await Promise.all([
-          fetch(`${backendUrl}/api/events/symposiums`, { headers: authHeaders }),
-          fetch(`${backendUrl}/api/events/departments`, { headers: authHeaders }),
+        const [symposiumRows, departmentRows] = await Promise.all([
+          apiFetch<{ id?: string; name?: string; symposium_name?: string }>("/api/events/symposiums", { headers: authHeaders }),
+          apiFetch<{ id?: string; department_name?: string; symposium_id?: string }>("/api/events/departments", { headers: authHeaders }),
         ]);
-
-        const symposiumsPayload = (await symposiumsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; name?: string; symposium_name?: string }> }
-          | Array<{ id?: string; name?: string; symposium_name?: string }>;
-        const allDepartmentsPayload = (await allDepartmentsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
-          | Array<{ id?: string; department_name?: string; symposium_id?: string }>;
-
-        if (!symposiumsRes.ok) {
-          throw new Error(toMessage((symposiumsPayload as { detail?: unknown }).detail, "Failed to load symposium."));
-        }
-        if (!allDepartmentsRes.ok) {
-          throw new Error(
-            toMessage((allDepartmentsPayload as { detail?: unknown }).detail, "Failed to load departments.")
-          );
-        }
-
-        const departmentRows = Array.isArray(allDepartmentsPayload)
-          ? allDepartmentsPayload
-          : (allDepartmentsPayload.data ?? []);
-        const symposiumRows = Array.isArray(symposiumsPayload) ? symposiumsPayload : (symposiumsPayload.data ?? []);
         const nextSymposiumOptions = symposiumRows
           .filter((row) => row.id)
           .map((row) => ({
@@ -113,6 +64,10 @@ function DepartmentHeadPageContent() {
           }));
 
         let initialSymposiumId = symposiumIdFromLink;
+        if (!initialSymposiumId && entityId) {
+          const linkedDepartment = departmentRows.find((row) => row.id === entityId);
+          initialSymposiumId = linkedDepartment?.symposium_id ?? "";
+        }
         if (!initialSymposiumId && departmentIdFromLink) {
           const linkedDepartment = departmentRows.find((row) => row.id === departmentIdFromLink);
           initialSymposiumId = linkedDepartment?.symposium_id ?? "";
@@ -136,11 +91,11 @@ function DepartmentHeadPageContent() {
       }
     };
 
-    void loadSymposiums();
+    void loadSymposia();
     return () => {
       ignore = true;
     };
-  }, [authHeaders, backendUrl, departmentIdFromLink, symposiumIdFromLink]);
+  }, [authHeaders, backendUrl, departmentIdFromLink, entityId, symposiumIdFromLink]);
 
   useEffect(() => {
     if (!selectedSymposiumId) {
@@ -151,41 +106,30 @@ function DepartmentHeadPageContent() {
     }
     let ignore = false;
 
+    // AI template: loads all classes and professors for each department via cascading parallel fetches.
     const loadSymposiumData = async () => {
       setLoading(true);
       setMessage("");
       try {
-        const departmentsRes = await fetch(
-          `${backendUrl}/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
+        const departmentRows = await apiFetch<{ id?: string; department_name?: string; symposium_id?: string; department_head_name?: string; email?: string }>(
+          `/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`,
           { headers: authHeaders }
         );
-        const departmentsPayload = (await departmentsRes.json().catch(() => ({}))) as
-          | { data?: Array<{ id?: string; department_name?: string; symposium_id?: string }> }
-          | Array<{ id?: string; department_name?: string; symposium_id?: string }>;
-        if (!departmentsRes.ok) {
-          throw new Error(toMessage((departmentsPayload as { detail?: unknown }).detail, "Failed to load departments."));
-        }
-
-        const departmentRows = Array.isArray(departmentsPayload) ? departmentsPayload : (departmentsPayload.data ?? []);
         const nextDepartments = departmentRows
           .filter((row) => row.id)
           .map((row) => ({ id: row.id as string, name: row.department_name ?? (row.id as string) }));
+        const nextDepartmentHeadById = new Map(
+          departmentRows
+            .filter((row) => row.id && row.department_head_name)
+            .map((row) => [row.id as string, { name: row.department_head_name as string, email: row.email ?? "" }])
+        );
 
         const classesByDepartment = await Promise.all(
           nextDepartments.map(async (department) => {
-            const classesRes = await fetch(
-              `${backendUrl}/api/events/classes?department_id=${encodeURIComponent(department.id)}`,
+            const classRows = await apiFetch<{ id?: string; name?: string }>(
+              `/api/events/classes?department_id=${encodeURIComponent(department.id)}`,
               { headers: authHeaders }
             );
-            const classesPayload = (await classesRes.json().catch(() => ({}))) as
-              | { data?: Array<{ id?: string; name?: string }> }
-              | Array<{ id?: string; name?: string }>;
-
-            if (!classesRes.ok) {
-              throw new Error(toMessage((classesPayload as { detail?: unknown }).detail, "Failed to load classes."));
-            }
-
-            const classRows = Array.isArray(classesPayload) ? classesPayload : (classesPayload.data ?? []);
             const classes = classRows
               .filter((row) => row.id)
               .map((row) => ({
@@ -201,23 +145,10 @@ function DepartmentHeadPageContent() {
           classesByDepartment.flatMap(({ department, classes }) =>
             classes.map(async (classRow) => {
               try {
-                const professorsRes = await fetch(
-                  `${backendUrl}/api/events/professors?class_id=${encodeURIComponent(classRow.id)}`,
+                const professorRows = await apiFetch<{ id?: string; name?: string; email?: string }>(
+                  `/api/events/professors?class_id=${encodeURIComponent(classRow.id)}`,
                   { headers: authHeaders }
                 );
-                const professorsPayload = (await professorsRes.json().catch(() => ({}))) as
-                  | { data?: Array<{ id?: string; name?: string; email?: string }> }
-                  | Array<{ id?: string; name?: string; email?: string }>;
-
-                if (!professorsRes.ok) {
-                  throw new Error(
-                    toMessage((professorsPayload as { detail?: unknown }).detail, "Failed to load professors.")
-                  );
-                }
-
-                const professorRows = Array.isArray(professorsPayload)
-                  ? professorsPayload
-                  : (professorsPayload.data ?? []);
                 const normalizedProfessors = professorRows.map((professor) => ({
                   id: professor.id,
                   name: professor.name ?? "",
@@ -253,9 +184,13 @@ function DepartmentHeadPageContent() {
 
         if (ignore) return;
         setDepartments(nextDepartments);
+        setDepartmentHeadById(nextDepartmentHeadById);
         setSavedClasses(savedClassResults);
         setSelectedDepartmentId((current) => {
           if (current && nextDepartments.some((department) => department.id === current)) return current;
+          if (entityId && nextDepartments.some((department) => department.id === entityId)) {
+            return entityId;
+          }
           if (departmentIdFromLink && nextDepartments.some((department) => department.id === departmentIdFromLink)) {
             return departmentIdFromLink;
           }
@@ -277,44 +212,17 @@ function DepartmentHeadPageContent() {
     };
   }, [authHeaders, backendUrl, departmentIdFromLink, selectedSymposiumId]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const raw = window.localStorage.getItem(deployedStorageKey);
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw) as string[];
-      if (Array.isArray(parsed)) {
-        setDeployedClassIds(parsed.filter((id) => typeof id === "string" && id.length > 0));
-      }
-    } catch {
-      setDeployedClassIds([]);
-    }
-  }, [deployedStorageKey]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(deployedStorageKey, JSON.stringify(deployedClassIds));
-  }, [deployedClassIds, deployedStorageKey]);
-
-  useEffect(() => {
-    if (savedClasses.length === 0) return;
-    const savedIds = new Set(savedClasses.map((savedClass) => savedClass.classId));
-    setDeployedClassIds((current) => current.filter((classId) => savedIds.has(classId)));
-  }, [savedClasses]);
 
   const canSubmit = useMemo(() => {
     if (!selectedDepartmentId || !className.trim()) return false;
+    if (isSelfProfessor) return Boolean(departmentHeadById.get(selectedDepartmentId));
     return professors.some((prof) => prof.name.trim() && prof.email.trim());
-  }, [className, professors, selectedDepartmentId]);
+  }, [className, departmentHeadById, isSelfProfessor, professors, selectedDepartmentId]);
 
-  const pendingClasses = useMemo(
-    () => savedClasses.filter((savedClass) => !deployedClassIds.includes(savedClass.classId)),
-    [deployedClassIds, savedClasses]
-  );
-  const deployedClasses = useMemo(
-    () => savedClasses.filter((savedClass) => deployedClassIds.includes(savedClass.classId)),
-    [deployedClassIds, savedClasses]
-  );
+  const handleSelfProfessorChange = (checked: boolean) => {
+    setIsSelfProfessor(checked);
+  };
+
 
   const setProfessorField = (index: number, field: keyof ProfessorRow, value: string) => {
     setProfessors((current) => current.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
@@ -328,6 +236,7 @@ function DepartmentHeadPageContent() {
     setProfessors((current) => (current.length === 1 ? current : current.filter((_row, i) => i !== index)));
   };
 
+  // AI template: deletes a class and all linked professors from the backend, with a confirm dialog.
   const removeSavedClass = async (savedClass: SavedClass) => {
     const confirmed = window.confirm(`Delete class "${savedClass.className}"?`);
     if (!confirmed) return;
@@ -336,36 +245,15 @@ function DepartmentHeadPageContent() {
     try {
       if (savedClass.professorIds.length > 0) {
         await Promise.all(
-          savedClass.professorIds.map(async (professorId) => {
-            const response = await fetch(
-              `${backendUrl}/api/events/delete_professor?professor_id=${encodeURIComponent(professorId)}`,
-              {
-                method: "DELETE",
-                headers: authHeaders,
-              }
-            );
-            const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-            if (!response.ok) {
-              throw new Error(toMessage(payload.detail, `Unable to delete professor ${professorId}.`));
-            }
-          })
+          savedClass.professorIds.map((professorId) =>
+            apiDelete(`/api/events/delete_professor?professor_id=${encodeURIComponent(professorId)}`, authHeaders)
+          )
         );
       }
 
-      const classResponse = await fetch(
-        `${backendUrl}/api/events/delete_class?class_id=${encodeURIComponent(savedClass.classId)}`,
-        {
-          method: "DELETE",
-          headers: authHeaders,
-        }
-      );
-      const classPayload = (await classResponse.json().catch(() => ({}))) as { detail?: unknown };
-      if (!classResponse.ok) {
-        throw new Error(toMessage(classPayload.detail, "Unable to delete class."));
-      }
+      await apiDelete(`/api/events/delete_class?class_id=${encodeURIComponent(savedClass.classId)}`, authHeaders);
 
       setSavedClasses((current) => current.filter((item) => item.localId !== savedClass.localId));
-      setDeployedClassIds((current) => current.filter((classId) => classId !== savedClass.classId));
       setMessage(`Deleted class "${savedClass.className}".`);
     } catch (error) {
       const text = error instanceof Error ? error.message : "Unknown error";
@@ -394,6 +282,7 @@ function DepartmentHeadPageContent() {
     setEditingProfessors((current) => current.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   };
 
+  // AI template: validates and updates a class and all its professors on the backend.
   const saveEditedClass = async (savedClass: SavedClass) => {
     const nextName = editingClassName.trim();
     if (!nextName) {
@@ -422,42 +311,19 @@ function DepartmentHeadPageContent() {
     setMessage("");
     setUpdatingLocalId(savedClass.localId);
     try {
-      const classResponse = await fetch(`${backendUrl}/api/events/update_class`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          class_id: savedClass.classId,
-          name: nextName,
-          department_id: editingDepartmentId,
-        }),
-      });
-      const classPayload = (await classResponse.json().catch(() => ({}))) as { detail?: unknown };
-      if (!classResponse.ok) {
-        setMessage(`Update failed: ${toMessage(classPayload.detail, "Unable to update class.")}`);
-        return;
-      }
+      await apiPut("/api/events/update_class", {
+        class_id: savedClass.classId,
+        name: nextName,
+        department_id: editingDepartmentId,
+      }, authHeaders);
 
       await Promise.all(
         cleanedProfessors.map(async (professor) => {
-          const response = await fetch(`${backendUrl}/api/events/update_professor`, {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              ...(authHeaders ?? {}),
-            },
-            body: JSON.stringify({
-              professor_id: professor.id,
-              name: professor.name,
-              email: professor.email,
-            }),
-          });
-          const payload = (await response.json().catch(() => ({}))) as { detail?: unknown };
-          if (!response.ok) {
-            throw new Error(toMessage(payload.detail, "Unable to update professor."));
-          }
+          await apiPut("/api/events/update_professor", {
+            professor_id: professor.id,
+            name: professor.name,
+            email: professor.email,
+          }, authHeaders);
         })
       );
 
@@ -487,12 +353,8 @@ function DepartmentHeadPageContent() {
   };
 
   const handleDeployClasses = () => {
-    const toDeploy = pendingClasses.map((savedClass) => savedClass.classId);
-    if (toDeploy.length > 0) {
-      setDeployedClassIds((current) => Array.from(new Set([...current, ...toDeploy])));
-    }
-    setMessage(
-      "Deploy Class is not connected yet. It will send each professor an email link with their professor_id in the URL."
+    setDeployMessage(
+      "Deploy is not connected yet. It will send each professor an email link with their professor_id in the URL."
     );
   };
 
@@ -500,12 +362,18 @@ function DepartmentHeadPageContent() {
     event.preventDefault();
     setMessage("");
 
-    const cleanProfessors = professors
+    const headInfo = isSelfProfessor ? departmentHeadById.get(selectedDepartmentId) : undefined;
+    const headId = departmentIdFromLink || selectedDepartmentId;
+    const selfProfessorRow = headInfo ? { id: headId, name: headInfo.name, email: headInfo.email.trim().toLowerCase() } : null;
+
+    const otherProfessors = professors
       .map((professor) => ({
         name: professor.name.trim(),
         email: professor.email.trim().toLowerCase(),
       }))
       .filter((professor) => professor.name && professor.email);
+
+    const cleanProfessors = selfProfessorRow ? [selfProfessorRow, ...otherProfessors] : otherProfessors;
 
     if (!selectedDepartmentId) {
       setMessage("Select a department.");
@@ -525,26 +393,14 @@ function DepartmentHeadPageContent() {
 
     setSaving(true);
     try {
-      const response = await fetch(`${backendUrl}/api/events/add_class`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authHeaders ?? {}),
-        },
-        body: JSON.stringify({
-          name: className.trim(),
-          department_id: selectedDepartmentId,
-          professors: cleanProfessors,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { detail?: unknown; class_id?: string; professor_ids?: string[] };
-      if (!response.ok) {
-        setMessage(`Save failed: ${toMessage(payload.detail, "Unable to save class.")}`);
-        return;
-      }
+      const { raw: payload } = await apiPost("/api/events/add_class", {
+        name: className.trim(),
+        department_id: selectedDepartmentId,
+        professors: cleanProfessors,
+      }, authHeaders);
 
-      const classId = payload.class_id;
-      const professorIds = payload.professor_ids ?? [];
+      const classId = payload.class_id as string | undefined;
+      const professorIds = (payload.professor_ids as string[]) ?? [];
       if (!classId || !Array.isArray(professorIds)) {
         setMessage("Save failed: backend did not return class/professor IDs.");
         return;
@@ -566,6 +422,7 @@ function DepartmentHeadPageContent() {
       setSavedClasses((current) => [...current, newClass]);
       setClassName("");
       setProfessors([{ name: "", email: "" }]);
+      setIsSelfProfessor(false);
       setMessage(`Saved class "${newClass.className}" for ${departmentName}.`);
     } catch (error) {
       const text = error instanceof Error ? error.message : "Unknown error";
@@ -583,12 +440,13 @@ function DepartmentHeadPageContent() {
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f9ff_0%,#f4f4f4_55%,#f1f1f1_100%)] px-4 py-8">
       <div className="mx-auto w-full max-w-6xl">
         <div className="mb-3 flex justify-end">
-          <Link
-            href="/pages?view=home"
-            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="rounded-md border border-[#9ca3af] bg-[#e5e7eb] px-4 py-1.5 text-sm font-semibold text-[#1f2937] transition hover:border-red-500 hover:bg-red-500 hover:text-white"
           >
-            Home
-          </Link>
+            Sign Out
+          </button>
         </div>
         <header className="mb-5 rounded-2xl border border-[#d8e2ff] bg-white/90 px-5 py-5 shadow-[0_10px_30px_rgba(20,44,120,0.08)] backdrop-blur">
           <h1 className="text-center text-2xl font-extrabold tracking-wide text-black md:text-4xl">
@@ -598,43 +456,16 @@ function DepartmentHeadPageContent() {
 
         <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
           <h2 className="text-xl font-bold text-[#111] md:text-2xl">Add Classes</h2>
-          <label className="mt-4 flex flex-col gap-1">
-            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Symposium</span>
-            <select
-              value={selectedSymposiumId}
-              onChange={(event) => setSelectedSymposiumId(event.target.value)}
-              disabled={loading || symposiumOptions.length === 0}
-              className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <option value="">Select symposium</option>
-              {symposiumOptions.map((symposium) => (
-                <option key={symposium.id} value={symposium.id}>
-                  {symposium.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="mt-2 text-sm font-semibold text-[#2d3d7a]">
-            Symposium: {selectedSymposiumName || "Select a symposium"}
-          </p>
+          <div className="mt-4 space-y-1">
+            <p className="text-sm font-semibold text-[#2d3d7a]">
+              Symposium: {selectedSymposiumName || (loading ? "Loading..." : "None")}
+            </p>
+            <p className="text-sm font-semibold text-[#2d3d7a]">
+              Department: {selectedDepartmentName || (loading ? "Loading..." : "None")}
+            </p>
+          </div>
 
           <form onSubmit={submitProfessors} className="mt-4 space-y-4">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Department</span>
-              <select
-                value={selectedDepartmentId}
-                onChange={(event) => setSelectedDepartmentId(event.target.value)}
-                disabled={loading || departments.length === 0}
-                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2.5 text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <option value="">Select department</option>
-                {departments.map((department) => (
-                  <option key={department.id} value={department.id}>
-                    {department.name}
-                  </option>
-                ))}
-              </select>
-            </label>
 
             <label className="flex flex-col gap-1">
               <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Class Name</span>
@@ -675,6 +506,17 @@ function DepartmentHeadPageContent() {
               ))}
             </div>
 
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-[#2d3d7a]">
+              <input
+                type="checkbox"
+                checked={isSelfProfessor}
+                onChange={(event) => handleSelfProfessorChange(event.target.checked)}
+                disabled={!selectedDepartmentId}
+                className="h-4 w-4 rounded border-[#c7c7c7] accent-[#0f33a8]"
+              />
+              I am a professor of this class
+            </label>
+
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -701,7 +543,7 @@ function DepartmentHeadPageContent() {
                 Saved Classes
               </h3>
               <div className="mt-3 space-y-3">
-                {pendingClasses.map((savedClass) => (
+                {savedClasses.map((savedClass) => (
                   <div key={savedClass.localId} className="rounded-lg border border-[#d7e0ff] bg-white p-3">
                     {editingLocalId === savedClass.localId ? (
                       <div className="space-y-2">
@@ -808,44 +650,8 @@ function DepartmentHeadPageContent() {
                 >
                   Deploy
                 </button>
+                {deployMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployMessage}</p> : null}
               </div>
-              {deployedClasses.length > 0 ? (
-                <div className="mt-4 rounded-lg border border-[#d7e0ff] bg-white p-3">
-                  <h4 className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a] md:text-base">
-                    Deployed Classes
-                  </h4>
-                  <ul className="mt-2 space-y-2 text-sm text-[#222]">
-                    {deployedClasses.map((savedClass) => (
-                      <li key={`deployed-${savedClass.localId}`} className="rounded border border-[#cfd8ff] bg-[#fdfdff] p-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-[#111]">
-                            {savedClass.departmentName}: {savedClass.className}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => void removeSavedClass(savedClass)}
-                            disabled={deletingLocalId === savedClass.localId}
-                            className="rounded-lg border border-[#b7b7b7] bg-white px-2.5 py-1 text-xs font-semibold text-[#222] transition hover:bg-[#f7f7f7]"
-                          >
-                            {deletingLocalId === savedClass.localId ? "Deleting..." : "Delete"}
-                          </button>
-                        </div>
-                        {savedClass.professors.length > 0 ? (
-                          <ul className="mt-1 space-y-1 text-xs text-[#444]">
-                            {savedClass.professors.map((professor, index) => (
-                              <li key={`deployed-prof-${savedClass.classId}-${index}`}>
-                                {professor.name} ({professor.email})
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="mt-1 text-xs text-[#666]">No professors listed.</p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
             </div>
           ) : null}
         </section>
@@ -854,10 +660,10 @@ function DepartmentHeadPageContent() {
   );
 }
 
-export default function DepartmentHeadPage() {
+export default function DepartmentHeadPage({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   return (
     <Suspense fallback={<main className="min-h-screen bg-[#f5f5f5] px-4 py-8">Loading...</main>}>
-      <DepartmentHeadPageContent />
+      <DepartmentHeadPageContent token={token} onSignOut={onSignOut} entityId={entityId} />
     </Suspense>
   );
 }

@@ -1,9 +1,10 @@
 """Tests for supabase_io.nested_read — optional nested data fetching."""
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from app.supabase_io.nested_read import (
     CLASS_ALLOWS,
@@ -19,9 +20,63 @@ from app.supabase_io.nested_read import (
 )
 
 
-# ---------------------------------------------------------------------------
-# parse_include
-# ---------------------------------------------------------------------------
+# ── Shared helpers ─────────────────────────────────────────────────────────
+
+TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
+
+
+def _seed_chain(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
+    """Create symposium → department → class (+ professor) → students."""
+    resp = client.post(
+        "/api/events/add_symposium",
+        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
+        headers=h,
+    )
+    sym_id = resp.json()["symposium_id"]
+
+    resp = client.post(
+        "/api/events/add_department",
+        json={
+            "symposium_id": sym_id,
+            "department_name": "CS",
+            "department_head_name": "Dr. Head",
+            "email": "head@hamilton.edu",
+        },
+        headers=h,
+    )
+    dept_id = resp.json()["department_id"]
+
+    resp = client.post(
+        "/api/events/add_class",
+        json={
+            "name": "CS101",
+            "department_id": dept_id,
+            "professors": [{"name": "Prof. Smith", "email": "smith@hamilton.edu"}],
+        },
+        headers=h,
+    )
+    class_id = resp.json()["class_id"]
+
+    client.post(
+        "/api/events/add_students",
+        json={
+            "class_id": class_id,
+            "students": [
+                {"name": "Alice", "email": "alice@hamilton.edu"},
+                {"name": "Bob", "email": "bob@hamilton.edu"},
+            ],
+        },
+        headers=h,
+    )
+
+    return {
+        "symposium_id": sym_id,
+        "department_id": dept_id,
+        "class_id": class_id,
+    }
+
+
+# ── parse_include (pure, no DB needed) ────────────────────────────────────
 
 
 class TestParseInclude:
@@ -49,7 +104,6 @@ class TestParseInclude:
         assert "symposia" in exc_info.value.detail
 
     def test_disallowed_for_endpoint_raises_422(self):
-        # "classes" is not in CLASS_ALLOWS (it's the starting level for that endpoint)
         with pytest.raises(HTTPException) as exc_info:
             parse_include("classes", CLASS_ALLOWS)
         assert exc_info.value.status_code == 422
@@ -64,9 +118,7 @@ class TestParseInclude:
             parse_include("classes,nonsense", DEPARTMENT_ALLOWS)
 
 
-# ---------------------------------------------------------------------------
-# Select string builders
-# ---------------------------------------------------------------------------
+# ── Select string builders (pure, no DB needed) ───────────────────────────
 
 
 class TestBuildDepartmentSelect:
@@ -91,7 +143,6 @@ class TestBuildDepartmentSelect:
         result = build_department_select(
             frozenset({"classes", "professors", "students", "presentations", "timeframes"})
         )
-        # Presentations and timeframes are handled separately — not in the select string
         assert "presentations" not in result
         assert "timeframes" not in result
         assert "professors(*)" in result
@@ -111,15 +162,12 @@ class TestBuildClassSelect:
         assert "students(*)" in result
 
     def test_presentations_not_in_select(self):
-        # Presentations always go through the separate enrichment pass
         result = build_class_select(frozenset({"presentations"}))
         assert "presentations" not in result
         assert result == "*"
 
 
-# ---------------------------------------------------------------------------
-# _group_by helper
-# ---------------------------------------------------------------------------
+# ── _group_by helper (pure) ───────────────────────────────────────────────
 
 
 class TestGroupBy:
@@ -139,283 +187,120 @@ class TestGroupBy:
         assert "" in result
 
 
-# ---------------------------------------------------------------------------
-# get_departments_nested (uses fake_supabase for nested select support)
-# ---------------------------------------------------------------------------
+# ── get_departments_nested (Docker Supabase) ──────────────────────────────
 
 
 class TestGetDepartmentsNested:
-    def test_no_classes_include_returns_flat_departments(self, fake_supabase):
-        dept_id = str(uuid4())
-        sym_id = str(uuid4())
-        fake_supabase.seed("departments", [
-            {"id": dept_id, "department_name": "CS", "symposium_id": sym_id}
-        ])
-
+    def test_no_includes_returns_flat(self, client, h, db):
+        ids = _seed_chain(client, h, db)
         result = get_departments_nested(None, frozenset())
         assert len(result) == 1
         assert result[0]["department_name"] == "CS"
         assert "classes" not in result[0]
 
-    def test_with_classes_include(self, fake_supabase):
-        dept_id = str(uuid4())
-        class_id = str(uuid4())
-        fake_supabase.seed("departments", [{"id": dept_id, "department_name": "CS"}])
-        fake_supabase.seed("classes", [
-            {"id": class_id, "name": "CS101", "department_id": dept_id}
-        ])
-
-        result = get_departments_nested(None, frozenset({"classes"}))
+    def test_with_classes_include(self, client, h, db):
+        ids = _seed_chain(client, h, db)
+        result = get_departments_nested(
+            UUID(ids["symposium_id"]), frozenset({"classes"})
+        )
         assert len(result) == 1
         assert len(result[0]["classes"]) == 1
         assert result[0]["classes"][0]["name"] == "CS101"
 
-    def test_with_classes_and_students(self, fake_supabase):
-        dept_id = str(uuid4())
-        class_id = str(uuid4())
-        student_id = str(uuid4())
-        fake_supabase.seed("departments", [{"id": dept_id, "department_name": "CS"}])
-        fake_supabase.seed("classes", [
-            {"id": class_id, "name": "CS101", "department_id": dept_id}
-        ])
-        fake_supabase.seed("students", [
-            {"id": student_id, "name": "Alice", "class_id": class_id}
-        ])
-
-        result = get_departments_nested(None, frozenset({"classes", "students"}))
+    def test_with_classes_and_students(self, client, h, db):
+        ids = _seed_chain(client, h, db)
+        result = get_departments_nested(
+            UUID(ids["symposium_id"]), frozenset({"classes", "students"})
+        )
         cls = result[0]["classes"][0]
-        assert len(cls["students"]) == 1
-        assert cls["students"][0]["name"] == "Alice"
+        assert len(cls["students"]) == 2
 
-    def test_symposium_id_filter(self, fake_supabase):
-        sym_a = str(uuid4())
-        sym_b = str(uuid4())
-        fake_supabase.seed("departments", [
-            {"id": str(uuid4()), "department_name": "CS", "symposium_id": sym_a},
-            {"id": str(uuid4()), "department_name": "Math", "symposium_id": sym_b},
-        ])
-
-        from uuid import UUID
-        result = get_departments_nested(UUID(sym_a), frozenset({"classes"}))
+    def test_symposium_id_filter(self, client, h, db):
+        ids = _seed_chain(client, h, db)
+        result = get_departments_nested(UUID(ids["symposium_id"]), frozenset({"classes"}))
         assert len(result) == 1
-        assert result[0]["department_name"] == "CS"
 
-    def test_empty_departments_returns_empty_list(self, fake_supabase):
+        # Unrelated symposium should return nothing
+        result = get_departments_nested(uuid4(), frozenset({"classes"}))
+        assert result == []
+
+    def test_empty_departments_returns_empty_list(self, client, h, db):
         result = get_departments_nested(None, frozenset({"classes", "students"}))
         assert result == []
 
 
-# ---------------------------------------------------------------------------
-# get_classes_nested (uses fake_supabase)
-# ---------------------------------------------------------------------------
+# ── get_classes_nested (Docker Supabase) ──────────────────────────────────
 
 
 class TestGetClassesNested:
-    def test_no_includes_returns_flat_classes(self, fake_supabase):
-        class_id = str(uuid4())
-        fake_supabase.seed("classes", [{"id": class_id, "name": "CS101"}])
-
+    def test_no_includes_returns_flat(self, client, h, db):
+        ids = _seed_chain(client, h, db)
         result = get_classes_nested(None, frozenset())
         assert len(result) == 1
         assert "professors" not in result[0]
 
-    def test_with_professors(self, fake_supabase):
-        class_id = str(uuid4())
-        prof_id = str(uuid4())
-        fake_supabase.seed("classes", [{"id": class_id, "name": "CS101"}])
-        fake_supabase.seed("professors", [
-            {"id": prof_id, "name": "Dr. Smith", "class_id": class_id}
-        ])
-
-        result = get_classes_nested(None, frozenset({"professors"}))
+    def test_with_professors(self, client, h, db):
+        ids = _seed_chain(client, h, db)
+        result = get_classes_nested(
+            UUID(ids["department_id"]), frozenset({"professors"})
+        )
+        assert len(result) == 1
         assert len(result[0]["professors"]) == 1
-        assert result[0]["professors"][0]["name"] == "Dr. Smith"
+        assert result[0]["professors"][0]["name"] == "Prof. Smith"
 
-    def test_professors_isolated_to_their_class(self, fake_supabase):
-        class_a = str(uuid4())
-        class_b = str(uuid4())
-        fake_supabase.seed("classes", [
-            {"id": class_a, "name": "CS101"},
-            {"id": class_b, "name": "CS201"},
-        ])
-        fake_supabase.seed("professors", [
-            {"id": str(uuid4()), "name": "Prof A", "class_id": class_a},
-            {"id": str(uuid4()), "name": "Prof B", "class_id": class_b},
-        ])
+    def test_with_students(self, client, h, db):
+        ids = _seed_chain(client, h, db)
+        result = get_classes_nested(
+            UUID(ids["department_id"]), frozenset({"students"})
+        )
+        assert len(result[0]["students"]) == 2
 
-        result = get_classes_nested(None, frozenset({"professors"}))
-        by_name = {c["name"]: c for c in result}
-        assert len(by_name["CS101"]["professors"]) == 1
-        assert len(by_name["CS201"]["professors"]) == 1
-        assert by_name["CS101"]["professors"][0]["name"] == "Prof A"
-
-    def test_empty_classes_returns_empty_list(self, fake_supabase):
+    def test_empty_classes_returns_empty_list(self, client, h, db):
         result = get_classes_nested(None, frozenset({"professors", "students"}))
         assert result == []
 
 
-# ---------------------------------------------------------------------------
-# Router integration via TestClient (status codes only)
-# ---------------------------------------------------------------------------
+# ── Route-level include parameter (Docker Supabase) ───────────────────────
 
 
 class TestDepartmentsRouteInclude:
-    def test_no_include_unchanged(self, client, api_headers):
-        resp = client.get("/api/events/departments", headers=api_headers)
+    def test_no_include(self, client, h):
+        resp = client.get("/api/events/departments", headers=h)
         assert resp.status_code == 200
 
-    def test_invalid_include_returns_422(self, client, api_headers):
-        resp = client.get(
-            "/api/events/departments?include=symposia", headers=api_headers
-        )
+    def test_invalid_include_returns_422(self, client, h):
+        resp = client.get("/api/events/departments?include=symposia", headers=h)
         assert resp.status_code == 422
 
-    def test_valid_include_classes(self, client, api_headers):
-        resp = client.get(
-            "/api/events/departments?include=classes", headers=api_headers
-        )
+    def test_valid_include_classes(self, client, h, db):
+        _seed_chain(client, h, db)
+        resp = client.get("/api/events/departments?include=classes", headers=h)
         assert resp.status_code == 200
 
-    def test_classes_auto_promoted_when_requesting_students(self, client, api_headers):
-        resp = client.get(
-            "/api/events/departments?include=students", headers=api_headers
-        )
+    def test_auto_promotes_classes_when_requesting_students(self, client, h, db):
+        _seed_chain(client, h, db)
+        resp = client.get("/api/events/departments?include=students", headers=h)
         assert resp.status_code == 200
 
 
 class TestClassesRouteInclude:
-    def test_no_include_unchanged(self, client, api_headers):
-        resp = client.get("/api/events/classes", headers=api_headers)
+    def test_no_include(self, client, h):
+        resp = client.get("/api/events/classes", headers=h)
         assert resp.status_code == 200
 
-    def test_invalid_include_returns_422(self, client, api_headers):
-        resp = client.get("/api/events/classes?include=classes", headers=api_headers)
+    def test_invalid_include_returns_422(self, client, h):
+        resp = client.get("/api/events/classes?include=classes", headers=h)
         assert resp.status_code == 422
 
-    def test_valid_include_professors(self, client, api_headers):
-        resp = client.get("/api/events/classes?include=professors", headers=api_headers)
+    def test_valid_include_professors(self, client, h, db):
+        _seed_chain(client, h, db)
+        resp = client.get("/api/events/classes?include=professors", headers=h)
         assert resp.status_code == 200
 
-    def test_valid_include_all(self, client, api_headers):
+    def test_valid_include_all(self, client, h, db):
+        _seed_chain(client, h, db)
         resp = client.get(
             "/api/events/classes?include=professors,students,presentations,timeframes",
-            headers=api_headers,
+            headers=h,
         )
         assert resp.status_code == 200
-
-
-# ---------------------------------------------------------------------------
-# Full integration tests with fake in-memory Supabase
-# ---------------------------------------------------------------------------
-
-
-class TestNestedFetchIntegration:
-    def test_departments_with_classes_nested(self, integration_client, fake_supabase, api_headers):
-        sym_id = str(uuid4())
-        dept_id = str(uuid4())
-        class_id = str(uuid4())
-        fake_supabase.seed("departments", [
-            {"id": dept_id, "department_name": "CS", "symposium_id": sym_id}
-        ])
-        fake_supabase.seed("classes", [
-            {"id": class_id, "name": "CS101", "department_id": dept_id}
-        ])
-
-        resp = integration_client.get(
-            f"/api/events/departments?symposium_id={sym_id}&include=classes",
-            headers=api_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data) == 1
-        assert data[0]["department_name"] == "CS"
-        assert len(data[0]["classes"]) == 1
-        assert data[0]["classes"][0]["name"] == "CS101"
-
-    def test_departments_no_include_backward_compat(self, integration_client, fake_supabase, api_headers):
-        sym_id = str(uuid4())
-        dept_id = str(uuid4())
-        fake_supabase.seed("departments", [
-            {"id": dept_id, "department_name": "CS", "symposium_id": sym_id}
-        ])
-
-        resp = integration_client.get(
-            f"/api/events/departments?symposium_id={sym_id}",
-            headers=api_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        # Original format: {"data": [...], "departments": [...]}
-        assert "data" in data
-        assert data["data"][0]["department_name"] == "CS"
-
-    def test_classes_with_students_nested(self, integration_client, fake_supabase, api_headers):
-        dept_id = str(uuid4())
-        class_id = str(uuid4())
-        student_id = str(uuid4())
-        fake_supabase.seed("classes", [
-            {"id": class_id, "name": "CS101", "department_id": dept_id}
-        ])
-        fake_supabase.seed("students", [
-            {"id": student_id, "name": "Alice", "class_id": class_id}
-        ])
-
-        resp = integration_client.get(
-            f"/api/events/classes?department_id={dept_id}&include=students",
-            headers=api_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data) == 1
-        assert data[0]["name"] == "CS101"
-        assert len(data[0]["students"]) == 1
-        assert data[0]["students"][0]["name"] == "Alice"
-
-    def test_departments_auto_promotes_classes(self, integration_client, fake_supabase, api_headers):
-        sym_id = str(uuid4())
-        dept_id = str(uuid4())
-        class_id = str(uuid4())
-        student_id = str(uuid4())
-        fake_supabase.seed("departments", [
-            {"id": dept_id, "department_name": "CS", "symposium_id": sym_id}
-        ])
-        fake_supabase.seed("classes", [
-            {"id": class_id, "name": "CS101", "department_id": dept_id}
-        ])
-        fake_supabase.seed("students", [
-            {"id": student_id, "name": "Alice", "class_id": class_id}
-        ])
-
-        # Request "students" without explicitly requesting "classes" — should auto-promote
-        resp = integration_client.get(
-            f"/api/events/departments?symposium_id={sym_id}&include=students",
-            headers=api_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "classes" in data[0]
-        assert data[0]["classes"][0]["students"][0]["name"] == "Alice"
-
-    def test_classes_with_professors_and_students(self, integration_client, fake_supabase, api_headers):
-        dept_id = str(uuid4())
-        class_id = str(uuid4())
-        fake_supabase.seed("classes", [
-            {"id": class_id, "name": "CS101", "department_id": dept_id}
-        ])
-        fake_supabase.seed("professors", [
-            {"id": str(uuid4()), "name": "Dr. Smith", "class_id": class_id}
-        ])
-        fake_supabase.seed("students", [
-            {"id": str(uuid4()), "name": "Alice", "class_id": class_id},
-            {"id": str(uuid4()), "name": "Bob", "class_id": class_id},
-        ])
-
-        resp = integration_client.get(
-            f"/api/events/classes?department_id={dept_id}&include=professors,students",
-            headers=api_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        cls = data[0]
-        assert cls["professors"][0]["name"] == "Dr. Smith"
-        assert len(cls["students"]) == 2

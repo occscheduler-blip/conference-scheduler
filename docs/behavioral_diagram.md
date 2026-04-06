@@ -7,13 +7,13 @@ sequenceDiagram
     participant DB as Supabase Postgres
 
     Student->>UI: Open student page
-    UI->>API: GET /api/events/symposiums
-    API->>DB: SELECT symposiums
+    UI->>API: GET /api/events/symposia
+    API->>DB: SELECT symposia
     DB-->>API: symposium list
     API-->>UI: symposium list
 
     Student->>UI: Select symposium
-    UI->>API: GET /api/events/symposiums/{symposium_id}
+    UI->>API: GET /api/events/symposia/{symposium_id}
     API->>DB: SELECT symposium + symposium timeframes
     DB-->>API: symposium + timeframes
     API-->>UI: allowed timestamp window

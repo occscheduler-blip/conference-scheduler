@@ -1,27 +1,9 @@
 from app.supabase_io.client import supabase
 from uuid import UUID
 from app.supabase_io import read
-from postgrest.base_request_builder import APIResponse
 from postgrest.types import CountMethod
 from typing import cast
-from app.utils import force_uuid
-
-
-def _rows_affected(response: APIResponse | dict[str, object], fallback: int = 0) -> int:
-    """Return rows affected from a Supabase response object or dict."""
-    if isinstance(response, dict):
-        count = response.get("count")
-        data = response.get("data")
-    else:
-        count = getattr(response, "count", None)
-        data = getattr(response, "data", None)
-    if isinstance(count, int) and count >= 0:
-        return count
-    if isinstance(data, list):
-        return len(data)
-    if isinstance(data, dict):
-        return 1
-    return fallback
+from app.utils import force_uuid, rows_affected as _rows_affected
 
 
 def _merge_counts(target: dict[str, int], source: dict[str, int] | None) -> None:
@@ -41,23 +23,21 @@ def _safe_count(value: object) -> int:
 
 def delete_timeframes(linked_id: UUID | list[UUID]) -> int:
     del_timeframes_query = supabase.table("timeframes").delete()
+    count_query = supabase.table("timeframes").select("linked_id", count=CountMethod.exact)
 
-    num_deleted = (
-        supabase.table("timeframes")
-        .select("linked_id", count=CountMethod.exact)
-        .eq("linked_id", linked_id)
-        .execute()
-        .count
-    )
+    if isinstance(linked_id, UUID):
+        count_query = count_query.eq("linked_id", str(linked_id))
+        del_timeframes_query = del_timeframes_query.eq("linked_id", str(linked_id))
+    elif isinstance(linked_id, list):
+        str_ids = [str(uid) for uid in linked_id]
+        count_query = count_query.in_("linked_id", str_ids)
+        del_timeframes_query = del_timeframes_query.in_("linked_id", str_ids)
+
+    num_deleted = count_query.execute().count
     if num_deleted is None:
         num_deleted = 0
 
-    if isinstance(linked_id, UUID):
-        del_timeframes_query = del_timeframes_query.eq("linked_id", linked_id)
-    elif isinstance(linked_id, list):
-        del_timeframes_query = del_timeframes_query.in_("linked_id", linked_id)
-
-    del_timeframes_resp = del_timeframes_query.execute()
+    del_timeframes_query.execute()
 
     return num_deleted
 
@@ -69,17 +49,18 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
     del_prof_request_query = supabase.table("requests").delete()
 
     if isinstance(student_id, UUID):
-        del_stu_query = del_stu_query.eq("id", student_id)
+        del_stu_query = del_stu_query.eq("id", str(student_id))
         del_presenting_student_query = del_presenting_student_query.eq(
-            "student_id", student_id
+            "student_id", str(student_id)
         )
-        del_prof_request_query = del_prof_request_query.eq("student_id", student_id)
+        del_prof_request_query = del_prof_request_query.eq("student_id", str(student_id))
     elif isinstance(student_id, list):
-        del_stu_query = del_stu_query.in_("id", student_id)
+        str_ids = [str(uid) for uid in student_id]
+        del_stu_query = del_stu_query.in_("id", str_ids)
         del_presenting_student_query = del_presenting_student_query.in_(
-            "student_id", student_id
+            "student_id", str_ids
         )
-        del_prof_request_query = del_prof_request_query.in_("student_id", student_id)
+        del_prof_request_query = del_prof_request_query.in_("student_id", str_ids)
 
     deleted_timeframes = _safe_count(delete_timeframes(student_id))
     # Delete child rows first to satisfy FK constraints, then delete the student row(s).
@@ -100,9 +81,9 @@ def delete_professor(prof_id: UUID | list[UUID]) -> dict[str, int]:
     del_prof_query = supabase.table("professors").delete()
 
     if isinstance(prof_id, UUID):
-        del_prof_query = del_prof_query.eq("id", prof_id)
+        del_prof_query = del_prof_query.eq("id", str(prof_id))
     elif isinstance(prof_id, list):
-        del_prof_query = del_prof_query.in_("id", prof_id)
+        del_prof_query = del_prof_query.in_("id", [str(uid) for uid in prof_id])
 
     deleted_timeframes = _safe_count(delete_timeframes(prof_id))
     del_prof_resp = del_prof_query.execute()
@@ -117,14 +98,15 @@ def delete_presentation(presentation_id: UUID | list[UUID]) -> dict[str, int]:
     del_presenting_student_query = supabase.table("presenting_students").delete()
 
     if isinstance(presentation_id, UUID):
-        del_pres_query = del_pres_query.eq("id", presentation_id)
+        del_pres_query = del_pres_query.eq("id", str(presentation_id))
         del_presenting_student_query = del_presenting_student_query.eq(
-            "presentation_id", presentation_id
+            "presentation_id", str(presentation_id)
         )
     elif isinstance(presentation_id, list):
-        del_pres_query = del_pres_query.in_("id", presentation_id)
+        str_ids = [str(uid) for uid in presentation_id]
+        del_pres_query = del_pres_query.in_("id", str_ids)
         del_presenting_student_query = del_presenting_student_query.in_(
-            "presentation_id", presentation_id
+            "presentation_id", str_ids
         )
 
     deleted_timeframes = _safe_count(delete_timeframes(presentation_id))

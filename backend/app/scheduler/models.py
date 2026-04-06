@@ -15,6 +15,8 @@ class PresentationInput:
     id: str
     title: str
     duration_minutes: int
+    buffer_minutes: int = 0
+    class_id: str = ""
     resource_ids: tuple[str, ...] = ()
 
 

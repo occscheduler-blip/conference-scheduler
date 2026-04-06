@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.supabase_io.client import supabase
 
@@ -25,17 +25,17 @@ class TimeframeWindow(BaseModel):
 
 
 class AddSymposiumRequest(BaseModel):
-    symposium_id: UUID | None = None
     symposium_name: str
     rooms_available: int
     timeframes: list[TimeframeWindow]
+    default_buffer: int
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "symposium_id": "9e1fd0da-ea43-48f2-85df-5281a495f054",
                 "symposium_name": "Spring Symposium",
                 "rooms_available": 5,
+                "default_buffer": 3,
                 "timeframes": [
                     {
                         "start_time": "2026-04-20T09:00:00Z",
@@ -111,6 +111,7 @@ class AddDepartmentRequest(BaseModel):
 
 
 class ProfessorInit(BaseModel):
+    id: UUID | None = None
     name: str
     email: str
 
@@ -239,7 +240,7 @@ class AddPresentationRequest(BaseModel):
     title: str
     class_id: UUID
     minutes: int
-    buffer: int = 0
+    buffer: int
     presenting_students: list[UUID]
 
     @field_validator("title")
@@ -257,13 +258,6 @@ class AddPresentationRequest(BaseModel):
             raise ValueError(f"Presentations must be between 1 and {MAX_TIME}")
         return minutes
 
-    @field_validator("buffer")
-    @classmethod
-    def validate_buffer(cls, buffer: int) -> int:
-        if buffer < 0:
-            raise ValueError("Buffer must be 0 or greater")
-        return buffer
-
     @field_validator("presenting_students")
     @classmethod
     def validate_presenting_students(cls, presenting_students: list[UUID]) -> list[UUID]:
@@ -279,6 +273,7 @@ class AddPresentationRequest(BaseModel):
                 "title": "Bio Thesis Presentation",
                 "class_id": "a2d9911c-977b-457f-81dc-672490e4f2ab",
                 "minutes": 20,
+                "buffer": 3,
                 "presenting_students": [
                     "6015d279-a271-4d9d-9c8e-435731caac04",
                     "a4b08f01-9cea-4e35-9d9e-0e664f35d4ef",
@@ -397,6 +392,8 @@ class UpdateSymposiumRequest(BaseModel):
     symposium_id: UUID
     symposium_name: str
     rooms_available: int
+    default_buffer: int
+    timeframes: list[TimeframeWindow]
 
     @field_validator("symposium_name")
     @classmethod
@@ -412,6 +409,48 @@ class UpdateSymposiumRequest(BaseModel):
         if rooms_available > MAX_ROOMS:
             raise ValueError(f"You may not choose more than {MAX_ROOMS} rooms.")
         return rooms_available
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "symposium_id": "ba16476b-e00e-4eeb-98e6-d78be76bfd41",
+                "symposium_name": "Spring Symposium",
+                "rooms_available": 10,
+                "default_buffer": 3,
+                "timeframes": [
+                    {
+                        "start_time": "2026-04-20T09:00:00Z",
+                        "end_time": "2026-04-20T12:00:00Z",
+                    },
+                    {
+                        "start_time": "2026-04-21T13:00:00Z",
+                        "end_time": "2026-04-21T16:00:00Z",
+                    },
+                ]
+            },
+        }
+    )
+
+
+class UpdateScheduleAssignmentRequest(BaseModel):
+    symposium_id: UUID
+    presentation_id: UUID
+    room: int
+    start_time: datetime
+    end_time: datetime
+
+    @field_validator("room")
+    @classmethod
+    def validate_room(cls, room: int) -> int:
+        if room < 0 or room >= MAX_ROOMS:
+            raise ValueError(f"Room index must be between 0 and {MAX_ROOMS - 1}.")
+        return room
+
+    @model_validator(mode="after")
+    def end_after_start(self) -> "UpdateScheduleAssignmentRequest":
+        if self.end_time <= self.start_time:
+            raise ValueError("End time must be after start time.")
+        return self
 
 
 class UpdatePresentationRequest(BaseModel):
@@ -419,6 +458,8 @@ class UpdatePresentationRequest(BaseModel):
     title: str
     class_id: UUID
     minutes: int
+    buffer: int
+    room: int | None = None
     presenting_students: list[UUID]
 
     @field_validator("title")
@@ -445,72 +486,5 @@ class UpdatePresentationRequest(BaseModel):
             )
         return presenting_students
 
-
-class BasicScheduleParticipant(BaseModel):
-    name: str
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, name: str) -> str:
-        name = name.strip()
-        if not name:
-            raise ValueError("Participant name cannot be empty")
-        return name
-
-
-class BasicScheduleWindow(BaseModel):
-    start_time: datetime
-    end_time: datetime
-
-    @model_validator(mode="after")
-    def end_after_start(self) -> "BasicScheduleWindow":
-        if self.end_time <= self.start_time:
-            raise ValueError("Window end time must come after start time.")
-        return self
-
-
-class BasicScheduleRequest(BaseModel):
-    day_start: datetime
-    day_end: datetime
-    presentation_minutes: int
-    students: list[BasicScheduleParticipant]
-    room_count: int = 1
-    professor_name: str | None = None
-    professor_unavailable: list[BasicScheduleWindow] = Field(default_factory=list)
-    slot_minutes: int = 5
-
-    @model_validator(mode="after")
-    def validate_day_window(self) -> "BasicScheduleRequest":
-        if self.day_end <= self.day_start:
-            raise ValueError("day_end must be after day_start.")
-        return self
-
-    @field_validator("presentation_minutes")
-    @classmethod
-    def validate_presentation_minutes(cls, presentation_minutes: int) -> int:
-        if presentation_minutes < 1 or presentation_minutes > MAX_TIME:
-            raise ValueError(f"Presentations must be between 1 and {MAX_TIME}")
-        return presentation_minutes
-
-    @field_validator("students")
-    @classmethod
-    def validate_students(
-        cls, students: list[BasicScheduleParticipant]
-    ) -> list[BasicScheduleParticipant]:
-        if not students:
-            raise ValueError("At least one student is required.")
-        return students
-
-    @field_validator("room_count")
-    @classmethod
-    def validate_room_count(cls, room_count: int) -> int:
-        if room_count < 1 or room_count > MAX_ROOMS:
-            raise ValueError(f"Room count must be between 1 and {MAX_ROOMS}.")
-        return room_count
-
-    @field_validator("slot_minutes")
-    @classmethod
-    def validate_slot_minutes(cls, slot_minutes: int) -> int:
-        if slot_minutes < 1 or slot_minutes > MAX_TIME:
-            raise ValueError(f"Slot minutes must be between 1 and {MAX_TIME}.")
-        return slot_minutes
+class RunSchedulerRequest(BaseModel):
+    symposium_id: UUID

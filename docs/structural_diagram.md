@@ -19,7 +19,7 @@ flowchart LR
   subgraph EP["FastAPI Event Routes (/api/events/*)"]
     PAdd["POST /add_symposium<br/>POST /add_department<br/>POST /add_class<br/>POST /add_students<br/>POST /add_presentation<br/>POST /add_request"]
     PUpd["PUT /update_timeframes<br/>PUT /update_student<br/>PUT /update_professor<br/>PUT /update_class<br/>PUT /update_department<br/>PUT /update_symposium<br/>PUT /update_presentation"]
-    PGet["GET /symposiums<br/>GET /symposiums/{id}<br/>GET /departments<br/>GET /classes<br/>GET /students<br/>GET /presentations<br/>GET /professors<br/>GET /timeframes<br/>GET /requests"]
+    PGet["GET /symposia<br/>GET /symposia/{id}<br/>GET /departments<br/>GET /classes<br/>GET /students<br/>GET /presentations<br/>GET /professors<br/>GET /timeframes<br/>GET /requests"]
     PDel["DELETE /delete_symposium<br/>DELETE /delete_department<br/>DELETE /delete_class<br/>DELETE /delete_student<br/>DELETE /delete_professor<br/>DELETE /delete_presentation"]
   end
 
@@ -37,7 +37,7 @@ flowchart LR
   end
 
   subgraph DB["Supabase Tables (Postgres)"]
-    Symposiums["symposiums"]
+    Symposia["symposia"]
     Timeframes["timeframes (linked_id for symposium/user availability)"]
     Departments["departments"]
     Classes["classes"]
@@ -90,7 +90,7 @@ flowchart LR
   Scheduler -.-> IORead
   Scheduler -.-> IOWrite
 
-  SBClient --> Symposiums
+  SBClient --> Symposia
   SBClient --> Timeframes
   SBClient --> Departments
   SBClient --> Classes
@@ -108,7 +108,7 @@ The scheduling logic is not yet implemented — this is expected at the current 
 **Inputs it will need:**
 - All presentations for a symposium (duration in minutes, assigned class/department)
 - Available timeframes per professor/presenter (from `timeframes` table via `linked_id`)
-- Symposium timeframes (start/end windows, number of rooms available from `symposiums.rooms_available`)
+- Symposium timeframes (start/end windows, number of rooms available from `symposia.rooms_available`)
 
 **Output:**
 - Write `start_time` and `end_time` back to each `presentations` row (fields already exist in the schema but are currently `null`)
@@ -127,8 +127,8 @@ Dashed arrows in the diagram indicate the planned (unimplemented) call path.
 
 The frontend currently calls some REST-style routes that are not implemented in `backend/app/routers/events.py`:
 
-- `PUT /api/events/symposiums/{id}`
-- `DELETE /api/events/symposiums/{id}`
+- `PUT /api/events/symposia/{id}`
+- `DELETE /api/events/symposia/{id}`
 - `PUT /api/events/departments/{id}`
 - `DELETE /api/events/departments/{id}`
 
@@ -138,7 +138,7 @@ Backend currently provides action-style equivalents:
 - `DELETE /api/events/delete_symposium`
 - `DELETE /api/events/delete_department`
 
-Note: `GET /api/events/symposiums/{id}` is implemented — it was previously listed here in error.
+Note: `GET /api/events/symposia/{id}` is implemented — it was previously listed here in error.
 
 ## Data/Control Flow Notes
 

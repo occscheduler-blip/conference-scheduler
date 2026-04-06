@@ -1,196 +1,121 @@
-"""Integration tests using the in-memory FakeSupabaseClient.
+"""Full-stack integration tests against Docker Supabase.
 
-Unlike the unit tests in test_events_api.py (which use MagicMock), these
-tests let real data flow through the full stack:
-
-    HTTP request → FastAPI router → supabase_io → FakeSupabaseClient (in-memory)
-
-This catches bugs that mocks can't: enrichment logic, cascade delete ordering,
-upsert branching, and serialisation round-trips.
+These complement test_api.py by verifying:
+  - Row count accuracy after operations
+  - Upsert deduplication
+  - Presentation enrichment with student details
+  - Student update persistence
+  - Timeframe replacement counts
 """
 
 from uuid import uuid4
 
-import pytest
+from fastapi.testclient import TestClient
 
-
-HEADERS = {"X-API-Key": "test-api-key"}
 
 TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
 TF_2 = {"start_time": "2026-04-21T13:00:00Z", "end_time": "2026-04-21T16:00:00Z"}
 
 
-# ===========================================================================
-# Symposium lifecycle
-# ===========================================================================
+# ── Symposium lifecycle ───────────────────────────────────────────────────
 
-class TestSymposiumLifecycle:
-    def test_post_and_get_all(self, integration_client, fake_supabase):
-        """POST a symposium then GET /symposia — row must be present."""
-        resp = integration_client.post(
+
+class TestSymposiumCounts:
+    def test_post_inserts_correct_timeframe_count(self, client, h, db):
+        client.post(
             "/api/events/add_symposium",
-            json={
-                "symposium_name": "Spring Symposium",
-                "rooms_available": 5,
-                "timeframes": [TF_1],
-            },
-            headers=HEADERS,
+            json={"symposium_name": "Multi", "rooms_available": 4, "default_buffer": 0, "timeframes": [TF_1, TF_2]},
+            headers=h,
         )
-        assert resp.status_code == 200, resp.text
-        symp_id = resp.json()["symposium_id"]
+        assert db.count("symposiums") == 1
+        assert db.count("timeframes") == 2
 
-        resp = integration_client.get("/api/events/symposia", headers=HEADERS)
-        assert resp.status_code == 200
-        symposia = resp.json()["symposia"]
-        assert len(symposia) == 1
-        assert symposia[0]["id"] == symp_id
-        assert symposia[0]["name"] == "Spring Symposium"
-        assert symposia[0]["rooms_available"] == 5
-
-    def test_get_by_id_returns_symposium_and_timeframes(self, integration_client, fake_supabase):
-        """GET /symposia/{id} returns the symposium row plus its timeframes."""
-        resp = integration_client.post(
+    def test_update_does_not_duplicate(self, client, h, db):
+        """PUTting update_symposium updates — no duplicate."""
+        resp = client.post(
             "/api/events/add_symposium",
-            json={
-                "symposium_name": "Fall Symposium",
-                "rooms_available": 3,
-                "timeframes": [TF_1, TF_2],
-            },
-            headers=HEADERS,
+            json={"symposium_name": "Original", "rooms_available": 2, "default_buffer": 0, "timeframes": [TF_1]},
+            headers=h,
         )
-        symp_id = resp.json()["symposium_id"]
+        sym_id = resp.json()["symposium_id"]
+        assert db.count("symposiums") == 1
 
-        resp = integration_client.get(f"/api/events/symposia/{symp_id}", headers=HEADERS)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["symposium"]["id"] == symp_id
-        assert len(body["timeframes"]) == 2
-
-    def test_get_by_id_not_found(self, integration_client, fake_supabase):
-        resp = integration_client.get(
-            f"/api/events/symposia/{uuid4()}", headers=HEADERS
-        )
-        assert resp.status_code == 404
-
-    def test_upsert_same_id_updates_not_duplicates(self, integration_client, fake_supabase):
-        """POSTing with the same symposium_id a second time updates — no duplicate rows."""
-        symp_id = str(uuid4())
-        integration_client.post(
-            "/api/events/add_symposium",
+        client.put(
+            "/api/events/update_symposium",
             json={
-                "symposium_id": symp_id,
-                "symposium_name": "Original Name",
-                "rooms_available": 2,
-                "timeframes": [TF_1],
-            },
-            headers=HEADERS,
-        )
-        assert fake_supabase.count("symposia") == 1
-
-        resp = integration_client.post(
-            "/api/events/add_symposium",
-            json={
-                "symposium_id": symp_id,
-                "symposium_name": "Updated Name",
+                "symposium_id": sym_id,
+                "symposium_name": "Updated",
                 "rooms_available": 10,
+                "default_buffer": 0,
                 "timeframes": [TF_2],
             },
-            headers=HEADERS,
+            headers=h,
         )
-        assert resp.status_code == 200
-        # Still only one symposium row — not a duplicate
-        assert fake_supabase.count("symposia") == 1
-        row = fake_supabase.rows("symposia")[0]
-        assert row["name"] == "Updated Name"
+        assert db.count("symposiums") == 1  # still 1
+        row = db.rows("symposiums")[0]
+        assert row["name"] == "Updated"
         assert row["rooms_available"] == 10
 
-    def test_post_inserts_timeframes(self, integration_client, fake_supabase):
-        """Each timeframe window in the payload becomes a row in the timeframes table."""
-        integration_client.post(
-            "/api/events/add_symposium",
-            json={
-                "symposium_name": "Multi-slot",
-                "rooms_available": 4,
-                "timeframes": [TF_1, TF_2],
-            },
-            headers=HEADERS,
-        )
-        assert fake_supabase.count("timeframes") == 2
 
+# ── Timeframe replacement ─────────────────────────────────────────────────
 
-# ===========================================================================
-# Timeframe replacement
-# ===========================================================================
 
 class TestTimeframeReplacement:
-    def test_put_replaces_all_timeframes(self, integration_client, fake_supabase):
-        """PUT update_timeframes deletes old slots and inserts the new set."""
-        symp_id = str(uuid4())
-        # Seed two existing timeframes linked to the symposium
-        fake_supabase.seed("timeframes", [
-            {"id": str(uuid4()), "linked_id": symp_id, "start_time": TF_1["start_time"], "end_time": TF_1["end_time"]},
-            {"id": str(uuid4()), "linked_id": symp_id, "start_time": TF_2["start_time"], "end_time": TF_2["end_time"]},
-        ])
-        assert fake_supabase.count("timeframes") == 2
+    def test_put_replaces_all_timeframes(self, client, h, db):
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1, TF_2]},
+            headers=h,
+        )
+        sym_id = resp.json()["symposium_id"]
+        assert db.count("timeframes") == 2
 
         new_tf = {"start_time": "2026-05-01T09:00:00Z", "end_time": "2026-05-01T11:00:00Z"}
-        resp = integration_client.put(
+        resp = client.put(
             "/api/events/update_timeframes",
-            json={"linked_id": symp_id, "timeframes": [new_tf]},
-            headers=HEADERS,
+            json={"linked_id": sym_id, "timeframes": [new_tf]},
+            headers=h,
         )
         assert resp.status_code == 200
-        # Old two deleted, one new inserted
-        assert fake_supabase.count("timeframes") == 1
-        row = fake_supabase.rows("timeframes")[0]
-        assert row["linked_id"] == symp_id
-        assert row["start_time"] == "2026-05-01T09:00:00+00:00"
+        assert db.count("timeframes") == 1  # 2 old deleted, 1 new inserted
 
 
-# ===========================================================================
-# Class + cascade delete
-# ===========================================================================
+# ── Cascade delete counts ─────────────────────────────────────────────────
 
-class TestCascadeDeleteClass:
-    def _create_class(self, integration_client: object) -> tuple[str, str]:
-        """Helper: POST a class with one professor, return (class_id, dept_id)."""
-        dept_id = str(uuid4())
-        resp = integration_client.post(  # type: ignore[union-attr]
+
+class TestCascadeDeleteCounts:
+    def _seed(self, client, h, db):
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
+            headers=h,
+        )
+        sym_id = resp.json()["symposium_id"]
+
+        resp = client.post(
+            "/api/events/add_department",
+            json={
+                "symposium_id": sym_id,
+                "department_name": "CS",
+                "department_head_name": "Dr. H",
+                "email": "h@hamilton.edu",
+            },
+            headers=h,
+        )
+        dept_id = resp.json()["department_id"]
+
+        resp = client.post(
             "/api/events/add_class",
             json={
-                "name": "BIO 101",
+                "name": "CS101",
                 "department_id": dept_id,
-                "professors": [{"name": "Dr. Smith", "email": "dsmith@hamilton.edu"}],
+                "professors": [{"name": "Prof", "email": "prof@hamilton.edu"}],
             },
-            headers=HEADERS,
+            headers=h,
         )
-        assert resp.status_code == 200, resp.text
-        return resp.json()["class_id"], dept_id
+        class_id = resp.json()["class_id"]
 
-    def test_delete_class_removes_class_row(self, integration_client, fake_supabase):
-        class_id, _ = self._create_class(integration_client)
-        assert fake_supabase.count("classes") == 1
-
-        resp = integration_client.delete(
-            f"/api/events/delete_class?class_id={class_id}", headers=HEADERS
-        )
-        assert resp.status_code == 200
-        assert fake_supabase.count("classes") == 0
-
-    def test_delete_class_removes_professors(self, integration_client, fake_supabase):
-        class_id, _ = self._create_class(integration_client)
-        assert fake_supabase.count("professors") == 1
-
-        integration_client.delete(
-            f"/api/events/delete_class?class_id={class_id}", headers=HEADERS
-        )
-        assert fake_supabase.count("professors") == 0
-
-    def test_delete_class_removes_students(self, integration_client, fake_supabase):
-        class_id, _ = self._create_class(integration_client)
-
-        # Add two students to the class
-        integration_client.post(
+        client.post(
             "/api/events/add_students",
             json={
                 "class_id": class_id,
@@ -199,20 +124,27 @@ class TestCascadeDeleteClass:
                     {"name": "Bob", "email": "bob@hamilton.edu"},
                 ],
             },
-            headers=HEADERS,
+            headers=h,
         )
-        assert fake_supabase.count("students") == 2
 
-        integration_client.delete(
-            f"/api/events/delete_class?class_id={class_id}", headers=HEADERS
-        )
-        assert fake_supabase.count("students") == 0
+        return {"class_id": class_id}
 
-    def test_delete_class_count_response(self, integration_client, fake_supabase):
-        """The response records_deleted dict must include 'classes' and 'professors'."""
-        class_id, _ = self._create_class(integration_client)
-        resp = integration_client.delete(
-            f"/api/events/delete_class?class_id={class_id}", headers=HEADERS
+    def test_delete_class_removes_professors(self, client, h, db):
+        ids = self._seed(client, h, db)
+        assert db.count("professors") == 1
+        client.delete(f"/api/events/delete_class?class_id={ids['class_id']}", headers=h)
+        assert db.count("professors") == 0
+
+    def test_delete_class_removes_students(self, client, h, db):
+        ids = self._seed(client, h, db)
+        assert db.count("students") == 2
+        client.delete(f"/api/events/delete_class?class_id={ids['class_id']}", headers=h)
+        assert db.count("students") == 0
+
+    def test_delete_class_response_counts(self, client, h, db):
+        ids = self._seed(client, h, db)
+        resp = client.delete(
+            f"/api/events/delete_class?class_id={ids['class_id']}", headers=h
         )
         body = resp.json()
         assert body["status"] == "deleted"
@@ -223,32 +155,42 @@ class TestCascadeDeleteClass:
         assert body["lines_edited"] >= 2
 
 
-# ===========================================================================
-# Presentation enrichment
-# ===========================================================================
+# ── Presentation enrichment ───────────────────────────────────────────────
+
 
 class TestPresentationEnrichment:
-    def test_presentations_include_presenting_students(
-        self, integration_client, fake_supabase
-    ):
-        """GET /presentations should return each presentation with a
-        ``presenting_students`` list populated from the join tables."""
-        dept_id = str(uuid4())
+    def test_presentations_include_student_names(self, client, h, db):
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
+            headers=h,
+        )
+        sym_id = resp.json()["symposium_id"]
 
-        # Create a class
-        class_resp = integration_client.post(
+        resp = client.post(
+            "/api/events/add_department",
+            json={
+                "symposium_id": sym_id,
+                "department_name": "Chem",
+                "department_head_name": "Dr. C",
+                "email": "c@hamilton.edu",
+            },
+            headers=h,
+        )
+        dept_id = resp.json()["department_id"]
+
+        resp = client.post(
             "/api/events/add_class",
             json={
-                "name": "CHEM 201",
+                "name": "CHEM201",
                 "department_id": dept_id,
                 "professors": [{"name": "Dr. Lee", "email": "lee@hamilton.edu"}],
             },
-            headers=HEADERS,
+            headers=h,
         )
-        class_id = class_resp.json()["class_id"]
+        class_id = resp.json()["class_id"]
 
-        # Add two students
-        integration_client.post(
+        client.post(
             "/api/events/add_students",
             json={
                 "class_id": class_id,
@@ -257,74 +199,108 @@ class TestPresentationEnrichment:
                     {"name": "Dave", "email": "dave@hamilton.edu"},
                 ],
             },
-            headers=HEADERS,
+            headers=h,
         )
-        student_ids = [r["id"] for r in fake_supabase.rows("students")]
-        assert len(student_ids) == 2
+        student_ids = [str(r["id"]) for r in db.rows("students")]
 
-        # Add a presentation with both students
-        pres_resp = integration_client.post(
+        client.post(
             "/api/events/add_presentation",
             json={
                 "title": "Polymer Study",
                 "class_id": class_id,
                 "minutes": 15,
+                "buffer": 0,
                 "presenting_students": student_ids,
             },
-            headers=HEADERS,
+            headers=h,
         )
-        assert pres_resp.status_code == 200, pres_resp.text
 
-        # GET /presentations — should be enriched
-        resp = integration_client.get("/api/events/presentations", headers=HEADERS)
+        resp = client.get("/api/events/presentations", headers=h)
         assert resp.status_code == 200
         presentations = resp.json()["data"]
         assert len(presentations) == 1
-
         ps = presentations[0]["presenting_students"]
         assert len(ps) == 2
         names = {s["name"] for s in ps}
         assert names == {"Carol", "Dave"}
 
-    def test_presentations_empty_when_no_data(self, integration_client, fake_supabase):
-        resp = integration_client.get("/api/events/presentations", headers=HEADERS)
+    def test_presentations_empty_when_no_data(self, client, h, db):
+        resp = client.get("/api/events/presentations", headers=h)
         assert resp.status_code == 200
         assert resp.json()["data"] == []
 
 
-# ===========================================================================
-# Student update
-# ===========================================================================
+# ── Student update persistence ────────────────────────────────────────────
 
-class TestStudentUpdate:
-    def test_update_student_persists_to_db(self, integration_client, fake_supabase):
-        """PUT update_student actually mutates the in-memory row."""
-        class_id = str(uuid4())
-        integration_client.post(
+
+class TestStudentUpdatePersistence:
+    def test_update_student_persists(self, client, h, db):
+        resp = client.post(
+            "/api/events/add_symposium",
+            json={"symposium_name": "S", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
+            headers=h,
+        )
+        sym_id = resp.json()["symposium_id"]
+
+        resp = client.post(
+            "/api/events/add_department",
+            json={
+                "symposium_id": sym_id,
+                "department_name": "CS",
+                "department_head_name": "Dr. H",
+                "email": "h@hamilton.edu",
+            },
+            headers=h,
+        )
+        dept_id = resp.json()["department_id"]
+
+        resp = client.post(
+            "/api/events/add_class",
+            json={
+                "name": "CS101",
+                "department_id": dept_id,
+                "professors": [{"name": "Prof", "email": "prof@hamilton.edu"}],
+            },
+            headers=h,
+        )
+        class_id = resp.json()["class_id"]
+
+        client.post(
             "/api/events/add_students",
             json={
                 "class_id": class_id,
                 "students": [{"name": "Eve", "email": "eve@hamilton.edu"}],
             },
-            headers=HEADERS,
+            headers=h,
         )
-        student_id = fake_supabase.rows("students")[0]["id"]
-        pres_id = str(uuid4())
-        new_class_id = str(uuid4())
+        student_id = str(db.rows("students")[0]["id"])
 
-        resp = integration_client.put(
+        pres_resp = client.post(
+            "/api/events/add_presentation",
+            json={
+                "title": "Talk",
+                "class_id": class_id,
+                "minutes": 10,
+                "buffer": 0,
+                "presenting_students": [student_id],
+            },
+            headers=h,
+        )
+        pres_id = pres_resp.json()["presentation_id"]
+
+        resp = client.put(
             "/api/events/update_student",
             json={
                 "student_id": student_id,
                 "name": "Eve Updated",
                 "email": "eve2@hamilton.edu",
-                "class_id": new_class_id,
+                "class_id": class_id,
                 "presentation_id": pres_id,
             },
-            headers=HEADERS,
+            headers=h,
         )
         assert resp.status_code == 200
 
-        row = fake_supabase.rows("students")[0]
+        row = db.rows("students")[0]
         assert row["name"] == "Eve Updated"
         assert row["email"] == "eve2@hamilton.edu"

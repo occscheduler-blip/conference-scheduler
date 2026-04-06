@@ -8,6 +8,7 @@ _DEFAULT_DB_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 
 # Truncation order respects FK deps (children before parents)
 _TRUNCATE_ORDER = [
+    "otp_tokens",
     "requests", "presenting_students", "timeframes",
     "students", "professors", "presentations",
     "classes", "departments", "symposiums",

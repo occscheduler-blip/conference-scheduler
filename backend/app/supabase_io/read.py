@@ -23,9 +23,9 @@ def get_classes(department_id: UUID | list[UUID] | None = None) -> APIResponse:
 
     if department_id:
         if isinstance(department_id, UUID):
-            query = query.eq("department_id", department_id)
+            query = query.eq("department_id", str(department_id))
         elif isinstance(department_id, list):
-            query = query.in_("department_id", department_id)
+            query = query.in_("department_id", [str(uid) for uid in department_id])
         else:
             raise ValueError("department_id must be a UUID or list of UUIDs.")
 
@@ -37,9 +37,9 @@ def get_students(class_id: UUID | list[UUID] | None = None) -> APIResponse:
 
     if class_id:
         if isinstance(class_id, UUID):
-            query = query.eq("class_id", class_id)
+            query = query.eq("class_id", str(class_id))
         elif isinstance(class_id, list):
-            query = query.in_("class_id", class_id)
+            query = query.in_("class_id", [str(uid) for uid in class_id])
         else:
             raise ValueError("class_id must be a UUID or list of UUIDs.")
 
@@ -51,9 +51,9 @@ def get_professors(class_id: UUID | list[UUID] | None = None) -> APIResponse:
 
     if class_id:
         if isinstance(class_id, UUID):
-            query = query.eq("class_id", class_id)
+            query = query.eq("class_id", str(class_id))
         elif isinstance(class_id, list):
-            query = query.in_("class_id", class_id)
+            query = query.in_("class_id", [str(uid) for uid in class_id])
         else:
             raise ValueError("class_id must be a UUID or list of UUIDs.")
 
@@ -67,9 +67,9 @@ def get_presentations(
 
     if class_id:
         if isinstance(class_id, UUID):
-            query = query.eq("class_id", class_id)
+            query = query.eq("class_id", str(class_id))
         elif isinstance(class_id, list):
-            query = query.in_("class_id", class_id)
+            query = query.in_("class_id", [str(uid) for uid in class_id])
         else:
             raise ValueError("class_id must be a UUID or list of UUIDs.")
 
@@ -146,9 +146,9 @@ def get_presenting_students(
 
     if presentation_id:
         if isinstance(presentation_id, UUID):
-            query = query.eq("presentation_id", presentation_id)
+            query = query.eq("presentation_id", str(presentation_id))
         elif isinstance(presentation_id, list):
-            query = query.in_("presentation_id", presentation_id)
+            query = query.in_("presentation_id", [str(uid) for uid in presentation_id])
         else:
             raise ValueError("presentation_id must be a UUID or list of UUIDs.")
 
@@ -160,9 +160,9 @@ def get_timeframes(linked_id: UUID | list[UUID] | None = None) -> APIResponse:
 
     if linked_id:
         if isinstance(linked_id, UUID):
-            query = query.eq("linked_id", linked_id)
+            query = query.eq("linked_id", str(linked_id))
         elif isinstance(linked_id, list):
-            query = query.in_("linked_id", linked_id)
+            query = query.in_("linked_id", [str(uid) for uid in linked_id])
         else:
             raise ValueError("linked_id must be a UUID or list of UUIDs.")
 
@@ -174,9 +174,9 @@ def get_requests(student_id: UUID | list[UUID] | None = None) -> APIResponse:
 
     if student_id:
         if isinstance(student_id, UUID):
-            query = query.eq("student_id", student_id)
+            query = query.eq("student_id", str(student_id))
         elif isinstance(student_id, list):
-            query = query.in_("student_id", student_id)
+            query = query.in_("student_id", [str(uid) for uid in student_id])
         else:
             raise ValueError("student_id must be a UUID or list of UUIDs.")
 

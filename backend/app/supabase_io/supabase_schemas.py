@@ -9,6 +9,7 @@ class Symposium(BaseModel):
     created_at: datetime
     name: str
     rooms_available: int
+    default_buffer: int
 
 
 class Department(BaseModel):
@@ -45,9 +46,8 @@ class Presentation(BaseModel):
     title: str
     class_id: UUID
     minutes: int
-    buffer: int = 0
-    start_time: datetime | None
-    end_time: datetime | None
+    buffer: int | None
+    room: int | None = None
 
 
 class Timeframe(BaseModel):
