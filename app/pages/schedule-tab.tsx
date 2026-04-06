@@ -84,8 +84,18 @@ export default function ScheduleTab({
   const [editingPresentation, setEditingPresentation] = useState<SchedulePresentation | null>(null);
   const [editRoom, setEditRoom] = useState("");
   const [editStartTime, setEditStartTime] = useState("");
-  const [isSavingAssignment, setIsSavingAssignment] = useState(false);
+  const isSavingAssignment = false; // kept for disabled prop; modal save is now synchronous
   const [assignmentMessage, setAssignmentMessage] = useState<string | null>(null);
+
+  // Person name lookup for conflict messages
+  const [personNames, setPersonNames] = useState<Map<string, string>>(new Map());
+
+  // Pending changes (batched saves)
+  const [pendingChanges, setPendingChanges] = useState<
+    Map<string, { room: number; start_time: string; end_time: string }>
+  >(new Map());
+  const [isBulkSaving, setIsBulkSaving] = useState(false);
+  const [bulkSaveMessage, setBulkSaveMessage] = useState<string | null>(null);
 
   // Load symposia list
   const fetchSymposia = useCallback(async () => {
@@ -180,12 +190,15 @@ export default function ScheduleTab({
           class_id?: string;
           title?: string;
           minutes?: number;
+          buffer?: number;
           room?: number | null;
           presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
         };
         type RawStudent = { id?: string; name?: string };
 
-        const [rawPresentations, rawStudents] = await Promise.all([
+        type RawProfessor = { id?: string; name?: string; class_id?: string };
+
+        const [rawPresentations, rawStudents, rawProfessors] = await Promise.all([
           Promise.all(
             classRows.map(async (row) => {
               try {
@@ -208,7 +221,33 @@ export default function ScheduleTab({
               }
             })
           ),
+          Promise.all(
+            classRows.map(async (row) => {
+              try {
+                return await apiFetch<RawProfessor>(
+                  `/api/events/professors?class_id=${encodeURIComponent(row.id)}`
+                );
+              } catch {
+                return [];
+              }
+            })
+          ),
         ]);
+
+        // Professor IDs grouped by class_id (all professors in a class are resources for all its presentations)
+        const professorIdsByClass = new Map<string, string[]>();
+        const personNameById = new Map<string, string>();
+        for (const prof of rawProfessors.flat()) {
+          const cid = prof.class_id ?? "";
+          const pid = prof.id ?? "";
+          if (cid && pid) {
+            const arr = professorIdsByClass.get(cid) ?? [];
+            arr.push(normalizeId(pid));
+            professorIdsByClass.set(cid, arr);
+            const name = prof.name?.trim() ?? "";
+            if (name) personNameById.set(normalizeId(pid), name);
+          }
+        }
 
         const studentNameById = new Map(
           rawStudents
@@ -248,20 +287,35 @@ export default function ScheduleTab({
             const deptId = deptIdByClassId.get(row.class_id ?? "");
             const dept = deptId ? deptById.get(deptId) : undefined;
 
+            // Build resource IDs: professors (via class) + presenting students
+            const classId = row.class_id ?? "";
+            const resourceIds = new Set<string>(professorIdsByClass.get(classId) ?? []);
+            for (const s of row.presenting_students ?? []) {
+              const sid = normalizeId(s.id ?? s.student_id ?? "");
+              if (sid) {
+                resourceIds.add(sid);
+                const name = s.name?.trim() ?? "";
+                if (name) personNameById.set(sid, name);
+              }
+            }
+
             return {
               id: row.id ?? "",
               title: row.title?.trim() ?? "",
               class_id: row.class_id ?? "",
               minutes: row.minutes ?? 0,
+              buffer: row.buffer ?? 0,
               room: row.room ?? null,
               timeframe: presentationTimeframes[i] ?? null,
               presenterNames: Array.from(new Set(presenterNames)),
               departmentName: dept?.department_name ?? "",
+              resourceIds: Array.from(resourceIds),
             };
           })
           .filter((r): r is SchedulePresentation => Boolean(r.id && r.class_id));
 
         setPresentations(presentationRows);
+        setPersonNames(new Map(personNameById));
 
         const days = Array.from(new Set(symTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time)))));
         setSelectedDay((prev) => (days.includes(prev) ? prev : days[0] ?? ""));
@@ -351,6 +405,8 @@ export default function ScheduleTab({
       setSchedulerMessage(
         `Schedule ${status}. ${assignments.length} assigned, ${unscheduledIds.length} unscheduled.`
       );
+      setPendingChanges(new Map());
+      setBulkSaveMessage(null);
       await fetchScheduleData(selectedSymposiumId);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
@@ -381,7 +437,7 @@ export default function ScheduleTab({
     setAssignmentMessage(null);
   };
 
-  const handleSaveAssignment = async () => {
+  const handleSaveAssignment = () => {
     if (!editingPresentation || !selectedSymposiumId) return;
     if (!editStartTime) {
       setAssignmentMessage("Please select a start time.");
@@ -394,29 +450,109 @@ export default function ScheduleTab({
       return;
     }
 
+    const room = Number(editRoom);
     const endDate = new Date(startDate.getTime() + editingPresentation.minutes * 60 * 1000);
+    const startISO = startDate.toISOString();
+    const endISO = endDate.toISOString();
+    // Extend end times by buffer minutes for conflict detection
+    const bufferMs = editingPresentation.buffer * 60 * 1000;
+    const newStart = startDate.getTime();
+    const newBufferedEnd = endDate.getTime() + bufferMs;
 
-    setIsSavingAssignment(true);
-    setAssignmentMessage(null);
+    // Client-side conflict detection against current schedule state
+    const targetResources = new Set(editingPresentation.resourceIds);
+    for (const other of presentations) {
+      if (other.id === editingPresentation.id) continue;
+      if (other.room === null || !other.timeframe) continue;
+
+      const otherStart = parseBackendDateTime(other.timeframe.start_time).getTime();
+      const otherEnd = parseBackendDateTime(other.timeframe.end_time).getTime();
+      const otherBufferedEnd = otherEnd + other.buffer * 60 * 1000;
+
+      // Overlap check includes buffer on both sides
+      const overlap = newStart < otherBufferedEnd && newBufferedEnd > otherStart;
+      if (!overlap) continue;
+
+      // Room conflict
+      if (other.room === room) {
+        setAssignmentMessage(
+          `Room conflict: Room ${room + 1} is already occupied by "${other.title}" at that time (including buffer).`
+        );
+        return;
+      }
+
+      // Person conflict
+      const otherResources = new Set(other.resourceIds);
+      for (const rid of targetResources) {
+        if (otherResources.has(rid)) {
+          const name = personNames.get(rid) ?? "Someone";
+          setAssignmentMessage(
+            `Scheduling conflict: "${name}" is required at both this presentation and "${other.title}" at that time (including buffer).`
+          );
+          return;
+        }
+      }
+    }
+
+    // Store in pending changes
+    setPendingChanges((prev) => {
+      const next = new Map(prev);
+      next.set(editingPresentation.id, { room, start_time: startISO, end_time: endISO });
+      return next;
+    });
+
+    // Optimistically update local presentations state
+    setPresentations((prev) =>
+      prev.map((p) =>
+        p.id === editingPresentation.id
+          ? {
+              ...p,
+              room,
+              timeframe: { id: p.timeframe?.id ?? "", linked_id: p.id, start_time: startISO, end_time: endISO },
+            }
+          : p
+      )
+    );
+
+    setBulkSaveMessage(null);
+    setEditingPresentation(null);
+  };
+
+  const handleBulkSave = async () => {
+    if (pendingChanges.size === 0 || !selectedSymposiumId) return;
+
+    setIsBulkSaving(true);
+    setBulkSaveMessage(null);
     try {
+      const assignments = Array.from(pendingChanges.entries()).map(([presId, change]) => ({
+        presentation_id: presId,
+        room: change.room,
+        start_time: change.start_time,
+        end_time: change.end_time,
+      }));
+
       await apiPut(
-        "/api/events/update_schedule_assignment",
-        {
-          symposium_id: selectedSymposiumId,
-          presentation_id: editingPresentation.id,
-          room: Number(editRoom),
-          start_time: startDate.toISOString(),
-          end_time: endDate.toISOString(),
-        },
+        "/api/events/bulk_update_schedule_assignments",
+        { symposium_id: selectedSymposiumId, assignments },
         authHeaders
       );
-      setEditingPresentation(null);
+
+      setPendingChanges(new Map());
+      setBulkSaveMessage(`Saved ${assignments.length} assignment(s).`);
       await fetchScheduleData(selectedSymposiumId);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      setAssignmentMessage(msg);
+      setBulkSaveMessage(msg);
     } finally {
-      setIsSavingAssignment(false);
+      setIsBulkSaving(false);
+    }
+  };
+
+  const handleDiscardChanges = async () => {
+    setPendingChanges(new Map());
+    setBulkSaveMessage(null);
+    if (selectedSymposiumId) {
+      await fetchScheduleData(selectedSymposiumId);
     }
   };
 
@@ -438,7 +574,7 @@ export default function ScheduleTab({
         </label>
         <select
           value={selectedSymposiumId}
-          onChange={(e) => setSelectedSymposiumId(e.target.value)}
+          onChange={(e) => { setSelectedSymposiumId(e.target.value); setPendingChanges(new Map()); setBulkSaveMessage(null); }}
           disabled={isLoadingSymposia}
           className={fieldClass + " mt-2"}
         >
@@ -468,6 +604,37 @@ export default function ScheduleTab({
             </p>
           ) : null}
         </div>
+      ) : null}
+
+      {/* Save / Discard buttons for pending changes */}
+      {pendingChanges.size > 0 ? (
+        <div className="flex items-center gap-3 rounded-lg border border-[#d6b676] bg-[#fffbe6] px-4 py-2.5">
+          <span className="text-sm font-semibold text-[#7a6100]">
+            {pendingChanges.size} unsaved change{pendingChanges.size !== 1 ? "s" : ""}
+          </span>
+          <button
+            type="button"
+            onClick={handleBulkSave}
+            disabled={isBulkSaving}
+            className="rounded-lg bg-[#0f33a8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] disabled:opacity-50"
+          >
+            {isBulkSaving ? "Saving..." : "Save Changes"}
+          </button>
+          <button
+            type="button"
+            onClick={handleDiscardChanges}
+            disabled={isBulkSaving}
+            className="rounded-lg border border-[#9a1f1f] bg-white px-5 py-2 text-sm font-semibold text-[#9a1f1f] transition hover:bg-[#fff0f0] disabled:opacity-50"
+          >
+            Discard
+          </button>
+        </div>
+      ) : null}
+
+      {bulkSaveMessage ? (
+        <p className={`text-sm font-semibold ${bulkSaveMessage.startsWith("Saved") ? "text-[#1b6e2b]" : "text-[#9a1f1f]"}`}>
+          {bulkSaveMessage}
+        </p>
       ) : null}
 
       {message ? <p className="text-sm font-semibold text-[#9a1f1f]">{message}</p> : null}
@@ -751,7 +918,7 @@ export default function ScheduleTab({
                   disabled={isSavingAssignment}
                   className="rounded-lg bg-[#0f33a8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] disabled:opacity-50"
                 >
-                  {isSavingAssignment ? "Saving..." : "Save"}
+                  Apply
                 </button>
                 <button
                   type="button"
