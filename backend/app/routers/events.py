@@ -1,3 +1,5 @@
+import logging
+
 from datetime import datetime, timedelta, timezone, date
 from types import SimpleNamespace
 from typing import Any
@@ -8,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
 from app.utils import rows_affected as _rows_affected
+
+logger = logging.getLogger(__name__)
 from app.supabase_io import delete, read, write
 from app.supabase_io.nested_read import (
     CLASS_CHILDREN,
@@ -83,6 +87,7 @@ def add_symposium(
         dict[str, Any]: status payload with inserted record counts.
     """
     try:
+        logger.info("add_symposium: name=%s  rooms=%s  timeframes=%d", payload.symposium_name, payload.rooms_available, len(payload.timeframes))
         symposium_id = uuid4()
         symposium = supabase_schemas.Symposium(
             id=symposium_id,
@@ -124,8 +129,10 @@ def add_symposium(
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("add_symposium validation error: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("add_symposium failed")
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -137,6 +144,7 @@ def add_department(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     try:
+        logger.info("add_department: name=%s  symposium_id=%s", payload.department_name, payload.symposium_id)
         department = supabase_schemas.Department(
             id=uuid4(),
             department_name=payload.department_name,
@@ -159,8 +167,10 @@ def add_department(
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("add_department validation error: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("add_department failed")
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -172,6 +182,7 @@ def update_symposium(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
+        logger.info("update_symposium: symposium_id=%s", payload.symposium_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"symposium_id", "timeframes"},
@@ -225,6 +236,7 @@ def update_symposium(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("update_symposium failed: symposium_id=%s", payload.symposium_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to update symposium: {exc}"
         ) from exc
@@ -236,9 +248,11 @@ def delete_symposium(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str | int | dict[str, int]]:
     try:
+        logger.info("delete_symposium: symposium_id=%s", symposium_id)
         counts = _normalize_counts(
             delete.delete_symposium(symposium_id), {"symposiums": 1}
         )
+        logger.info("delete_symposium complete: counts=%s", counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -247,6 +261,7 @@ def delete_symposium(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("delete_symposium failed: symposium_id=%s", symposium_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete symposium: {exc}"
         ) from exc
@@ -258,9 +273,11 @@ def delete_department(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str | int | dict[str, int]]:
     try:
+        logger.info("delete_department: department_id=%s", department_id)
         counts = _normalize_counts(
             delete.delete_department(department_id), {"departments": 1}
         )
+        logger.info("delete_department complete: counts=%s", counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -269,6 +286,7 @@ def delete_department(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("delete_department failed: department_id=%s", department_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete department: {exc}"
         ) from exc
@@ -283,6 +301,7 @@ def add_class(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
 ) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     try:
+        logger.info("add_class: name=%s  department_id=%s  professors=%d", payload.name, payload.department_id, len(payload.professors))
         class_id = uuid4()
         class_def = supabase_schemas.Class(
             id=class_id, name=payload.name, department_id=payload.department_id
@@ -318,8 +337,10 @@ def add_class(
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("add_class validation error: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("add_class failed")
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -331,6 +352,7 @@ def update_department(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
+        logger.info("update_department: department_id=%s", payload.department_id)
         update_payload = {
             "department_name": payload.department_name,
             "department_head_name": payload.department_head_name,
@@ -360,6 +382,7 @@ def update_department(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("update_department failed: department_id=%s", payload.department_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to update department: {exc}"
         ) from exc
@@ -371,9 +394,11 @@ def delete_professor(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
 ) -> dict[str, str | int | dict[str, int]]:
     try:
+        logger.info("delete_professor: professor_id=%s", professor_id)
         counts = _normalize_counts(
             delete.delete_professor(professor_id), {"professors": 1}
         )
+        logger.info("delete_professor complete: counts=%s", counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -382,6 +407,7 @@ def delete_professor(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("delete_professor failed: professor_id=%s", professor_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete professor: {exc}"
         ) from exc
@@ -393,7 +419,9 @@ def delete_class(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
 ) -> dict[str, str | int | dict[str, int]]:
     try:
+        logger.info("delete_class: class_id=%s", class_id)
         counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
+        logger.info("delete_class complete: counts=%s", counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -402,6 +430,7 @@ def delete_class(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("delete_class failed: class_id=%s", class_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete class: {exc}"
         ) from exc
@@ -417,6 +446,7 @@ def add_students(
 ) -> dict[str, str | int | UUID | list[UUID] | dict[str, int]]:
     """Adds a list of students to the students table in the database."""
     try:
+        logger.info("add_students: class_id=%s  count=%d", payload.class_id, len(payload.students))
         students: list[supabase_schemas.Student] = []
         for student in payload.students:
             students.append(
@@ -442,8 +472,10 @@ def add_students(
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("add_students validation error: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("add_students failed: class_id=%s", payload.class_id)
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -455,6 +487,7 @@ def add_presentation(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
+        logger.info("add_presentation: title=%s  class_id=%s  minutes=%d  students=%d", payload.title, payload.class_id, payload.minutes, len(payload.presenting_students))
         presentation_id = uuid4()
         presentation_payload: dict[str, str | int | UUID | datetime | date | None] = {
             "id": presentation_id,
@@ -500,8 +533,10 @@ def add_presentation(
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("add_presentation validation error: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("add_presentation failed")
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -513,7 +548,12 @@ def run_schedule(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, object]:
     try:
+        logger.info("run_schedule: symposium_id=%s", body.symposium_id)
         result = build_schedule_for_symposium(body.symposium_id, slot_minutes=1)
+        logger.info(
+            "run_schedule complete: status=%s  assignments=%d  unscheduled=%d",
+            result.status, len(result.assignments), len(result.unscheduled_presentations),
+        )
 
         return {
             "status": result.status,
@@ -534,6 +574,7 @@ def run_schedule(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("run_schedule failed: symposium_id=%s", body.symposium_id)
         raise HTTPException(
             status_code=500, detail=f"Failed to run scheduler: {exc}"
         ) from exc
@@ -545,6 +586,7 @@ def update_class(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
+        logger.info("update_class: class_id=%s", payload.class_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"class_id"},
@@ -572,6 +614,7 @@ def update_class(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("update_class failed: class_id=%s", payload.class_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to update class: {exc}"
         ) from exc
@@ -583,9 +626,11 @@ def delete_presentation(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | dict[str, int]]:
     try:
+        logger.info("delete_presentation: presentation_id=%s", presentation_id)
         counts = _normalize_counts(
             delete.delete_presentation(presentation_id), {"presentations": 1}
         )
+        logger.info("delete_presentation complete: counts=%s", counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -594,6 +639,7 @@ def delete_presentation(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("delete_presentation failed: presentation_id=%s", presentation_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete presentation: {exc}"
         ) from exc
@@ -605,7 +651,9 @@ def delete_student(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | dict[str, int]]:
     try:
+        logger.info("delete_student: student_id=%s", student_id)
         counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
+        logger.info("delete_student complete: counts=%s", counts)
         return {
             "status": "deleted",
             "records_deleted": counts,
@@ -614,6 +662,7 @@ def delete_student(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("delete_student failed: student_id=%s", student_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to delete student: {exc}"
         ) from exc
@@ -628,6 +677,7 @@ def update_student(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
+        logger.info("update_student: student_id=%s", payload.student_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"student_id"},
@@ -655,6 +705,7 @@ def update_student(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("update_student failed: student_id=%s", payload.student_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to update student: {exc}"
         ) from exc
@@ -666,6 +717,7 @@ def update_professor(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
+        logger.info("update_professor: professor_id=%s", payload.professor_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"professor_id"},
@@ -693,6 +745,7 @@ def update_professor(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("update_professor failed: professor_id=%s", payload.professor_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to update professor: {exc}"
         ) from exc
@@ -704,6 +757,7 @@ def add_request(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
 ) -> dict[str, str | int | dict[str, int]]:
     try:
+        logger.info("add_request: student_id=%s  name=%s", payload.student_id, payload.name)
         request = supabase_schemas.Request(
             id=uuid4(),
             name=payload.name,
@@ -725,8 +779,10 @@ def add_request(
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.warning("add_request validation error: %s", exc)
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("add_request failed")
         raise HTTPException(
             status_code=500, detail=f"Failed to validate symposium payload: {exc}"
         ) from exc
@@ -739,6 +795,7 @@ def update_schedule_assignment(
 ) -> dict[str, str | int]:
     """Atomically update a presentation's room and time slot with conflict detection."""
     try:
+        logger.info("update_schedule_assignment: presentation_id=%s  room=%s  symposium_id=%s", payload.presentation_id, payload.room, payload.symposium_id)
         symposium_id = str(payload.symposium_id)
         presentation_id = str(payload.presentation_id)
 
@@ -897,6 +954,7 @@ def update_schedule_assignment(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("update_schedule_assignment failed: presentation_id=%s", payload.presentation_id)
         raise HTTPException(
             status_code=500, detail=f"Failed to update schedule assignment: {exc}"
         ) from exc
@@ -909,6 +967,7 @@ def bulk_update_schedule_assignments(
 ) -> dict[str, object]:
     """Batch-update multiple presentation room/time assignments with conflict detection."""
     try:
+        logger.info("bulk_update_schedule_assignments: symposium_id=%s  count=%d", payload.symposium_id, len(payload.assignments))
         symposium_id = str(payload.symposium_id)
         assignment_map: dict[str, request_schemas.SingleScheduleAssignment] = {
             str(a.presentation_id): a for a in payload.assignments
@@ -1087,6 +1146,7 @@ def bulk_update_schedule_assignments(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("bulk_update_schedule_assignments failed: symposium_id=%s", payload.symposium_id)
         raise HTTPException(
             status_code=500, detail=f"Failed to bulk update schedule assignments: {exc}"
         ) from exc
@@ -1098,6 +1158,7 @@ def update_timeframes(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
 ) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
+        logger.info("update_timeframes: linked_id=%s  count=%d", payload.linked_id, len(payload.timeframes))
         deleted_timeframes = delete.delete_timeframes(payload.linked_id)
 
         timeframes = [
@@ -1129,6 +1190,7 @@ def update_timeframes(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("update_timeframes failed: linked_id=%s", payload.linked_id)
         raise HTTPException(
             status_code=500, detail=f"Failed to update timeframes: {exc}"
         ) from exc
@@ -1140,6 +1202,7 @@ def update_presentation(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
 ) -> dict[str, str | int | bool | list[str] | dict[str, int]]:
     try:
+        logger.info("update_presentation: presentation_id=%s", payload.presentation_id)
         updates = payload.model_dump(
             exclude_none=True,
             exclude={"presentation_id", "presenting_students"},
@@ -1206,6 +1269,7 @@ def update_presentation(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
+        logger.exception("update_presentation failed: presentation_id=%s", payload.presentation_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to update presentation: {exc}"
         ) from exc
@@ -1221,6 +1285,7 @@ def get_symposiums() -> APIResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_symposiums failed")
         raise HTTPException(
             status_code=400, detail=f"Failed to get symposiums: {exc}"
         ) from exc
@@ -1249,6 +1314,7 @@ def get_symposium(symposium_id: UUID) -> dict[str, object]:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_symposium failed: symposium_id=%s", symposium_id)
         raise HTTPException(
             status_code=400, detail=f"Failed to get symposium: {exc}"
         ) from exc
@@ -1269,6 +1335,7 @@ def get_departments(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_departments failed")
         raise HTTPException(
             status_code=400, detail=f"Failed to get departments: {exc}"
         ) from exc
@@ -1287,6 +1354,7 @@ def get_classes(
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_classes failed")
         raise HTTPException(
             status_code=400, detail=f"Failed to get classes: {exc}"
         ) from exc
@@ -1299,6 +1367,7 @@ def get_students(class_id: UUID | None = None) -> APIResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_students failed")
         raise HTTPException(
             status_code=400, detail=f"Failed to get students: {exc}"
         ) from exc
@@ -1311,6 +1380,7 @@ def get_presentations(class_id: UUID | None = None) -> SimpleNamespace | APIResp
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_presentations failed")
         raise HTTPException(
             status_code=400, detail=f"Failed to get presentations: {exc}"
         ) from exc
@@ -1323,6 +1393,7 @@ def get_professors(class_id: UUID | None = None) -> APIResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_professors failed")
         raise HTTPException(
             status_code=400, detail=f"Failed to get professors: {exc}"
         ) from exc
@@ -1335,6 +1406,7 @@ def get_timeframes(linked_id: UUID | None = None) -> APIResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_timeframes failed")
         raise HTTPException(
             status_code=400, detail=f"Failed to get timeframes: {exc}"
         ) from exc
@@ -1347,6 +1419,7 @@ def get_requests(student_id: UUID | None = None) -> APIResponse:
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("get_requests failed")
         raise HTTPException(
             status_code=400, detail=f"Failed to get requests: {exc}"
         ) from exc

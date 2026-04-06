@@ -1,9 +1,13 @@
+import logging
+
 from app.supabase_io.client import supabase
 from uuid import UUID
 from app.supabase_io import read
 from postgrest.types import CountMethod
 from typing import cast
 from app.utils import force_uuid, rows_affected as _rows_affected
+
+logger = logging.getLogger(__name__)
 
 
 def _merge_counts(target: dict[str, int], source: dict[str, int] | None) -> None:
@@ -22,6 +26,7 @@ def _safe_count(value: object) -> int:
 
 
 def delete_timeframes(linked_id: UUID | list[UUID]) -> int:
+    logger.info("DELETE timeframes: linked_id=%s", linked_id)
     del_timeframes_query = supabase.table("timeframes").delete()
     count_query = supabase.table("timeframes").select("linked_id", count=CountMethod.exact)
 
@@ -43,6 +48,7 @@ def delete_timeframes(linked_id: UUID | list[UUID]) -> int:
 
 
 def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
+    logger.info("DELETE student: student_id=%s", student_id)
     # TODO: Make sure that if the last student is deleted from a presentation, the presentation is deleted as well.
     del_stu_query = supabase.table("students").delete()
     del_presenting_student_query = supabase.table("presenting_students").delete()
@@ -76,6 +82,7 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
 
 
 def delete_professor(prof_id: UUID | list[UUID]) -> dict[str, int]:
+    logger.info("DELETE professor: prof_id=%s", prof_id)
     # TODO: What to do when the last professor in a class/presentation is removed?
     # Note: requests are linked to students (not professors) — no requests cleanup needed here.
     del_prof_query = supabase.table("professors").delete()
@@ -94,6 +101,7 @@ def delete_professor(prof_id: UUID | list[UUID]) -> dict[str, int]:
 
 
 def delete_presentation(presentation_id: UUID | list[UUID]) -> dict[str, int]:
+    logger.info("DELETE presentation: presentation_id=%s", presentation_id)
     del_pres_query = supabase.table("presentations").delete()
     del_presenting_student_query = supabase.table("presenting_students").delete()
 
@@ -128,6 +136,7 @@ def delete_multiple_classes(class_ids: list[UUID]) -> dict[str, int]:
 
 
 def delete_class(class_id: UUID | list[UUID]) -> dict[str, int]:
+    logger.info("DELETE class: class_id=%s", class_id)
     if isinstance(class_id, list):
         return delete_multiple_classes(class_id)
 
@@ -169,6 +178,7 @@ def delete_multiple_departments(department_ids: list[UUID]) -> dict[str, int]:
 
 
 def delete_department(department_id: UUID | list[UUID]) -> dict[str, int]:
+    logger.info("DELETE department: department_id=%s", department_id)
     if isinstance(department_id, list):
         return delete_multiple_departments(department_id)
 
@@ -192,6 +202,7 @@ def delete_department(department_id: UUID | list[UUID]) -> dict[str, int]:
 
 
 def delete_symposium(symposium_id: UUID) -> dict[str, int]:
+    logger.info("DELETE symposium: symposium_id=%s", symposium_id)
     counts: dict[str, int] = {}
     departments = cast(list[dict[str, str]], read.get_departments(symposium_id).data)
     for department in departments:

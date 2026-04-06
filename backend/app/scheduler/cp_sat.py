@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from math import ceil
 
 from ortools.sat.python import cp_model
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     AvailabilityWindow,
@@ -74,9 +77,125 @@ def _eligible_starts(
     return tuple(starts)
 
 
+def _objective_weighted_sum(
+    makespan: cp_model.IntVar,
+    soft_availability_terms: list[cp_model.IntVar],
+    class_span_terms: list[cp_model.IntVar],
+    professor_span_terms: list[cp_model.IntVar],
+    room_imbalance_terms: list[cp_model.IntVar],
+    horizon_slots: int,
+) -> cp_model.LinearExpr:
+    max_room_imbalance = max(len(room_imbalance_terms), 1) * horizon_slots
+    max_professor_span = max(len(professor_span_terms), 1) * horizon_slots
+    max_class_span = max(len(class_span_terms), 1) * horizon_slots
+    max_soft_availability = max(len(soft_availability_terms), 1) * max(
+        len(soft_availability_terms), 1
+    )
+
+    room_weight = 1
+    professor_weight = max_room_imbalance + 1
+    class_weight = max_professor_span * professor_weight + max_room_imbalance + 1
+    soft_availability_weight = (
+        max_class_span * class_weight
+        + max_professor_span * professor_weight
+        + max_room_imbalance
+        + 1
+    )
+    makespan_weight = (
+        max_soft_availability * soft_availability_weight
+        + max_class_span * class_weight
+        + max_professor_span * professor_weight
+        + max_room_imbalance
+        + 1
+    )
+
+    return (
+        makespan * makespan_weight
+        + sum(soft_availability_terms) * soft_availability_weight
+        + sum(class_span_terms) * class_weight
+        + sum(professor_span_terms) * professor_weight
+        + sum(room_imbalance_terms) * room_weight
+    )
+
+
+def _build_admin_suggestions(
+    problem: ScheduleProblem,
+    diagnostics: tuple[str, ...],
+    unscheduled_presentations: tuple[str, ...],
+) -> tuple[str, ...]:
+    suggestions: list[str] = []
+    total_room_minutes = (
+        sum(
+            int((window.end - window.start).total_seconds() // 60)
+            for window in problem.symposium_windows
+        )
+        * problem.rooms_available
+    )
+    total_required_minutes = sum(
+        presentation.duration_minutes + presentation.buffer_minutes
+        for presentation in problem.presentations
+    )
+
+    blocked_by_professor = any(
+        "no valid start times" in message.lower()
+        for message in diagnostics
+    ) and bool(problem.professor_resource_ids)
+    if blocked_by_professor:
+        suggestions.append(
+            "Review professor availability windows for the blocked presentations or widen those windows in the admin settings."
+        )
+
+    class_ids = {presentation.class_id for presentation in problem.presentations if presentation.class_id}
+    if class_ids:
+        suggestions.append(
+            "Change the 'same class must stay in the same room' rule from hard to soft if you want the solver to use more rooms."
+        )
+
+    if any(presentation.buffer_minutes > 0 for presentation in problem.presentations):
+        suggestions.append(
+            "Reduce the required room buffer between presentations, or make that rule softer, to free more scheduling options."
+        )
+
+    if problem.soft_resource_windows:
+        suggestions.append(
+            "Keep student availability as a soft preference, but consider lowering its weight if student preferences are crowding the schedule."
+        )
+
+    if total_required_minutes > total_room_minutes:
+        suggestions.append(
+            "There is not enough total room time to place every presentation. Add more symposium time or increase the number of rooms."
+        )
+    else:
+        suggestions.append(
+            "Increase room count or expand symposium timeframes if you want to preserve the current hard constraints."
+        )
+
+    if unscheduled_presentations:
+        suggestions.append(
+            "Open the blocked presentations in the admin editor and relax one hard rule at a time, then rerun the scheduler to see which rule is causing infeasibility."
+        )
+
+    fallback_suggestions = (
+        "Review the hard-vs-soft settings for room usage, class grouping, and availability, then rerun the scheduler.",
+        "Inspect the unscheduled presentations first and compare their durations, buffers, and attached people against the available windows.",
+        "Keep 'all presentations must be scheduled' as a hard rule, and adjust time, rooms, or editable constraint settings around it.",
+    )
+    for suggestion in fallback_suggestions:
+        if len(suggestions) >= 3:
+            break
+        if suggestion not in suggestions:
+            suggestions.append(suggestion)
+
+    return tuple(suggestions[:3])
+
+
 def solve_schedule(
     problem: ScheduleProblem, time_limit_seconds: float = 10.0
 ) -> ScheduleResult:
+    logger.info(
+        "solve_schedule: presentations=%d  rooms=%d  windows=%d  time_limit=%.1fs",
+        len(problem.presentations), problem.rooms_available, len(problem.symposium_windows), time_limit_seconds,
+    )
     if problem.rooms_available < 1:
         return ScheduleResult(
             status="invalid",
@@ -98,6 +217,11 @@ def solve_schedule(
             assignments=(),
             unscheduled_presentations=tuple(p.id for p in problem.presentations),
             diagnostics=("No symposium availability windows were provided.",),
+            suggestions=(
+                "Add at least one symposium timeframe before running the scheduler.",
+                "Increase the symposium date range if presentations need more placement options.",
+                "Review the scheduling settings and rerun after adding availability.",
+            ),
         )
 
     if not problem.presentations:
@@ -110,6 +234,10 @@ def solve_schedule(
     resource_windows = {
         resource_id: _normalize_windows(windows)
         for resource_id, windows in problem.resource_windows.items()
+    }
+    soft_resource_windows = {
+        resource_id: _normalize_windows(windows)
+        for resource_id, windows in problem.soft_resource_windows.items()
     }
 
     eligible_starts: dict[str, tuple[datetime, ...]] = {}
@@ -139,11 +267,17 @@ def solve_schedule(
             )
 
     if unschedulable:
+        suggestions = _build_admin_suggestions(
+            problem=problem,
+            diagnostics=tuple(diagnostics),
+            unscheduled_presentations=tuple(unschedulable),
+        )
         return ScheduleResult(
             status="infeasible",
             assignments=(),
             unscheduled_presentations=tuple(unschedulable),
             diagnostics=tuple(diagnostics),
+            suggestions=suggestions,
         )
 
     model = cp_model.CpModel()
@@ -151,10 +285,14 @@ def solve_schedule(
     start_index_vars: dict[str, cp_model.IntVar] = {}
     end_index_vars: dict[str, cp_model.IntVar] = {}
     option_lookup: dict[tuple[str, int, int], tuple[datetime, datetime]] = {}
+    soft_penalty_lookup: dict[tuple[str, int], int] = {}
     all_instants: set[datetime] = set()
     step = timedelta(minutes=problem.slot_minutes)
 
     base_time = min(window.start for window in symposium_windows)
+    horizon_slots = max(
+        int((window.end - base_time) / step) for window in symposium_windows
+    )
 
     for presentation in problem.presentations:
         option_indices: list[int] = []
@@ -169,6 +307,14 @@ def solve_schedule(
             all_instants.add(buffered_end)
             start_slot = int((start_time - base_time) / step)
             option_indices.append(start_slot)
+            soft_penalty_lookup[(presentation.id, option_index)] = sum(
+                1
+                for resource_id in presentation.resource_ids
+                if resource_id in soft_resource_windows
+                and not _window_contains(
+                    soft_resource_windows[resource_id], start_time, end_time
+                )
+            )
             for room_index in range(problem.rooms_available):
                 var = model.NewBoolVar(
                     f"assign_{presentation.id}_{option_index}_{room_index}"
@@ -212,11 +358,14 @@ def solve_schedule(
         )
         model.Add(end_index == start_index + durations_slots)
 
-    # Group presentations by class and enforce same-room constraint
+    # Group presentations by class and enforce same-room constraint.
     presentations_by_class: dict[str, list[PresentationInput]] = defaultdict(list)
+    presentations_by_resource: dict[str, list[PresentationInput]] = defaultdict(list)
     for presentation in problem.presentations:
         if presentation.class_id:
             presentations_by_class[presentation.class_id].append(presentation)
+        for resource_id in presentation.resource_ids:
+            presentations_by_resource[resource_id].append(presentation)
 
     for class_id, class_presentations in presentations_by_class.items():
         if len(class_presentations) < 2:
@@ -272,20 +421,127 @@ def solve_schedule(
                 model.Add(sum(overlapping) <= 1)
 
     makespan = model.NewIntVar(0, 1000000, "makespan")
-    "soft contraint: try ti minimize the overall finishing time of symposium"
     model.AddMaxEquality(makespan, list(end_index_vars.values()))
-    model.Minimize(makespan)
+
+    soft_availability_terms: list[cp_model.IntVar] = []
+    total_soft_penalty = model.NewIntVar(
+        0, len(problem.presentations) * max(len(soft_resource_windows), 1), "soft_availability_penalty"
+    )
+    model.Add(
+        total_soft_penalty
+        == sum(
+            soft_penalty_lookup[(presentation.id, option_index)]
+            * assignment_vars[(presentation.id, option_index, room_index)]
+            for presentation in problem.presentations
+            for option_index in range(len(eligible_starts[presentation.id]))
+            for room_index in range(problem.rooms_available)
+        )
+    )
+    soft_availability_terms.append(total_soft_penalty)
+
+    class_span_terms: list[cp_model.IntVar] = []
+    for class_id, class_presentations in presentations_by_class.items():
+        if len(class_presentations) < 2:
+            continue
+        class_start = model.NewIntVar(0, horizon_slots, f"class_start_{class_id}")
+        class_end = model.NewIntVar(0, horizon_slots, f"class_end_{class_id}")
+        class_span = model.NewIntVar(0, horizon_slots, f"class_span_{class_id}")
+        model.AddMinEquality(
+            class_start,
+            [start_index_vars[presentation.id] for presentation in class_presentations],
+        )
+        model.AddMaxEquality(
+            class_end,
+            [end_index_vars[presentation.id] for presentation in class_presentations],
+        )
+        model.Add(class_span == class_end - class_start)
+        class_span_terms.append(class_span)
+
+    professor_span_terms: list[cp_model.IntVar] = []
+    for resource_id in problem.professor_resource_ids:
+        resource_presentations = presentations_by_resource.get(resource_id, [])
+        if len(resource_presentations) < 2:
+            continue
+        professor_start = model.NewIntVar(
+            0, horizon_slots, f"professor_start_{resource_id}"
+        )
+        professor_end = model.NewIntVar(
+            0, horizon_slots, f"professor_end_{resource_id}"
+        )
+        professor_span = model.NewIntVar(
+            0, horizon_slots, f"professor_span_{resource_id}"
+        )
+        model.AddMinEquality(
+            professor_start,
+            [start_index_vars[presentation.id] for presentation in resource_presentations],
+        )
+        model.AddMaxEquality(
+            professor_end,
+            [end_index_vars[presentation.id] for presentation in resource_presentations],
+        )
+        model.Add(professor_span == professor_end - professor_start)
+        professor_span_terms.append(professor_span)
+
+    room_load_terms: list[cp_model.IntVar] = []
+    room_imbalance_terms: list[cp_model.IntVar] = []
+    if problem.rooms_available > 1:
+        for room_index in range(problem.rooms_available):
+            room_load = model.NewIntVar(
+                0, len(problem.presentations), f"room_load_{room_index}"
+            )
+            model.Add(
+                room_load
+                == sum(
+                    assignment_vars[(presentation.id, option_index, room_index)]
+                    for presentation in problem.presentations
+                    for option_index in range(len(eligible_starts[presentation.id]))
+                )
+            )
+            room_load_terms.append(room_load)
+
+        max_room_load = model.NewIntVar(
+            0, len(problem.presentations), "max_room_load"
+        )
+        min_room_load = model.NewIntVar(
+            0, len(problem.presentations), "min_room_load"
+        )
+        room_imbalance = model.NewIntVar(
+            0, len(problem.presentations), "room_imbalance"
+        )
+        model.AddMaxEquality(max_room_load, room_load_terms)
+        model.AddMinEquality(min_room_load, room_load_terms)
+        model.Add(room_imbalance == max_room_load - min_room_load)
+        room_imbalance_terms.append(room_imbalance)
+
+    model.Minimize(
+        _objective_weighted_sum(
+            makespan=makespan,
+            soft_availability_terms=soft_availability_terms,
+            class_span_terms=class_span_terms,
+            professor_span_terms=professor_span_terms,
+            room_imbalance_terms=room_imbalance_terms,
+            horizon_slots=horizon_slots,
+        )
+    )
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
 
+    logger.info("Starting CP-SAT solver with %d variables", len(assignment_vars))
     status = solver.Solve(model)
+    logger.info("CP-SAT solver finished: status=%s  wall_time=%.2fs", solver.StatusName(status), solver.WallTime())
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        suggestions = _build_admin_suggestions(
+            problem=problem,
+            diagnostics=("CP-SAT could not find a feasible schedule.",),
+            unscheduled_presentations=tuple(p.id for p in problem.presentations),
+        )
         return ScheduleResult(
             status="infeasible",
             assignments=(),
             unscheduled_presentations=tuple(p.id for p in problem.presentations),
             diagnostics=("CP-SAT could not find a feasible schedule.",),
+            suggestions=suggestions,
         )
 
     assignments: list[ScheduledPresentation] = []

@@ -1,9 +1,12 @@
+import logging
 from types import SimpleNamespace
 from app.supabase_io.client import supabase
 from uuid import UUID
 from postgrest.base_request_builder import APIResponse
 from typing import cast
 from app.utils import force_uuid
+
+logger = logging.getLogger(__name__)
 
 
 def get_symposiums() -> APIResponse:

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from app.scheduler.cp_sat import solve_schedule
+
+logger = logging.getLogger(__name__)
 from app.scheduler.models import (
     AvailabilityWindow,
     PresentationInput,
@@ -71,6 +74,7 @@ def _get_symposium_row(symposium_id: UUID) -> dict[str, Any]:
 def build_problem_from_symposium(
     symposium_id: str | UUID, slot_minutes: int = 5
 ) -> ScheduleProblem:
+    logger.info("Building schedule problem for symposium_id=%s  slot_minutes=%d", symposium_id, slot_minutes)
     symposium_uuid = _coerce_uuid(symposium_id)
     symposium_row = _get_symposium_row(symposium_uuid)
     rooms_available = int(symposium_row["rooms_available"])
@@ -101,11 +105,14 @@ def build_problem_from_symposium(
 
     professors_by_class: dict[str, list[str]] = defaultdict(list)
     person_ids: set[str] = set()
+    professor_ids: set[str] = set()
+    student_ids: set[str] = set()
     for professor in professors:
         professor_id = str(professor["id"])
         class_id = str(professor["class_id"])
         professors_by_class[class_id].append(professor_id)
         person_ids.add(professor_id)
+        professor_ids.add(professor_id)
 
     scheduler_presentations: list[PresentationInput] = []
     for presentation in presentations:
@@ -119,6 +126,7 @@ def build_problem_from_symposium(
             student_id = str(student["id"])
             resource_ids.append(student_id)
             person_ids.add(student_id)
+            student_ids.add(student_id)
 
         scheduler_presentations.append(
             PresentationInput(
@@ -132,6 +140,7 @@ def build_problem_from_symposium(
         )
 
     resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
+    soft_resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
     if person_ids:
         timeframe_resp = read.get_timeframes(linked_id=[UUID(person_id) for person_id in person_ids])
         timeframe_rows = list(getattr(timeframe_resp, "data", None) or [])
@@ -139,19 +148,29 @@ def build_problem_from_symposium(
         for row in timeframe_rows:
             grouped_rows[str(row["linked_id"])].append(row)
         for person_id, rows in grouped_rows.items():
-            resource_windows[person_id] = _window_rows_to_models(rows)
+            windows = _window_rows_to_models(rows)
+            if person_id in professor_ids:
+                resource_windows[person_id] = windows
+            elif person_id in student_ids:
+                soft_resource_windows[person_id] = windows
 
-    # Anyone with no timeframes is treated as fully available
-    for person_id in person_ids:
+    # Professors with no timeframes are treated as fully available.
+    for person_id in professor_ids:
         if person_id not in resource_windows:
             resource_windows[person_id] = symposium_windows
 
+    logger.info(
+        "Schedule problem built: rooms=%d  presentations=%d  professors=%d  students=%d  windows=%d",
+        rooms_available, len(scheduler_presentations), len(professor_ids), len(student_ids), len(symposium_windows),
+    )
     return ScheduleProblem(
         symposium_id=str(symposium_uuid),
         rooms_available=rooms_available,
         symposium_windows=symposium_windows,
         presentations=tuple(scheduler_presentations),
         resource_windows=resource_windows,
+        soft_resource_windows=soft_resource_windows,
+        professor_resource_ids=tuple(sorted(professor_ids)),
         slot_minutes=slot_minutes,
     )
 
@@ -159,6 +178,7 @@ def build_problem_from_symposium(
 def _save_assignments(result: ScheduleResult) -> None:
     from app.supabase_io import delete, write
 
+    logger.info("Saving %d schedule assignments", len(result.assignments))
     # Clean up old schedule assignments before re-saving
     presentation_ids = [
         UUID(a.presentation_id) for a in result.assignments
@@ -184,6 +204,7 @@ def _save_assignments(result: ScheduleResult) -> None:
 
     if timeframe_rows:
         write.insert("timeframes", timeframe_rows)
+    logger.info("Schedule assignments saved successfully")
 
 
 def build_schedule_for_symposium(
@@ -193,7 +214,14 @@ def build_schedule_for_symposium(
         symposium_id=symposium_id,
         slot_minutes=slot_minutes,
     )
+    logger.info("Solving schedule: time_limit=%.1fs", time_limit_seconds)
     result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
+    logger.info(
+        "Solver result: status=%s  assignments=%d  unscheduled=%d  diagnostics=%s",
+        result.status, len(result.assignments), len(result.unscheduled_presentations), result.diagnostics,
+    )
     if result.status in ("optimal", "feasible"):
         _save_assignments(result)
+    else:
+        logger.warning("Scheduler did not find a solution: status=%s", result.status)
     return result
