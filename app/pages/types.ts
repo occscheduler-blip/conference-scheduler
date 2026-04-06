@@ -128,10 +128,14 @@ export type SchedulePresentation = {
   title: string;
   class_id: string;
   minutes: number;
+  /** Buffer time in minutes after this presentation */
+  buffer: number;
   room: number | null;
   timeframe: Timeframe | null;
   presenterNames: string[];
   departmentName: string;
+  /** IDs of all people (professors + presenting students) involved, for conflict detection */
+  resourceIds: string[];
 };
 
 // A student entry used in dropdowns/selects

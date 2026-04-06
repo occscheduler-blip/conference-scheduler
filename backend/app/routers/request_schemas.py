@@ -453,6 +453,37 @@ class UpdateScheduleAssignmentRequest(BaseModel):
         return self
 
 
+class SingleScheduleAssignment(BaseModel):
+    presentation_id: UUID
+    room: int
+    start_time: datetime
+    end_time: datetime
+
+    @field_validator("room")
+    @classmethod
+    def validate_room(cls, room: int) -> int:
+        if room < 0 or room >= MAX_ROOMS:
+            raise ValueError(f"Room index must be between 0 and {MAX_ROOMS - 1}.")
+        return room
+
+    @model_validator(mode="after")
+    def end_after_start(self) -> "SingleScheduleAssignment":
+        if self.end_time <= self.start_time:
+            raise ValueError("End time must be after start time.")
+        return self
+
+
+class BulkUpdateScheduleAssignmentRequest(BaseModel):
+    symposium_id: UUID
+    assignments: list[SingleScheduleAssignment]
+
+    @model_validator(mode="after")
+    def at_least_one(self) -> "BulkUpdateScheduleAssignmentRequest":
+        if not self.assignments:
+            raise ValueError("At least one assignment is required.")
+        return self
+
+
 class UpdatePresentationRequest(BaseModel):
     presentation_id: UUID
     title: str

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, date
+from datetime import datetime, timedelta, timezone, date
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4, UUID
@@ -794,6 +794,8 @@ def update_schedule_assignment(
 
         new_start = payload.start_time if payload.start_time.tzinfo else payload.start_time.replace(tzinfo=timezone.utc)
         new_end = payload.end_time if payload.end_time.tzinfo else payload.end_time.replace(tzinfo=timezone.utc)
+        target_buffer = timedelta(minutes=int(target_pres.get("buffer") or 0))
+        new_buffered_end = new_end + target_buffer
 
         # Check conflicts against every other scheduled presentation
         other_pres_ids = [
@@ -827,7 +829,9 @@ def update_schedule_assignment(
                 )
                 other_start = other_start_raw if other_start_raw.tzinfo else other_start_raw.replace(tzinfo=timezone.utc)
                 other_end = other_end_raw if other_end_raw.tzinfo else other_end_raw.replace(tzinfo=timezone.utc)
-                times_overlap = new_start < other_end and new_end > other_start
+                other_buffer = timedelta(minutes=int(other.get("buffer") or 0))
+                other_buffered_end = other_end + other_buffer
+                times_overlap = new_start < other_buffered_end and new_buffered_end > other_start
 
                 if not times_overlap:
                     continue
@@ -895,6 +899,196 @@ def update_schedule_assignment(
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Failed to update schedule assignment: {exc}"
+        ) from exc
+
+
+@router.put("/bulk_update_schedule_assignments")
+def bulk_update_schedule_assignments(
+    payload: request_schemas.BulkUpdateScheduleAssignmentRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    """Batch-update multiple presentation room/time assignments with conflict detection."""
+    try:
+        symposium_id = str(payload.symposium_id)
+        assignment_map: dict[str, request_schemas.SingleScheduleAssignment] = {
+            str(a.presentation_id): a for a in payload.assignments
+        }
+
+        # Fetch all departments -> classes -> presentations + professors
+        departments_resp = read.get_departments(symposium_id=payload.symposium_id)
+        departments = list(getattr(departments_resp, "data", None) or [])
+        department_ids = [UUID(str(d["id"])) for d in departments if d.get("id")]
+
+        all_classes: list[dict[str, Any]] = []
+        if department_ids:
+            classes_resp = read.get_classes(department_id=department_ids)
+            all_classes = list(getattr(classes_resp, "data", None) or [])
+        class_ids = [UUID(str(c["id"])) for c in all_classes if c.get("id")]
+
+        all_presentations: list[dict[str, Any]] = []
+        all_professors: list[dict[str, Any]] = []
+        if class_ids:
+            pres_resp = read.get_presentations(class_id=class_ids)
+            all_presentations = list(getattr(pres_resp, "data", None) or [])
+            prof_resp = read.get_professors(class_id=class_ids)
+            all_professors = list(getattr(prof_resp, "data", None) or [])
+
+        # Build professor lookup by class and name lookup by ID
+        professors_by_class: dict[str, list[str]] = {}
+        person_name_by_id: dict[str, str] = {}
+        for prof in all_professors:
+            cid = str(prof.get("class_id", ""))
+            pid = str(prof.get("id", ""))
+            if cid and pid:
+                professors_by_class.setdefault(cid, []).append(pid)
+                name = str(prof.get("name", "")).strip()
+                if name:
+                    person_name_by_id[pid] = name
+
+        # Validate all target presentations exist
+        pres_by_id: dict[str, dict[str, Any]] = {
+            str(p["id"]): p for p in all_presentations if p.get("id")
+        }
+        for pid in assignment_map:
+            if pid not in pres_by_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Presentation {pid} not found in this symposium.",
+                )
+
+        # Build resource sets for each presentation
+        def _resources_for(pres: dict[str, Any]) -> set[str]:
+            cid = str(pres.get("class_id", ""))
+            resources: set[str] = set(professors_by_class.get(cid, []))
+            for s in pres.get("presenting_students", []):
+                sid = str(s.get("id", s.get("student_id", "")))
+                if sid:
+                    resources.add(sid)
+                    name = str(s.get("name", "")).strip()
+                    if name:
+                        person_name_by_id[sid] = name
+            return resources
+
+        # Build the effective schedule: for each presentation, use the batch
+        # assignment if present, otherwise use the existing DB timeframe/room.
+        # A presentation is "scheduled" if it has both a room and a timeframe.
+        # Tuple: (room, start, buffered_end) where buffered_end = end + buffer
+        EffSlot = tuple[int, datetime, datetime]  # (room, start, buffered_end)
+        effective: dict[str, EffSlot] = {}
+
+        # First, load existing timeframes for all non-batch presentations
+        non_batch_ids = [
+            UUID(str(p["id"])) for p in all_presentations
+            if str(p.get("id", "")) not in assignment_map and p.get("id")
+        ]
+        existing_tf: dict[str, dict[str, Any]] = {}
+        if non_batch_ids:
+            tf_resp = read.get_timeframes(linked_id=non_batch_ids)
+            for tf in list(getattr(tf_resp, "data", None) or []):
+                linked = str(tf.get("linked_id", ""))
+                if linked:
+                    existing_tf[linked] = tf
+
+        for p in all_presentations:
+            pid = str(p.get("id", ""))
+            buf = timedelta(minutes=int(p.get("buffer") or 0))
+            if pid in assignment_map:
+                a = assignment_map[pid]
+                start = a.start_time if a.start_time.tzinfo else a.start_time.replace(tzinfo=timezone.utc)
+                end = a.end_time if a.end_time.tzinfo else a.end_time.replace(tzinfo=timezone.utc)
+                effective[pid] = (a.room, start, end + buf)
+            elif pid in existing_tf:
+                room_val = p.get("room")
+                if room_val is None:
+                    continue
+                tf = existing_tf[pid]
+                start_raw = datetime.fromisoformat(str(tf["start_time"]).replace("Z", "+00:00"))
+                end_raw = datetime.fromisoformat(str(tf["end_time"]).replace("Z", "+00:00"))
+                start = start_raw if start_raw.tzinfo else start_raw.replace(tzinfo=timezone.utc)
+                end = end_raw if end_raw.tzinfo else end_raw.replace(tzinfo=timezone.utc)
+                effective[pid] = (int(room_val), start, end + buf)
+
+        # Check all pairs for conflicts
+        scheduled_ids = list(effective.keys())
+        for i, pid_a in enumerate(scheduled_ids):
+            room_a, start_a, buffered_end_a = effective[pid_a]
+            pres_a = pres_by_id.get(pid_a, {})
+            resources_a = _resources_for(pres_a)
+
+            for pid_b in scheduled_ids[i + 1:]:
+                room_b, start_b, buffered_end_b = effective[pid_b]
+                times_overlap = start_a < buffered_end_b and buffered_end_a > start_b
+                if not times_overlap:
+                    continue
+
+                # Only report conflicts involving at least one batch assignment
+                if pid_a not in assignment_map and pid_b not in assignment_map:
+                    continue
+
+                pres_b = pres_by_id.get(pid_b, {})
+
+                # Room conflict
+                if room_a == room_b:
+                    title_a = pres_a.get("title", pid_a)
+                    title_b = pres_b.get("title", pid_b)
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Room conflict: Room {room_a + 1} is double-booked between "
+                            f"\"{title_a}\" and \"{title_b}\" at that time."
+                        ),
+                    )
+
+                # Person conflict
+                resources_b = _resources_for(pres_b)
+                shared = resources_a & resources_b
+                if shared:
+                    title_a = pres_a.get("title", pid_a)
+                    title_b = pres_b.get("title", pid_b)
+                    conflicting_name = person_name_by_id.get(next(iter(shared)), "Someone")
+                    is_professor = next(iter(shared)) in {
+                        pid for profs in professors_by_class.values() for pid in profs
+                    }
+                    role = "Professor" if is_professor else "Student"
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Scheduling conflict: {role} \"{conflicting_name}\" is required at both "
+                            f"\"{title_a}\" and \"{title_b}\" at that time. "
+                            f"They cannot be in two rooms at once."
+                        ),
+                    )
+
+        # No conflicts — save all assignments
+        batch_pids = [UUID(pid) for pid in assignment_map]
+        delete.delete_timeframes(batch_pids)
+
+        tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
+        for pid, a in assignment_map.items():
+            supabase.table("presentations").update(
+                {"room": a.room}
+            ).eq("id", pid).execute()
+            tf_rows.append({
+                "id": uuid4(),
+                "linked_id": UUID(pid),
+                "start_time": a.start_time,
+                "end_time": a.end_time,
+            })
+
+        if tf_rows:
+            write.insert("timeframes", tf_rows)
+
+        return {
+            "status": "updated",
+            "count": len(assignment_map),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to bulk update schedule assignments: {exc}"
         ) from exc
 
 
