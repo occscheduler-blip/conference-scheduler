@@ -163,8 +163,10 @@ def solve_schedule(
         )
         for option_index, start_time in enumerate(eligible_starts[presentation.id]):
             end_time = start_time + timedelta(minutes=presentation.duration_minutes)
+            buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
             all_instants.add(start_time)
             all_instants.add(end_time)
+            all_instants.add(buffered_end)
             start_slot = int((start_time - base_time) / step)
             option_indices.append(start_slot)
             for room_index in range(problem.rooms_available):
@@ -209,6 +211,26 @@ def solve_schedule(
             )
         )
         model.Add(end_index == start_index + durations_slots)
+
+    # Group presentations by class and enforce same-room constraint
+    presentations_by_class: dict[str, list[PresentationInput]] = defaultdict(list)
+    for presentation in problem.presentations:
+        if presentation.class_id:
+            presentations_by_class[presentation.class_id].append(presentation)
+
+    for class_id, class_presentations in presentations_by_class.items():
+        if len(class_presentations) < 2:
+            continue
+        class_room_var = model.NewIntVar(
+            0, problem.rooms_available - 1, f"class_room_{class_id}"
+        )
+        for presentation in class_presentations:
+            for option_index in range(len(eligible_starts[presentation.id])):
+                for room_index in range(problem.rooms_available):
+                    key = (presentation.id, option_index, room_index)
+                    model.Add(class_room_var == room_index).OnlyEnforceIf(
+                        assignment_vars[key]
+                    )
 
     all_instants = {
         instant

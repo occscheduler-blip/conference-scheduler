@@ -126,6 +126,7 @@ def build_problem_from_symposium(
                 title=title,
                 duration_minutes=duration_minutes,
                 buffer_minutes=int(presentation.get("buffer") or 0),
+                class_id=class_id,
                 resource_ids=tuple(dict.fromkeys(resource_ids)),
             )
         )

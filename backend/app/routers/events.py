@@ -513,15 +513,8 @@ def run_schedule(
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, object]:
     try:
-        result = build_schedule_for_symposium(body.symposium_id)
-        
-        if result.status in ("optimal", "feasible"):
-            for assignment in result.assignments:
-                supabase.table("presentations").update({
-                    "start_time": assignment.start.isoformat(),
-                    "end_time": assignment.end.isoformat(),
-                }).eq("id", assignment.presentation_id).execute()
-        
+        result = build_schedule_for_symposium(body.symposium_id, slot_minutes=1)
+
         return {
             "status": result.status,
             "assignments": [
