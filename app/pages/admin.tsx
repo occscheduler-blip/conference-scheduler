@@ -896,7 +896,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
               </div>
             </form>
           </section>
-        ) : (
+        ) : isEditTab ? (
           <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
             <h2 className="mb-4 text-xl font-bold text-[#111] md:text-2xl">Edit Existing Event</h2>
 
@@ -1216,7 +1216,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
               </div>
             )}
           </section>
-        )}
+        ) : null}
       </div>
     </main>
   );
