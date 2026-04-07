@@ -18,6 +18,7 @@ import {
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
+import { useWeekPagination } from "../lib/useWeekPagination";
 
 // Renders the professor page and manages its data and interactions.
 function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
@@ -29,6 +30,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const [calendarMessage, setCalendarMessage] = useState<string>("");
   const { availability, setAvailability, handleCellMouseDown, handleCellMouseEnter } = useCalendarGrid(calendarDays.length, editableSlots);
+  const weekPagination = useWeekPagination(calendarDays.map((d) => d.key));
   const [availabilityMessage, setAvailabilityMessage] = useState<string>("");
   const [savingAvailability, setSavingAvailability] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -898,23 +900,30 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                 Click and drag to toggle availability.
               </p>
 
+              {weekPagination.hasMultipleWeeks && (
+                <div className="mb-3 flex items-center gap-3">
+                  <button type="button" onClick={weekPagination.prevWeek} disabled={!weekPagination.hasPrev} className="rounded-lg border border-[#c7c7c7] bg-white px-3 py-1 text-sm font-semibold text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40" aria-label="Previous week">&larr;</button>
+                  <span className="text-sm font-semibold text-[#333]">Week {weekPagination.weekNumber} of {weekPagination.totalWeeks}: {weekPagination.weekLabel}</span>
+                  <button type="button" onClick={weekPagination.nextWeek} disabled={!weekPagination.hasNext} className="rounded-lg border border-[#c7c7c7] bg-white px-3 py-1 text-sm font-semibold text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40" aria-label="Next week">&rarr;</button>
+                </div>
+              )}
               <div className="w-full overflow-x-auto rounded-xl border border-[#cfcfcf] bg-white p-3">
                 <div className="min-w-[720px] select-none">
                   <div
                     className="grid text-center text-2xl font-bold text-[#222]"
-                    style={{ gridTemplateColumns: `90px repeat(${calendarDays.length}, minmax(120px, 1fr))` }}
+                    style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
                   >
                     <div />
-                    {calendarDays.map((day) => (
-                      <div key={day.key} className="border-b border-[#777] pb-1 text-sm md:text-lg">
-                        {day.label}
+                    {weekPagination.visibleDayIndices.map((di) => (
+                      <div key={calendarDays[di].key} className="border-b border-[#777] pb-1 text-sm md:text-lg">
+                        {calendarDays[di].label}
                       </div>
                     ))}
                   </div>
 
                   <div
                     className="grid"
-                    style={{ gridTemplateColumns: `90px repeat(${calendarDays.length}, minmax(120px, 1fr))` }}
+                    style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
                   >
                     {Array.from({ length: totalSlots }, (_, slotIndex) => (
                       <div key={slotIndex} className="contents">
@@ -922,7 +931,8 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                           {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                         </div>
 
-                        {calendarDays.map((day, dayIndex) => {
+                        {weekPagination.visibleDayIndices.map((dayIndex) => {
+                          const day = calendarDays[dayIndex];
                           const available = availability[dayIndex]?.[slotIndex] ?? false;
                           const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
                           const showHourLine = slotIndex % 4 === 0;

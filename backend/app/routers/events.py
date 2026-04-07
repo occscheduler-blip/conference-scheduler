@@ -26,6 +26,7 @@ from app.supabase_io.client import supabase
 import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
 from app.scheduler import build_schedule_for_symposium
+from app.scheduler.models import ScheduleConstraints
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -549,7 +550,25 @@ def run_schedule(
 ) -> dict[str, object]:
     try:
         logger.info("run_schedule: symposium_id=%s", body.symposium_id)
-        result = build_schedule_for_symposium(body.symposium_id, slot_minutes=1)
+        constraints = ScheduleConstraints(
+            room_conflicts=body.constraints.room_conflicts,
+            person_conflicts=body.constraints.person_conflicts,
+            symposium_windows=body.constraints.symposium_windows,
+            professor_availability=body.constraints.professor_availability,
+            student_availability=body.constraints.student_availability,
+            same_class_same_room=body.constraints.same_class_same_room,
+            slot_alignment=body.constraints.slot_alignment,
+            minimize_makespan=body.constraints.minimize_makespan,
+            minimize_class_span=body.constraints.minimize_class_span,
+            minimize_professor_span=body.constraints.minimize_professor_span,
+            balance_rooms=body.constraints.balance_rooms,
+        )
+        slot_minutes = 15 if body.constraints.slot_alignment != "off" else 1
+        result = build_schedule_for_symposium(
+            body.symposium_id,
+            slot_minutes=slot_minutes,
+            constraints=constraints,
+        )
         logger.info(
             "run_schedule complete: status=%s  assignments=%d  unscheduled=%d",
             result.status, len(result.assignments), len(result.unscheduled_presentations),

@@ -367,19 +367,63 @@ def solve_schedule(
         for resource_id in presentation.resource_ids:
             presentations_by_resource[resource_id].append(presentation)
 
-    for class_id, class_presentations in presentations_by_class.items():
-        if len(class_presentations) < 2:
-            continue
-        class_room_var = model.NewIntVar(
-            0, problem.rooms_available - 1, f"class_room_{class_id}"
-        )
-        for presentation in class_presentations:
-            for option_index in range(len(eligible_starts[presentation.id])):
-                for room_index in range(problem.rooms_available):
-                    key = (presentation.id, option_index, room_index)
-                    model.Add(class_room_var == room_index).OnlyEnforceIf(
-                        assignment_vars[key]
-                    )
+    soft_violation_terms: list[cp_model.IntVar] = []
+    _soft_violation_counter = 0
+
+    def _add_constraint_or_penalty(
+        expr_vars: list[cp_model.IntVar],
+        mode: str,
+        label: str,
+    ) -> None:
+        nonlocal _soft_violation_counter
+        if not expr_vars:
+            return
+        if mode == "hard":
+            model.Add(sum(expr_vars) <= 1)
+        elif mode == "soft":
+            violation = model.NewBoolVar(f"sv_{label}_{_soft_violation_counter}")
+            _soft_violation_counter += 1
+            model.Add(sum(expr_vars) <= 1).OnlyEnforceIf(violation.Not())
+            soft_violation_terms.append(violation)
+
+    if problem.constraints.same_class_same_room != "off":
+        for class_id, class_presentations in presentations_by_class.items():
+            if len(class_presentations) < 2:
+                continue
+            if problem.constraints.same_class_same_room == "hard":
+                class_room_var = model.NewIntVar(
+                    0, problem.rooms_available - 1, f"class_room_{class_id}"
+                )
+                for presentation in class_presentations:
+                    for option_index in range(len(eligible_starts[presentation.id])):
+                        for room_index in range(problem.rooms_available):
+                            key = (presentation.id, option_index, room_index)
+                            model.Add(class_room_var == room_index).OnlyEnforceIf(
+                                assignment_vars[key]
+                            )
+            else:
+                # Soft: penalize each pair of same-class presentations in different rooms
+                for i, pres_a in enumerate(class_presentations):
+                    for pres_b in class_presentations[i + 1:]:
+                        for room_a in range(problem.rooms_available):
+                            for room_b in range(problem.rooms_available):
+                                if room_a == room_b:
+                                    continue
+                                for oi_a in range(len(eligible_starts[pres_a.id])):
+                                    for oi_b in range(len(eligible_starts[pres_b.id])):
+                                        key_a = (pres_a.id, oi_a, room_a)
+                                        key_b = (pres_b.id, oi_b, room_b)
+                                        violation = model.NewBoolVar(
+                                            f"sv_class_{class_id}_{_soft_violation_counter}"
+                                        )
+                                        _soft_violation_counter += 1
+                                        # both assigned to different rooms → violation
+                                        model.AddBoolOr([
+                                            assignment_vars[key_a].Not(),
+                                            assignment_vars[key_b].Not(),
+                                            violation,
+                                        ])
+                                        soft_violation_terms.append(violation)
 
     all_instants = {
         instant
@@ -391,100 +435,118 @@ def solve_schedule(
     }
 
     for instant in sorted(all_instants):
-        for room_index in range(problem.rooms_available):
-            overlapping = []
-            for presentation in problem.presentations:
-                for option_index in range(len(eligible_starts[presentation.id])):
-                    key = (presentation.id, option_index, room_index)
-                    start_time, end_time = option_lookup[key]
-                    # extend end by buffer so next presentation can't start during buffer
-                    buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
-                    if start_time <= instant < buffered_end:
-                        overlapping.append(assignment_vars[key])
-            if overlapping:
-                "no two presentations can overlap in the same room"
-                model.Add(sum(overlapping) <= 1)
-
-        resources_at_time: dict[str, list[cp_model.IntVar]] = defaultdict(list)
-        for presentation in problem.presentations:
-            for resource_id in presentation.resource_ids:
-                for option_index in range(len(eligible_starts[presentation.id])):
-                    for room_index in range(problem.rooms_available):
+        if problem.constraints.room_conflicts != "off":
+            for room_index in range(problem.rooms_available):
+                overlapping: list[cp_model.IntVar] = []
+                for presentation in problem.presentations:
+                    for option_index in range(len(eligible_starts[presentation.id])):
                         key = (presentation.id, option_index, room_index)
                         start_time, end_time = option_lookup[key]
-                        if start_time <= instant < end_time:
-                            resources_at_time[resource_id].append(assignment_vars[key])
+                        buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
+                        if start_time <= instant < buffered_end:
+                            overlapping.append(assignment_vars[key])
+                _add_constraint_or_penalty(
+                    overlapping, problem.constraints.room_conflicts, f"room_{room_index}_{instant}"
+                )
 
-        for overlapping in resources_at_time.values():
-            if overlapping:
-                "nothing can be double-booked, ex 2 presentations at the same time for one prof"
-                model.Add(sum(overlapping) <= 1)
+        if problem.constraints.person_conflicts != "off":
+            resources_at_time: dict[str, list[cp_model.IntVar]] = defaultdict(list)
+            for presentation in problem.presentations:
+                for resource_id in presentation.resource_ids:
+                    for option_index in range(len(eligible_starts[presentation.id])):
+                        for room_index in range(problem.rooms_available):
+                            key = (presentation.id, option_index, room_index)
+                            start_time, end_time = option_lookup[key]
+                            if start_time <= instant < end_time:
+                                resources_at_time[resource_id].append(assignment_vars[key])
+
+            for resource_id, overlapping_res in resources_at_time.items():
+                _add_constraint_or_penalty(
+                    overlapping_res, problem.constraints.person_conflicts, f"person_{resource_id}_{instant}"
+                )
 
     makespan = model.NewIntVar(0, 1000000, "makespan")
     model.AddMaxEquality(makespan, list(end_index_vars.values()))
 
     soft_availability_terms: list[cp_model.IntVar] = []
-    total_soft_penalty = model.NewIntVar(
-        0, len(problem.presentations) * max(len(soft_resource_windows), 1), "soft_availability_penalty"
-    )
-    model.Add(
-        total_soft_penalty
-        == sum(
-            soft_penalty_lookup[(presentation.id, option_index)]
-            * assignment_vars[(presentation.id, option_index, room_index)]
-            for presentation in problem.presentations
-            for option_index in range(len(eligible_starts[presentation.id]))
-            for room_index in range(problem.rooms_available)
+    if soft_resource_windows:
+        total_soft_penalty = model.NewIntVar(
+            0, len(problem.presentations) * max(len(soft_resource_windows), 1), "soft_availability_penalty"
         )
-    )
-    soft_availability_terms.append(total_soft_penalty)
+        model.Add(
+            total_soft_penalty
+            == sum(
+                soft_penalty_lookup[(presentation.id, option_index)]
+                * assignment_vars[(presentation.id, option_index, room_index)]
+                for presentation in problem.presentations
+                for option_index in range(len(eligible_starts[presentation.id]))
+                for room_index in range(problem.rooms_available)
+            )
+        )
+        soft_availability_terms.append(total_soft_penalty)
 
     class_span_terms: list[cp_model.IntVar] = []
-    for class_id, class_presentations in presentations_by_class.items():
-        if len(class_presentations) < 2:
-            continue
-        class_start = model.NewIntVar(0, horizon_slots, f"class_start_{class_id}")
-        class_end = model.NewIntVar(0, horizon_slots, f"class_end_{class_id}")
-        class_span = model.NewIntVar(0, horizon_slots, f"class_span_{class_id}")
-        model.AddMinEquality(
-            class_start,
-            [start_index_vars[presentation.id] for presentation in class_presentations],
-        )
-        model.AddMaxEquality(
-            class_end,
-            [end_index_vars[presentation.id] for presentation in class_presentations],
-        )
-        model.Add(class_span == class_end - class_start)
-        class_span_terms.append(class_span)
+    if problem.constraints.minimize_class_span != "off":
+        for class_id, class_presentations in presentations_by_class.items():
+            if len(class_presentations) < 2:
+                continue
+            class_start = model.NewIntVar(0, horizon_slots, f"class_start_{class_id}")
+            class_end = model.NewIntVar(0, horizon_slots, f"class_end_{class_id}")
+            class_span = model.NewIntVar(0, horizon_slots, f"class_span_{class_id}")
+            model.AddMinEquality(
+                class_start,
+                [start_index_vars[presentation.id] for presentation in class_presentations],
+            )
+            model.AddMaxEquality(
+                class_end,
+                [end_index_vars[presentation.id] for presentation in class_presentations],
+            )
+            model.Add(class_span == class_end - class_start)
+            if problem.constraints.minimize_class_span == "hard":
+                total_duration_slots = sum(
+                    _slot_count(p.duration_minutes, problem.slot_minutes)
+                    for p in class_presentations
+                )
+                model.Add(class_span <= total_duration_slots)
+            else:
+                class_span_terms.append(class_span)
 
     professor_span_terms: list[cp_model.IntVar] = []
-    for resource_id in problem.professor_resource_ids:
-        resource_presentations = presentations_by_resource.get(resource_id, [])
-        if len(resource_presentations) < 2:
-            continue
-        professor_start = model.NewIntVar(
-            0, horizon_slots, f"professor_start_{resource_id}"
-        )
-        professor_end = model.NewIntVar(
-            0, horizon_slots, f"professor_end_{resource_id}"
-        )
-        professor_span = model.NewIntVar(
-            0, horizon_slots, f"professor_span_{resource_id}"
-        )
-        model.AddMinEquality(
-            professor_start,
-            [start_index_vars[presentation.id] for presentation in resource_presentations],
-        )
-        model.AddMaxEquality(
-            professor_end,
-            [end_index_vars[presentation.id] for presentation in resource_presentations],
-        )
-        model.Add(professor_span == professor_end - professor_start)
-        professor_span_terms.append(professor_span)
+    if problem.constraints.minimize_professor_span != "off":
+        for resource_id in problem.professor_resource_ids:
+            resource_presentations = presentations_by_resource.get(resource_id, [])
+            if len(resource_presentations) < 2:
+                continue
+            professor_start = model.NewIntVar(
+                0, horizon_slots, f"professor_start_{resource_id}"
+            )
+            professor_end = model.NewIntVar(
+                0, horizon_slots, f"professor_end_{resource_id}"
+            )
+            professor_span = model.NewIntVar(
+                0, horizon_slots, f"professor_span_{resource_id}"
+            )
+            model.AddMinEquality(
+                professor_start,
+                [start_index_vars[presentation.id] for presentation in resource_presentations],
+            )
+            model.AddMaxEquality(
+                professor_end,
+                [end_index_vars[presentation.id] for presentation in resource_presentations],
+            )
+            model.Add(professor_span == professor_end - professor_start)
+            if problem.constraints.minimize_professor_span == "hard":
+                total_duration_slots = sum(
+                    _slot_count(p.duration_minutes, problem.slot_minutes)
+                    for p in resource_presentations
+                )
+                model.Add(professor_span <= total_duration_slots)
+            else:
+                professor_span_terms.append(professor_span)
 
     room_load_terms: list[cp_model.IntVar] = []
     room_imbalance_terms: list[cp_model.IntVar] = []
-    if problem.rooms_available > 1:
+    if problem.constraints.balance_rooms != "off" and problem.rooms_available > 1:
         for room_index in range(problem.rooms_available):
             room_load = model.NewIntVar(
                 0, len(problem.presentations), f"room_load_{room_index}"
@@ -511,17 +573,24 @@ def solve_schedule(
         model.AddMaxEquality(max_room_load, room_load_terms)
         model.AddMinEquality(min_room_load, room_load_terms)
         model.Add(room_imbalance == max_room_load - min_room_load)
-        room_imbalance_terms.append(room_imbalance)
+        if problem.constraints.balance_rooms == "hard":
+            model.Add(room_imbalance <= 1)
+        else:
+            room_imbalance_terms.append(room_imbalance)
 
+    makespan_for_objective = (
+        makespan if problem.constraints.minimize_makespan == "soft" else model.NewConstant(0)
+    )
     model.Minimize(
         _objective_weighted_sum(
-            makespan=makespan,
+            makespan=makespan_for_objective,
             soft_availability_terms=soft_availability_terms,
             class_span_terms=class_span_terms,
             professor_span_terms=professor_span_terms,
             room_imbalance_terms=room_imbalance_terms,
             horizon_slots=horizon_slots,
         )
+        + sum(soft_violation_terms) * (horizon_slots ** 2)
     )
 
     solver = cp_model.CpSolver()

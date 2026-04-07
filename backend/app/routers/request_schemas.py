@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -517,5 +518,23 @@ class UpdatePresentationRequest(BaseModel):
             )
         return presenting_students
 
+ConstraintMode = Literal["off", "soft", "hard"]
+
+
+class ScheduleConstraintsRequest(BaseModel):
+    room_conflicts: ConstraintMode = "hard"
+    person_conflicts: ConstraintMode = "hard"
+    symposium_windows: ConstraintMode = "hard"
+    professor_availability: ConstraintMode = "hard"
+    student_availability: ConstraintMode = "hard"
+    same_class_same_room: ConstraintMode = "hard"
+    slot_alignment: ConstraintMode = "hard"
+    minimize_makespan: ConstraintMode = "soft"
+    minimize_class_span: ConstraintMode = "soft"
+    minimize_professor_span: ConstraintMode = "soft"
+    balance_rooms: ConstraintMode = "soft"
+
+
 class RunSchedulerRequest(BaseModel):
     symposium_id: UUID
+    constraints: ScheduleConstraintsRequest = ScheduleConstraintsRequest()
