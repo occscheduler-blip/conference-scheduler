@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ClassRecord,
   DepartmentRecord,
@@ -14,8 +14,10 @@ import {
   parseBackendDateTime,
   dayKey,
   normalizeId,
+  detectScheduleConflict,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut } from "../lib/api";
+import { useScheduleDrag } from "../lib/useScheduleDrag";
 
 function dayLabel(key: string) {
   return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
@@ -390,6 +392,9 @@ export default function ScheduleTab({
     return map;
   }, [presentations]);
 
+  // Grid ref for drag-and-drop coordinate calculations
+  const gridRef = useRef<HTMLDivElement | null>(null);
+
   // Handlers
   const handleRunScheduler = async () => {
     if (!selectedSymposiumId) return;
@@ -437,6 +442,47 @@ export default function ScheduleTab({
     setAssignmentMessage(null);
   };
 
+  // Drag-and-drop
+  const handleDrop = useCallback(
+    (presId: string, room: number, startTime: Date, endTime: Date) => {
+      const startISO = startTime.toISOString();
+      const endISO = endTime.toISOString();
+
+      setPendingChanges((prev) => {
+        const next = new Map(prev);
+        next.set(presId, { room, start_time: startISO, end_time: endISO });
+        return next;
+      });
+
+      setPresentations((prev) =>
+        prev.map((p) =>
+          p.id === presId
+            ? {
+                ...p,
+                room,
+                timeframe: { id: p.timeframe?.id ?? "", linked_id: p.id, start_time: startISO, end_time: endISO },
+              }
+            : p
+        )
+      );
+      setBulkSaveMessage(null);
+    },
+    [],
+  );
+
+  const { dragState, isDragging, handleBlockPointerDown, handleUnscheduledPointerDown } =
+    useScheduleDrag({
+      presentations,
+      roomsAvailable,
+      minSlot,
+      maxSlot,
+      selectedDay,
+      personNames,
+      gridRef,
+      onDrop: handleDrop,
+      onClickBlock: handleOpenEditModal,
+    });
+
   const handleSaveAssignment = () => {
     if (!editingPresentation || !selectedSymposiumId) return;
     if (!editStartTime) {
@@ -454,44 +500,11 @@ export default function ScheduleTab({
     const endDate = new Date(startDate.getTime() + editingPresentation.minutes * 60 * 1000);
     const startISO = startDate.toISOString();
     const endISO = endDate.toISOString();
-    // Extend end times by buffer minutes for conflict detection
-    const bufferMs = editingPresentation.buffer * 60 * 1000;
-    const newStart = startDate.getTime();
-    const newBufferedEnd = endDate.getTime() + bufferMs;
 
-    // Client-side conflict detection against current schedule state
-    const targetResources = new Set(editingPresentation.resourceIds);
-    for (const other of presentations) {
-      if (other.id === editingPresentation.id) continue;
-      if (other.room === null || !other.timeframe) continue;
-
-      const otherStart = parseBackendDateTime(other.timeframe.start_time).getTime();
-      const otherEnd = parseBackendDateTime(other.timeframe.end_time).getTime();
-      const otherBufferedEnd = otherEnd + other.buffer * 60 * 1000;
-
-      // Overlap check includes buffer on both sides
-      const overlap = newStart < otherBufferedEnd && newBufferedEnd > otherStart;
-      if (!overlap) continue;
-
-      // Room conflict
-      if (other.room === room) {
-        setAssignmentMessage(
-          `Room conflict: Room ${room + 1} is already occupied by "${other.title}" at that time (including buffer).`
-        );
-        return;
-      }
-
-      // Person conflict
-      const otherResources = new Set(other.resourceIds);
-      for (const rid of targetResources) {
-        if (otherResources.has(rid)) {
-          const name = personNames.get(rid) ?? "Someone";
-          setAssignmentMessage(
-            `Scheduling conflict: "${name}" is required at both this presentation and "${other.title}" at that time (including buffer).`
-          );
-          return;
-        }
-      }
+    const conflict = detectScheduleConflict(editingPresentation, room, startDate, presentations, personNames);
+    if (conflict) {
+      setAssignmentMessage(conflict);
+      return;
     }
 
     // Store in pending changes
@@ -679,10 +692,12 @@ export default function ScheduleTab({
         </div>
       ) : null}
 
-      {/* Schedule grid */}
+      {/* Schedule grid + unscheduled side panel */}
       {!isLoadingSchedule && selectedDay && selectedDay !== "unscheduled" && activeSlots.size > 0 ? (
-        <div className="overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
+        <div className="flex gap-3">
+        <div className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
           <div
+            ref={gridRef}
             className="grid"
             style={{
               gridTemplateColumns: `72px repeat(${roomsAvailable}, minmax(140px, 1fr))`,
@@ -753,12 +768,13 @@ export default function ScheduleTab({
 
               const color = colorMap.get(pres.id) ?? BLOCK_COLORS[0];
 
+              const isBeingDragged = dragState?.presentation.id === pres.id;
+
               return (
-                <button
+                <div
                   key={pres.id}
-                  type="button"
-                  onClick={() => handleOpenEditModal(pres)}
-                  className="z-10 m-[1px] overflow-hidden rounded-md px-1.5 py-0.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md"
+                  onPointerDown={(e) => handleBlockPointerDown(e, pres)}
+                  className={`z-10 m-[1px] overflow-hidden rounded-md px-1.5 py-0.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md ${isBeingDragged ? "opacity-30" : ""}`}
                   style={{
                     gridRow: `${gridRowStart} / ${gridRowEnd}`,
                     gridColumn: gridCol,
@@ -768,6 +784,8 @@ export default function ScheduleTab({
                     top: `${topOffset}px`,
                     height: `${blockHeight}px`,
                     alignSelf: "start",
+                    touchAction: "none",
+                    cursor: isDragging ? "grabbing" : "grab",
                   }}
                   title={`${pres.title} (${pres.minutes} min)\n${pres.presenterNames.join(", ")}`}
                 >
@@ -782,12 +800,116 @@ export default function ScheduleTab({
                       {pres.minutes} min
                     </div>
                   ) : null}
-                </button>
+                </div>
               );
             })}
+
+            {/* Snap-target highlight during drag */}
+            {isDragging && dragState?.snapTarget ? (() => {
+              const { room, slotIndex } = dragState.snapTarget;
+              const durationSlots = Math.ceil(dragState.presentation.minutes / 15);
+              const gridRowStart = slotIndex - minSlot + 2;
+              const gridRowEnd = gridRowStart + durationSlots;
+              const gridCol = room + 2;
+              const hasConflict = dragState.conflict !== null;
+
+              return (
+                <div
+                  style={{
+                    gridRow: `${gridRowStart} / ${gridRowEnd}`,
+                    gridColumn: gridCol,
+                    alignSelf: "start",
+                    pointerEvents: "none",
+                  }}
+                  className={`z-20 m-[1px] rounded-md border-2 border-dashed ${
+                    hasConflict
+                      ? "border-[#c62828] bg-[#c62828]/10"
+                      : "border-[#2e7d32] bg-[#2e7d32]/10"
+                  }`}
+                >
+                  {hasConflict ? (
+                    <div className="truncate px-1.5 py-0.5 text-[10px] font-semibold text-[#c62828]">
+                      {dragState.conflict}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })() : null}
           </div>
         </div>
+
+        {/* Unscheduled side panel */}
+        {unscheduled.length > 0 ? (
+          <div className="w-56 shrink-0 rounded-lg border border-[#d8e2ff] bg-white">
+            <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+              Unscheduled ({unscheduled.length})
+            </div>
+            <div className="max-h-[600px] overflow-y-auto p-2">
+              <div className="space-y-1.5">
+                {unscheduled.map((pres) => {
+                  const color = colorMap.get(pres.id) ?? BLOCK_COLORS[0];
+                  return (
+                    <div
+                      key={pres.id}
+                      onPointerDown={(e) => handleUnscheduledPointerDown(e, pres)}
+                      className="rounded-md px-2 py-1.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md"
+                      style={{
+                        backgroundColor: color.bg,
+                        color: color.text,
+                        touchAction: "none",
+                        cursor: isDragging ? "grabbing" : "grab",
+                      }}
+                    >
+                      <div className="truncate text-xs font-semibold leading-tight">{pres.title}</div>
+                      <div className="truncate text-[10px] leading-tight opacity-80">
+                        {pres.minutes} min &mdash; {pres.departmentName || "No dept"}
+                      </div>
+                      {pres.presenterNames.length > 0 ? (
+                        <div className="truncate text-[10px] leading-tight opacity-60">
+                          {pres.presenterNames.join(", ")}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        </div>
       ) : null}
+
+      {/* Ghost block following cursor during drag */}
+      {isDragging && dragState ? (() => {
+        const color = colorMap.get(dragState.presentation.id) ?? BLOCK_COLORS[0];
+        const durationSlots = Math.ceil(dragState.presentation.minutes / 15);
+        const blockHeight = durationSlots * SLOT_HEIGHT;
+
+        return (
+          <div
+            style={{
+              position: "fixed",
+              left: dragState.currentX - dragState.offsetX,
+              top: dragState.currentY - dragState.offsetY,
+              width: 160,
+              height: blockHeight,
+              backgroundColor: color.bg,
+              color: color.text,
+              opacity: 0.7,
+              pointerEvents: "none",
+              zIndex: 9999,
+            }}
+            className="overflow-hidden rounded-md px-1.5 py-0.5 shadow-lg"
+          >
+            <div className="truncate text-xs font-semibold leading-tight">
+              {dragState.presentation.title}
+            </div>
+            <div className="truncate text-[10px] leading-tight opacity-80">
+              {dragState.presentation.presenterNames.join(", ") || "No presenters"}
+            </div>
+          </div>
+        );
+      })() : null}
 
       {/* Unscheduled presentations (tab content) */}
       {!isLoadingSchedule && selectedDay === "unscheduled" ? (
