@@ -15,6 +15,9 @@ import {
   dayKey,
   normalizeId,
   detectScheduleConflict,
+  DEFAULT_CONSTRAINTS,
+  type ScheduleConstraints,
+  type ConflictContext,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut } from "../lib/api";
 import { useScheduleDrag } from "../lib/useScheduleDrag";
@@ -91,6 +94,16 @@ export default function ScheduleTab({
 
   // Person name lookup for conflict messages
   const [personNames, setPersonNames] = useState<Map<string, string>>(new Map());
+
+  // Constraint settings
+  const [constraints, setConstraints] = useState<ScheduleConstraints>({ ...DEFAULT_CONSTRAINTS });
+  const [constraintsOpen, setConstraintsOpen] = useState(false);
+
+  // Resource availability for constraint checking
+  const [resourceAvailability, setResourceAvailability] = useState<
+    Map<string, Array<{ start_time: string; end_time: string }>>
+  >(new Map());
+  const [allProfessorIds, setAllProfessorIds] = useState<Set<string>>(new Set());
 
   // Pending changes (batched saves)
   const [pendingChanges, setPendingChanges] = useState<
@@ -316,8 +329,36 @@ export default function ScheduleTab({
           })
           .filter((r): r is SchedulePresentation => Boolean(r.id && r.class_id));
 
+        // Collect all professor and student IDs for availability fetching
+        const profIdSet = new Set<string>();
+        for (const ids of professorIdsByClass.values()) {
+          for (const pid of ids) profIdSet.add(pid);
+        }
+        const allResourceIds = new Set(profIdSet);
+        for (const row of rawStudents.flat()) {
+          const sid = normalizeId(row.id ?? "");
+          if (sid) allResourceIds.add(sid);
+        }
+
+        // Fetch availability timeframes for professors and students
+        const resAvailMap = new Map<string, Array<{ start_time: string; end_time: string }>>();
+        await Promise.all(
+          Array.from(allResourceIds).map(async (rid) => {
+            try {
+              const tfs = await apiFetch<Timeframe>(
+                `/api/events/timeframes?linked_id=${encodeURIComponent(rid)}`,
+              );
+              if (tfs.length > 0) resAvailMap.set(rid, tfs);
+            } catch {
+              // skip — no availability means fully available
+            }
+          }),
+        );
+
         setPresentations(presentationRows);
         setPersonNames(new Map(personNameById));
+        setAllProfessorIds(profIdSet);
+        setResourceAvailability(resAvailMap);
 
         const days = Array.from(new Set(symTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time)))));
         setSelectedDay((prev) => (days.includes(prev) ? prev : days[0] ?? ""));
@@ -395,6 +436,17 @@ export default function ScheduleTab({
   // Grid ref for drag-and-drop coordinate calculations
   const gridRef = useRef<HTMLDivElement | null>(null);
 
+  // Conflict context for constraint checking (shared by drag hook + edit modal)
+  const conflictContext: ConflictContext = useMemo(() => ({
+    allPresentations: presentations,
+    personNames,
+    constraints,
+    symposiumTimeframes,
+    resourceAvailability,
+    professorIds: allProfessorIds,
+    slotMinutes: 15,
+  }), [presentations, personNames, constraints, symposiumTimeframes, resourceAvailability, allProfessorIds]);
+
   // Handlers
   const handleRunScheduler = async () => {
     if (!selectedSymposiumId) return;
@@ -403,7 +455,22 @@ export default function ScheduleTab({
     setIsRunningScheduler(true);
     setSchedulerMessage(null);
     try {
-      const { raw } = await apiPost("/api/events/schedule", { symposium_id: selectedSymposiumId }, authHeaders);
+      const { raw } = await apiPost("/api/events/schedule", {
+        symposium_id: selectedSymposiumId,
+        constraints: {
+          room_conflicts: constraints.roomConflicts,
+          person_conflicts: constraints.personConflicts,
+          symposium_windows: constraints.symposiumWindows,
+          professor_availability: constraints.professorAvailability,
+          student_availability: constraints.studentAvailability,
+          same_class_same_room: constraints.sameClassSameRoom,
+          slot_alignment: constraints.slotAlignment,
+          minimize_makespan: constraints.minimizeMakespan,
+          minimize_class_span: constraints.minimizeClassSpan,
+          minimize_professor_span: constraints.minimizeProfessorSpan,
+          balance_rooms: constraints.balanceRooms,
+        },
+      }, authHeaders);
       const status = raw.status as string;
       const assignments = (raw.assignments as unknown[]) ?? [];
       const unscheduledIds = (raw.unscheduled_presentations as unknown[]) ?? [];
@@ -472,12 +539,11 @@ export default function ScheduleTab({
 
   const { dragState, isDragging, handleBlockPointerDown, handleUnscheduledPointerDown } =
     useScheduleDrag({
-      presentations,
       roomsAvailable,
       minSlot,
       maxSlot,
       selectedDay,
-      personNames,
+      conflictContext,
       gridRef,
       onDrop: handleDrop,
       onClickBlock: handleOpenEditModal,
@@ -501,10 +567,13 @@ export default function ScheduleTab({
     const startISO = startDate.toISOString();
     const endISO = endDate.toISOString();
 
-    const conflict = detectScheduleConflict(editingPresentation, room, startDate, presentations, personNames);
-    if (conflict) {
-      setAssignmentMessage(conflict);
+    const conflict = detectScheduleConflict(editingPresentation, room, startDate, conflictContext);
+    if (conflict?.blocked) {
+      setAssignmentMessage(conflict.message);
       return;
+    }
+    if (conflict) {
+      setAssignmentMessage(`Warning: ${conflict.message}`);
     }
 
     // Store in pending changes
@@ -615,6 +684,122 @@ export default function ScheduleTab({
             <p className={`text-sm font-medium ${schedulerMessage.startsWith("Error") ? "text-[#9a1f1f]" : "text-[#1b6e2b]"}`}>
               {schedulerMessage}
             </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Constraint settings menu */}
+      {selectedSymposiumId ? (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setConstraintsOpen((v) => !v)}
+            className="flex items-center gap-2 rounded-lg border border-[#c7d4ff] bg-white px-4 py-2 text-sm font-semibold text-[#1b338f] transition hover:bg-[#f0f4ff]"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+              <path fillRule="evenodd" d="M7.84 1.804A1 1 0 0 1 8.82 1h2.36a1 1 0 0 1 .98.804l.331 1.652a6.993 6.993 0 0 1 1.929 1.115l1.598-.54a1 1 0 0 1 1.186.447l1.18 2.044a1 1 0 0 1-.205 1.251l-1.267 1.113a7.047 7.047 0 0 1 0 2.228l1.267 1.113a1 1 0 0 1 .206 1.25l-1.18 2.045a1 1 0 0 1-1.187.447l-1.598-.54a6.993 6.993 0 0 1-1.929 1.115l-.33 1.652a1 1 0 0 1-.98.804H8.82a1 1 0 0 1-.98-.804l-.331-1.652a6.993 6.993 0 0 1-1.929-1.115l-1.598.54a1 1 0 0 1-1.186-.447l-1.18-2.044a1 1 0 0 1 .205-1.251l1.267-1.114a7.05 7.05 0 0 1 0-2.227L1.821 7.773a1 1 0 0 1-.206-1.25l1.18-2.045a1 1 0 0 1 1.187-.447l1.598.54A6.993 6.993 0 0 1 7.51 3.456l.33-1.652ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clipRule="evenodd" />
+            </svg>
+            Constraints
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`h-3.5 w-3.5 transition ${constraintsOpen ? "rotate-180" : ""}`}>
+              <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+            </svg>
+          </button>
+          {constraintsOpen ? (
+            <>
+            <div className="fixed inset-0 z-20" onClick={() => setConstraintsOpen(false)} />
+            <div className="absolute left-0 top-full z-30 mt-1 w-[22rem] rounded-lg border border-[#d8e2ff] bg-white p-3 shadow-xl">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-[#888]">
+                  Constraints
+                </p>
+                <div className="flex gap-[2px] text-[9px] font-bold uppercase tracking-wide text-[#aaa]">
+                  <span className="w-[34px] text-center">Off</span>
+                  <span className="w-[34px] text-center">Soft</span>
+                  <span className="w-[34px] text-center">Hard</span>
+                </div>
+              </div>
+              {([
+                { key: "roomConflicts" as const, label: "Room conflicts", desc: "No double-booking a room" },
+                { key: "personConflicts" as const, label: "Person conflicts", desc: "No double-booking professors/students" },
+                { key: "symposiumWindows" as const, label: "Symposium time windows", desc: "Must fall within symposium hours" },
+                { key: "professorAvailability" as const, label: "Professor availability", desc: "Must fit professor availability" },
+                { key: "studentAvailability" as const, label: "Student availability", desc: "Must fit student availability" },
+                { key: "sameClassSameRoom" as const, label: "Same class \u2192 same room", desc: "Class presentations share a room" },
+                { key: "slotAlignment" as const, label: "15-min slot alignment", desc: "Start time on 15-min boundary" },
+              ]).map(({ key, label, desc }) => (
+                <div key={key} className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition hover:bg-[#f5f8ff]">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-[#111]">{label}</div>
+                    <div className="text-[11px] text-[#888]">{desc}</div>
+                  </div>
+                  <div className="flex shrink-0 overflow-hidden rounded-md border border-[#d0d8f0]">
+                    {(["off", "soft", "hard"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setConstraints((prev) => ({ ...prev, [key]: mode }))}
+                        className={`w-[34px] py-0.5 text-[10px] font-semibold transition ${
+                          constraints[key] === mode
+                            ? mode === "off"
+                              ? "bg-[#e0e0e0] text-[#555]"
+                              : mode === "soft"
+                                ? "bg-[#fff3cd] text-[#856404]"
+                                : "bg-[#1635a7] text-white"
+                            : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
+                        }`}
+                      >
+                        {mode === "off" ? "Off" : mode === "soft" ? "Soft" : "Hard"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <hr className="my-2 border-[#e5eaff]" />
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-[#888]">
+                  Optimization (auto-scheduler)
+                </p>
+                <div className="flex gap-[2px] text-[9px] font-bold uppercase tracking-wide text-[#aaa]">
+                  <span className="w-[34px] text-center">Off</span>
+                  <span className="w-[34px] text-center">Soft</span>
+                  <span className="w-[34px] text-center">Hard</span>
+                </div>
+              </div>
+              {([
+                { key: "minimizeMakespan" as const, label: "Minimize total duration", desc: "Finish the schedule as early as possible" },
+                { key: "minimizeClassSpan" as const, label: "Group class presentations", desc: "Keep same-class presentations close in time" },
+                { key: "minimizeProfessorSpan" as const, label: "Group professor presentations", desc: "Keep same-professor presentations close in time" },
+                { key: "balanceRooms" as const, label: "Balance room usage", desc: "Distribute presentations evenly across rooms" },
+              ]).map(({ key, label, desc }) => (
+                <div key={key} className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition hover:bg-[#f5f8ff]">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-[#111]">{label}</div>
+                    <div className="text-[11px] text-[#888]">{desc}</div>
+                  </div>
+                  <div className="flex shrink-0 overflow-hidden rounded-md border border-[#d0d8f0]">
+                    {(["off", "soft", "hard"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setConstraints((prev) => ({ ...prev, [key]: mode }))}
+                        className={`w-[34px] py-0.5 text-[10px] font-semibold transition ${
+                          constraints[key] === mode
+                            ? mode === "off"
+                              ? "bg-[#e0e0e0] text-[#555]"
+                              : mode === "soft"
+                                ? "bg-[#fff3cd] text-[#856404]"
+                                : "bg-[#1635a7] text-white"
+                            : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
+                        }`}
+                      >
+                        {mode === "off" ? "Off" : mode === "soft" ? "Soft" : "Hard"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -811,7 +996,9 @@ export default function ScheduleTab({
               const gridRowStart = slotIndex - minSlot + 2;
               const gridRowEnd = gridRowStart + durationSlots;
               const gridCol = room + 2;
-              const hasConflict = dragState.conflict !== null;
+              const conflict = dragState.conflict;
+              const isBlocked = conflict?.blocked === true;
+              const isWarning = conflict !== null && !conflict.blocked;
 
               return (
                 <div
@@ -822,14 +1009,16 @@ export default function ScheduleTab({
                     pointerEvents: "none",
                   }}
                   className={`z-20 m-[1px] rounded-md border-2 border-dashed ${
-                    hasConflict
+                    isBlocked
                       ? "border-[#c62828] bg-[#c62828]/10"
-                      : "border-[#2e7d32] bg-[#2e7d32]/10"
+                      : isWarning
+                        ? "border-[#e68a00] bg-[#e68a00]/10"
+                        : "border-[#2e7d32] bg-[#2e7d32]/10"
                   }`}
                 >
-                  {hasConflict ? (
-                    <div className="truncate px-1.5 py-0.5 text-[10px] font-semibold text-[#c62828]">
-                      {dragState.conflict}
+                  {conflict ? (
+                    <div className={`truncate px-1.5 py-0.5 text-[10px] font-semibold ${isBlocked ? "text-[#c62828]" : "text-[#b36b00]"}`}>
+                      {isWarning ? "Warning: " : ""}{conflict.message}
                     </div>
                   ) : null}
                 </div>

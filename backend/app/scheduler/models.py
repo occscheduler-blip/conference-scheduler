@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Literal
+
+ConstraintMode = Literal["off", "soft", "hard"]
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,21 @@ class PresentationInput:
 
 
 @dataclass(frozen=True)
+class ScheduleConstraints:
+    room_conflicts: ConstraintMode = "hard"
+    person_conflicts: ConstraintMode = "hard"
+    symposium_windows: ConstraintMode = "hard"
+    professor_availability: ConstraintMode = "hard"
+    student_availability: ConstraintMode = "hard"
+    same_class_same_room: ConstraintMode = "hard"
+    slot_alignment: ConstraintMode = "hard"
+    minimize_makespan: ConstraintMode = "soft"
+    minimize_class_span: ConstraintMode = "soft"
+    minimize_professor_span: ConstraintMode = "soft"
+    balance_rooms: ConstraintMode = "soft"
+
+
+@dataclass(frozen=True)
 class ScheduleProblem:
     symposium_id: str
     rooms_available: int
@@ -34,6 +52,7 @@ class ScheduleProblem:
     )
     professor_resource_ids: tuple[str, ...] = ()
     slot_minutes: int = 5
+    constraints: ScheduleConstraints = field(default_factory=ScheduleConstraints)
 
 
 @dataclass(frozen=True)

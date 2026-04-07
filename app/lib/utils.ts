@@ -1,4 +1,4 @@
-import type { CalendarDay, TimeframeRecord } from "../pages/types";
+import type { CalendarDay, SchedulePresentation, TimeframeRecord } from "../pages/types";
 
 export const totalSlots = 48; // 9:00 AM to 9:00 PM in 15-minute increments
 
@@ -145,6 +145,188 @@ export function gridFromTimeframes(timeframes: TimeframeRecord[]) {
   }
 
   return { startDate, endDate, availability };
+}
+
+export type ConstraintMode = "off" | "soft" | "hard";
+
+export type ScheduleConstraints = {
+  roomConflicts: ConstraintMode;
+  personConflicts: ConstraintMode;
+  symposiumWindows: ConstraintMode;
+  professorAvailability: ConstraintMode;
+  studentAvailability: ConstraintMode;
+  sameClassSameRoom: ConstraintMode;
+  slotAlignment: ConstraintMode;
+  minimizeMakespan: ConstraintMode;
+  minimizeClassSpan: ConstraintMode;
+  minimizeProfessorSpan: ConstraintMode;
+  balanceRooms: ConstraintMode;
+};
+
+export const DEFAULT_CONSTRAINTS: ScheduleConstraints = {
+  roomConflicts: "hard",
+  personConflicts: "hard",
+  symposiumWindows: "hard",
+  professorAvailability: "hard",
+  studentAvailability: "hard",
+  sameClassSameRoom: "hard",
+  slotAlignment: "hard",
+  minimizeMakespan: "soft",
+  minimizeClassSpan: "soft",
+  minimizeProfessorSpan: "soft",
+  balanceRooms: "soft",
+};
+
+export type ConflictContext = {
+  allPresentations: SchedulePresentation[];
+  personNames: Map<string, string>;
+  constraints: ScheduleConstraints;
+  symposiumTimeframes: Array<{ start_time: string; end_time: string }>;
+  resourceAvailability: Map<string, Array<{ start_time: string; end_time: string }>>;
+  professorIds: Set<string>;
+  slotMinutes: number;
+};
+
+export type ConflictResult = {
+  message: string;
+  /** true = hard violation (blocks drop), false = soft warning (allows drop) */
+  blocked: boolean;
+};
+
+/**
+ * Detect scheduling constraint violations when placing a presentation at a given room/time.
+ * Checks are controlled by `ctx.constraints` modes (off / soft / hard).
+ * Returns the most severe conflict, or null if no violations.
+ */
+export function detectScheduleConflict(
+  target: SchedulePresentation,
+  room: number,
+  startTime: Date,
+  ctx: ConflictContext,
+): ConflictResult | null {
+  const { allPresentations, personNames, constraints } = ctx;
+  const endTime = new Date(startTime.getTime() + target.minutes * 60 * 1000);
+  const bufferMs = target.buffer * 60 * 1000;
+  const newStart = startTime.getTime();
+  const newEnd = endTime.getTime();
+  const newBufferedEnd = newEnd + bufferMs;
+
+  const hardViolations: string[] = [];
+  const softViolations: string[] = [];
+
+  function addViolation(mode: ConstraintMode, message: string) {
+    if (mode === "hard") hardViolations.push(message);
+    else if (mode === "soft") softViolations.push(message);
+  }
+
+  // Slot alignment
+  if (constraints.slotAlignment !== "off") {
+    const m = startTime.getMinutes();
+    if (m % ctx.slotMinutes !== 0) {
+      addViolation(constraints.slotAlignment, `Start time must align to ${ctx.slotMinutes}-minute intervals.`);
+    }
+  }
+
+  // Symposium window
+  if (constraints.symposiumWindows !== "off" && ctx.symposiumTimeframes.length > 0) {
+    const day = dayKey(startTime);
+    const dayTfs = ctx.symposiumTimeframes.filter(
+      (tf) => dayKey(parseBackendDateTime(tf.start_time)) === day,
+    );
+    const within = dayTfs.some((tf) => {
+      const s = parseBackendDateTime(tf.start_time).getTime();
+      const e = parseBackendDateTime(tf.end_time).getTime();
+      return newStart >= s && newEnd <= e;
+    });
+    if (!within) {
+      addViolation(constraints.symposiumWindows, "Presentation falls outside symposium hours.");
+    }
+  }
+
+  // Professor availability
+  if (constraints.professorAvailability !== "off") {
+    for (const rid of target.resourceIds) {
+      if (!ctx.professorIds.has(rid)) continue;
+      const avail = ctx.resourceAvailability.get(rid);
+      if (!avail || avail.length === 0) continue;
+      const within = avail.some((tf) => {
+        const s = parseBackendDateTime(tf.start_time).getTime();
+        const e = parseBackendDateTime(tf.end_time).getTime();
+        return newStart >= s && newEnd <= e;
+      });
+      if (!within) {
+        const name = personNames.get(rid) ?? "A professor";
+        addViolation(constraints.professorAvailability, `${name} is not available at this time.`);
+      }
+    }
+  }
+
+  // Student availability
+  if (constraints.studentAvailability !== "off") {
+    for (const rid of target.resourceIds) {
+      if (ctx.professorIds.has(rid)) continue;
+      const avail = ctx.resourceAvailability.get(rid);
+      if (!avail || avail.length === 0) continue;
+      const within = avail.some((tf) => {
+        const s = parseBackendDateTime(tf.start_time).getTime();
+        const e = parseBackendDateTime(tf.end_time).getTime();
+        return newStart >= s && newEnd <= e;
+      });
+      if (!within) {
+        const name = personNames.get(rid) ?? "A student";
+        addViolation(constraints.studentAvailability, `${name} is not available at this time.`);
+      }
+    }
+  }
+
+  // Same class → same room
+  if (constraints.sameClassSameRoom !== "off") {
+    for (const other of allPresentations) {
+      if (other.id === target.id) continue;
+      if (other.class_id !== target.class_id) continue;
+      if (other.room === null) continue;
+      if (other.room !== room) {
+        addViolation(constraints.sameClassSameRoom, `Class conflict: "${other.title}" from the same class is in Room ${other.room + 1}.`);
+        break;
+      }
+    }
+  }
+
+  // Room and person overlap checks
+  const targetResources = new Set(target.resourceIds);
+  for (const other of allPresentations) {
+    if (other.id === target.id) continue;
+    if (other.room === null || !other.timeframe) continue;
+
+    const otherStart = parseBackendDateTime(other.timeframe.start_time).getTime();
+    const otherEnd = parseBackendDateTime(other.timeframe.end_time).getTime();
+    const otherBufferedEnd = otherEnd + other.buffer * 60 * 1000;
+
+    const overlap = newStart < otherBufferedEnd && newBufferedEnd > otherStart;
+    if (!overlap) continue;
+
+    if (constraints.roomConflicts !== "off" && other.room === room) {
+      addViolation(constraints.roomConflicts, `Room conflict: Room ${room + 1} is already occupied by "${other.title}" (including buffer).`);
+    }
+
+    if (constraints.personConflicts !== "off") {
+      const otherResources = new Set(other.resourceIds);
+      for (const rid of targetResources) {
+        if (otherResources.has(rid)) {
+          const name = personNames.get(rid) ?? "Someone";
+          addViolation(constraints.personConflicts, `Scheduling conflict: "${name}" is in both this and "${other.title}" (including buffer).`);
+        }
+      }
+    }
+  }
+
+  if (hardViolations.length > 0) {
+    return { message: hardViolations[0], blocked: true };
+  }
+  if (softViolations.length > 0) {
+    return { message: softViolations[0], blocked: false };
+  }
+  return null;
 }
 
 export function parseCsvLine(line: string): string[] {

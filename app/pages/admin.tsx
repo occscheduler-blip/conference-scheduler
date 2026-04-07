@@ -12,12 +12,14 @@ import {
   totalSlots,
   formatTimeLabel,
   formatCalendarDate,
+  dayKey,
   buildCalendarDates,
   buildTimeframesFromGrid,
   gridFromTimeframes,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
+import { useWeekPagination } from "../lib/useWeekPagination";
 import ScheduleTab from "./schedule-tab";
 
 const fieldClass =
@@ -99,6 +101,10 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     [createStartDate, createEndDate]
   );
   const editCalendarDates = useMemo(() => buildCalendarDates(editStartDate, editEndDate), [editStartDate, editEndDate]);
+  const createDateKeys = useMemo(() => createCalendarDates.map((d) => dayKey(d)), [createCalendarDates]);
+  const editDateKeys = useMemo(() => editCalendarDates.map((d) => dayKey(d)), [editCalendarDates]);
+  const createWeekPagination = useWeekPagination(createDateKeys);
+  const editWeekPagination = useWeekPagination(editDateKeys);
 
   const fetchSymposia = useCallback(async () => {
     setIsLoadingSymposia(true);
@@ -834,6 +840,13 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
               <aside className="rounded-xl border border-[#d7bf92] bg-[#fffdf8] p-4 md:p-5">
                 <p className="mb-3 text-sm font-semibold text-[#444] md:text-base">Click and drag to toggle availability.</p>
+                {createWeekPagination.hasMultipleWeeks && (
+                  <div className="mb-3 flex items-center gap-3">
+                    <button type="button" onClick={createWeekPagination.prevWeek} disabled={!createWeekPagination.hasPrev} className="rounded-lg border border-[#c7c7c7] bg-white px-3 py-1 text-sm font-semibold text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40" aria-label="Previous week">&larr;</button>
+                    <span className="text-sm font-semibold text-[#333]">Week {createWeekPagination.weekNumber} of {createWeekPagination.totalWeeks}: {createWeekPagination.weekLabel}</span>
+                    <button type="button" onClick={createWeekPagination.nextWeek} disabled={!createWeekPagination.hasNext} className="rounded-lg border border-[#c7c7c7] bg-white px-3 py-1 text-sm font-semibold text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40" aria-label="Next week">&rarr;</button>
+                  </div>
+                )}
                 <div className="w-full overflow-x-auto rounded-xl border border-[#cfcfcf] bg-white p-2">
                   {createCalendarDates.length === 0 ? (
                     <div className="px-2 py-4 text-sm font-semibold text-[#555]">Select start and end dates first.</div>
@@ -841,25 +854,26 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                     <div className="min-w-[760px] select-none">
                       <div
                         className="grid text-center text-base font-bold text-[#222]"
-                        style={{ gridTemplateColumns: `64px repeat(${createCalendarDates.length}, minmax(80px, 1fr))` }}
+                        style={{ gridTemplateColumns: `64px repeat(${createWeekPagination.visibleDayIndices.length}, minmax(80px, 1fr))` }}
                       >
                         <div />
-                        {createCalendarDates.map((date) => (
-                          <div key={date.toISOString()} className="border-b border-[#777] pb-1">
-                            {formatCalendarDate(date)}
+                        {createWeekPagination.visibleDayIndices.map((di) => (
+                          <div key={createCalendarDates[di].toISOString()} className="border-b border-[#777] pb-1">
+                            {formatCalendarDate(createCalendarDates[di])}
                           </div>
                         ))}
                       </div>
                       <div
                         className="grid"
-                        style={{ gridTemplateColumns: `64px repeat(${createCalendarDates.length}, minmax(80px, 1fr))` }}
+                        style={{ gridTemplateColumns: `64px repeat(${createWeekPagination.visibleDayIndices.length}, minmax(80px, 1fr))` }}
                       >
                         {Array.from({ length: totalSlots }, (_, slotIndex) => (
                           <div key={slotIndex} className="contents">
                             <div className="h-4 overflow-hidden pr-1 text-right text-[11px] leading-4 font-semibold text-[#444]">
                               {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                             </div>
-                            {createCalendarDates.map((date, dayIndex) => {
+                            {createWeekPagination.visibleDayIndices.map((dayIndex) => {
+                              const date = createCalendarDates[dayIndex];
                               const available = createAvailability[dayIndex]?.[slotIndex] ?? false;
                               const showHourLine = slotIndex % 4 === 0;
                               return (
@@ -1009,6 +1023,13 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
                   <aside className="rounded-xl border border-[#d7bf92] bg-[#fffdf8] p-4 md:p-5">
                     <p className="mb-3 text-sm font-semibold text-[#444]">Click and drag to edit event availability.</p>
+                    {editWeekPagination.hasMultipleWeeks && (
+                      <div className="mb-3 flex items-center gap-3">
+                        <button type="button" onClick={editWeekPagination.prevWeek} disabled={!editWeekPagination.hasPrev} className="rounded-lg border border-[#c7c7c7] bg-white px-3 py-1 text-sm font-semibold text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40" aria-label="Previous week">&larr;</button>
+                        <span className="text-sm font-semibold text-[#333]">Week {editWeekPagination.weekNumber} of {editWeekPagination.totalWeeks}: {editWeekPagination.weekLabel}</span>
+                        <button type="button" onClick={editWeekPagination.nextWeek} disabled={!editWeekPagination.hasNext} className="rounded-lg border border-[#c7c7c7] bg-white px-3 py-1 text-sm font-semibold text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-40" aria-label="Next week">&rarr;</button>
+                      </div>
+                    )}
                     <div className="w-full overflow-x-auto rounded-xl border border-[#cfcfcf] bg-white p-2">
                       {editCalendarDates.length === 0 ? (
                         <div className="px-2 py-4 text-sm font-semibold text-[#555]">Select start and end dates first.</div>
@@ -1016,25 +1037,26 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                         <div className="min-w-[760px] select-none">
                           <div
                             className="grid text-center text-base font-bold text-[#222]"
-                            style={{ gridTemplateColumns: `64px repeat(${editCalendarDates.length}, minmax(80px, 1fr))` }}
+                            style={{ gridTemplateColumns: `64px repeat(${editWeekPagination.visibleDayIndices.length}, minmax(80px, 1fr))` }}
                           >
                             <div />
-                            {editCalendarDates.map((date) => (
-                              <div key={date.toISOString()} className="border-b border-[#777] pb-1">
-                                {formatCalendarDate(date)}
+                            {editWeekPagination.visibleDayIndices.map((di) => (
+                              <div key={editCalendarDates[di].toISOString()} className="border-b border-[#777] pb-1">
+                                {formatCalendarDate(editCalendarDates[di])}
                               </div>
                             ))}
                           </div>
                           <div
                             className="grid"
-                            style={{ gridTemplateColumns: `64px repeat(${editCalendarDates.length}, minmax(80px, 1fr))` }}
+                            style={{ gridTemplateColumns: `64px repeat(${editWeekPagination.visibleDayIndices.length}, minmax(80px, 1fr))` }}
                           >
                             {Array.from({ length: totalSlots }, (_, slotIndex) => (
                               <div key={slotIndex} className="contents">
                                 <div className="h-4 overflow-hidden pr-1 text-right text-[11px] leading-4 font-semibold text-[#444]">
                                   {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
                                 </div>
-                                {editCalendarDates.map((date, dayIndex) => {
+                                {editWeekPagination.visibleDayIndices.map((dayIndex) => {
+                                  const date = editCalendarDates[dayIndex];
                                   const available = editAvailability[dayIndex]?.[slotIndex] ?? false;
                                   const showHourLine = slotIndex % 4 === 0;
                                   return (

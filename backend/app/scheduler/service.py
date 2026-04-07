@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 from app.scheduler.models import (
     AvailabilityWindow,
     PresentationInput,
+    ScheduleConstraints,
     ScheduleProblem,
     ScheduleResult,
 )
@@ -72,8 +73,12 @@ def _get_symposium_row(symposium_id: UUID) -> dict[str, Any]:
 
 
 def build_problem_from_symposium(
-    symposium_id: str | UUID, slot_minutes: int = 5
+    symposium_id: str | UUID,
+    slot_minutes: int = 5,
+    constraints: ScheduleConstraints | None = None,
 ) -> ScheduleProblem:
+    if constraints is None:
+        constraints = ScheduleConstraints()
     logger.info("Building schedule problem for symposium_id=%s  slot_minutes=%d", symposium_id, slot_minutes)
     symposium_uuid = _coerce_uuid(symposium_id)
     symposium_row = _get_symposium_row(symposium_uuid)
@@ -149,15 +154,20 @@ def build_problem_from_symposium(
             grouped_rows[str(row["linked_id"])].append(row)
         for person_id, rows in grouped_rows.items():
             windows = _window_rows_to_models(rows)
-            if person_id in professor_ids:
+            if person_id in professor_ids and constraints.professor_availability == "hard":
                 resource_windows[person_id] = windows
-            elif person_id in student_ids:
+            elif person_id in professor_ids and constraints.professor_availability == "soft":
+                soft_resource_windows[person_id] = windows
+            elif person_id in student_ids and constraints.student_availability == "hard":
+                resource_windows[person_id] = windows
+            elif person_id in student_ids and constraints.student_availability == "soft":
                 soft_resource_windows[person_id] = windows
 
-    # Professors with no timeframes are treated as fully available.
-    for person_id in professor_ids:
-        if person_id not in resource_windows:
-            resource_windows[person_id] = symposium_windows
+    # Professors with no timeframes are treated as fully available (when hard constraint).
+    if constraints.professor_availability == "hard":
+        for person_id in professor_ids:
+            if person_id not in resource_windows:
+                resource_windows[person_id] = symposium_windows
 
     logger.info(
         "Schedule problem built: rooms=%d  presentations=%d  professors=%d  students=%d  windows=%d",
@@ -172,6 +182,7 @@ def build_problem_from_symposium(
         soft_resource_windows=soft_resource_windows,
         professor_resource_ids=tuple(sorted(professor_ids)),
         slot_minutes=slot_minutes,
+        constraints=constraints,
     )
 
 
@@ -208,11 +219,15 @@ def _save_assignments(result: ScheduleResult) -> None:
 
 
 def build_schedule_for_symposium(
-    symposium_id: str | UUID, slot_minutes: int = 5, time_limit_seconds: float = 10.0
+    symposium_id: str | UUID,
+    slot_minutes: int = 5,
+    time_limit_seconds: float = 10.0,
+    constraints: ScheduleConstraints | None = None,
 ) -> ScheduleResult:
     problem = build_problem_from_symposium(
         symposium_id=symposium_id,
         slot_minutes=slot_minutes,
+        constraints=constraints,
     )
     logger.info("Solving schedule: time_limit=%.1fs", time_limit_seconds)
     result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
