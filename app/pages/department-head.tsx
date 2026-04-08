@@ -19,7 +19,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
   const [className, setClassName] = useState("");
   const [professors, setProfessors] = useState<ProfessorRow[]>([{ name: "", email: "" }]);
   const [savedClasses, setSavedClasses] = useState<SavedClass[]>([]);
-  const [deployMessage, setDeployMessage] = useState<string>("");
+  const [emailMessage, setEmailMessage] = useState<string>("");
 
   const [editingLocalId, setEditingLocalId] = useState<string>("");
   const [editingClassName, setEditingClassName] = useState<string>("");
@@ -352,10 +352,20 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
     }
   };
 
-  const handleDeployClasses = () => {
-    setDeployMessage(
-      "Deploy is not connected yet. It will send each professor an email link with their professor_id in the URL."
-    );
+  const handleEmailClasses = async () => {
+    setEmailMessage("");
+    if (!selectedDepartmentId) {
+      setEmailMessage("Select a department first.");
+      return;
+    }
+    try {
+      const { raw } = await apiPost("/api/events/email_classes", { department_id: selectedDepartmentId }, authHeaders);
+      const count = raw.emails_sent as number;
+      setEmailMessage(`Emailed ${count} professor${count === 1 ? "" : "s"}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setEmailMessage(`Failed: ${message}`);
+    }
   };
 
   const submitProfessors = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -645,12 +655,12 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
               <div className="mt-4">
                 <button
                   type="button"
-                  onClick={handleDeployClasses}
+                  onClick={() => void handleEmailClasses()}
                   className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(27,110,43,0.25)] transition hover:bg-[#155622]"
                 >
-                  Deploy
+                  Send Emails
                 </button>
-                {deployMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployMessage}</p> : null}
+                {emailMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{emailMessage}</p> : null}
               </div>
             </div>
           ) : null}

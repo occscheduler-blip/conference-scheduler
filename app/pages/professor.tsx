@@ -15,6 +15,7 @@ import {
   parseCsvLine,
   isUuid,
   buildCalendarFromTimeframes,
+  toBackendDateTime,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
@@ -48,8 +49,8 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const [presentationGroups, setPresentationGroups] = useState<PresentationGroup[]>([]);
   const [deployedPresentationGroups, setDeployedPresentationGroups] = useState<PresentationGroup[]>([]);
   const [groupMessage, setGroupMessage] = useState<string>("");
-  const [deployMessage, setDeployMessage] = useState<string>("");
-  const [deployingPresentations, setDeployingPresentations] = useState<boolean>(false);
+  const [emailMessage, setEmailMessage] = useState<string>("");
+  const [emailingPresentations, setDeployingPresentations] = useState<boolean>(false);
   const [deletingPresentationGroupIds, setDeletingPresentationGroupIds] = useState<string[]>([]);
   const [editingDeployedPresentationId, setEditingDeployedPresentationId] = useState<string | null>(null);
   const [editingPresentationName, setEditingPresentationName] = useState<string>("");
@@ -336,14 +337,14 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
             rangeEnd = slotEnd;
           }
         } else if (rangeStart && rangeEnd) {
-          timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
+          timeframes.push({ start_time: toBackendDateTime(rangeStart), end_time: toBackendDateTime(rangeEnd) });
           rangeStart = null;
           rangeEnd = null;
         }
       }
 
       if (rangeStart && rangeEnd) {
-        timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
+        timeframes.push({ start_time: toBackendDateTime(rangeStart), end_time: toBackendDateTime(rangeEnd) });
       }
     }
 
@@ -613,11 +614,11 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     if (source === "draft" && !isUuid(group.id)) {
       removePresentationGroupFromUi(group.id, source);
-      setDeployMessage("Removed unsaved presentation group.");
+      setEmailMessage("Removed unsaved presentation group.");
       return;
     }
     if (!isUuid(group.id)) {
-      setDeployMessage("Delete failed: deployed presentation is missing a valid ID.");
+      setEmailMessage("Delete failed: deployed presentation is missing a valid ID.");
       return;
     }
 
@@ -625,10 +626,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     try {
       await apiDelete(`/api/events/delete_presentation?presentation_id=${encodeURIComponent(group.id)}`, authHeaders);
       removePresentationGroupFromUi(group.id, source);
-      setDeployMessage("Deleted presentation group.");
+      setEmailMessage("Deleted presentation group.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setDeployMessage(`Delete failed: ${message}`);
+      setEmailMessage(`Delete failed: ${message}`);
     } finally {
       setDeletingPresentationGroupIds((current) => current.filter((id) => id !== group.id));
     }
@@ -639,7 +640,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     setEditingPresentationName(group.presentationName);
     setEditingPresentationDuration(group.durationMinutes);
     setEditingPresentationBuffer(group.bufferMinutes);
-    setDeployMessage("");
+    setEmailMessage("");
   };
 
   const cancelEditDeployedPresentation = () => {
@@ -651,31 +652,31 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
   const handleSaveEditedPresentation = async (group: PresentationGroup) => {
     if (!isUuid(group.id)) {
-      setDeployMessage("Save failed: deployed presentation is missing a valid ID.");
+      setEmailMessage("Save failed: deployed presentation is missing a valid ID.");
       return;
     }
     const title = editingPresentationName.trim();
     const minutes = Number.parseInt(editingPresentationDuration.trim(), 10);
     const buffer = Number.parseInt(editingPresentationBuffer.trim(), 10);
     if (!title) {
-      setDeployMessage("Save failed: presentation title cannot be empty.");
+      setEmailMessage("Save failed: presentation title cannot be empty.");
       return;
     }
     if (!Number.isFinite(minutes) || minutes < 1) {
-      setDeployMessage("Save failed: duration must be at least 1 minute.");
+      setEmailMessage("Save failed: duration must be at least 1 minute.");
       return;
     }
     if (!Number.isFinite(buffer) || buffer < 0) {
-      setDeployMessage("Save failed: buffer must be 0 or more minutes.");
+      setEmailMessage("Save failed: buffer must be 0 or more minutes.");
       return;
     }
     const studentIds = group.studentIds.filter((id) => isUuid(id));
     if (studentIds.length !== group.studentIds.length) {
-      setDeployMessage("Save failed: one or more presenting students have invalid IDs.");
+      setEmailMessage("Save failed: one or more presenting students have invalid IDs.");
       return;
     }
     if (!classId || !isUuid(classId)) {
-      setDeployMessage("Save failed: class ID is missing or invalid.");
+      setEmailMessage("Save failed: class ID is missing or invalid.");
       return;
     }
 
@@ -702,32 +703,32 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
             : candidate
         )
       );
-      setDeployMessage("Presentation updated.");
+      setEmailMessage("Presentation updated.");
       cancelEditDeployedPresentation();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setDeployMessage(`Save failed: ${message}`);
+      setEmailMessage(`Save failed: ${message}`);
     } finally {
       setSavingEditedPresentationId(null);
     }
   };
 
   // Validates and deploys draft presentation groups to the backend.
-  const handleDeployPresentations = async () => {
-    setDeployMessage("");
+  const handleEmailPresentations = async () => {
+    setEmailMessage("");
     if (!classId) {
-      setDeployMessage("No class is linked to the selected professor.");
+      setEmailMessage("No class is linked to the selected professor.");
       return;
     }
     if (presentationGroups.length === 0) {
-      setDeployMessage("Create at least one presentation group before deploying.");
+      setEmailMessage("Create at least one presentation group before deploying.");
       return;
     }
 
     for (let i = 0; i < presentationGroups.length; i += 1) {
       const group = presentationGroups[i];
       if (!group.presentationName.trim()) {
-        setDeployMessage(`Enter a presentation title for Group ${i + 1}.`);
+        setEmailMessage(`Enter a presentation title for Group ${i + 1}.`);
         return;
       }
       const durationValue = usePerPresentationDuration
@@ -735,7 +736,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         : defaultPresentationDuration.trim();
       const parsedDuration = Number.parseInt(durationValue, 10);
       if (!Number.isFinite(parsedDuration) || parsedDuration < 1) {
-        setDeployMessage(
+        setEmailMessage(
           usePerPresentationDuration
             ? `Enter a valid duration for Group ${i + 1}.`
             : "Enter a valid default presentation duration."
@@ -747,7 +748,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         : defaultBufferDuration.trim();
       const parsedBuffer = Number.parseInt(bufferValue, 10);
       if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0) {
-        setDeployMessage(
+        setEmailMessage(
           usePerBufferDuration
             ? `Enter a valid buffer for Group ${i + 1}.`
             : "Enter a valid default buffer duration."
@@ -795,10 +796,15 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         }
         return merged;
       });
-      setDeployMessage(`Saved ${insertedCount} presentation${insertedCount === 1 ? "" : "s"} to the database.`);
+      let emailCount = 0;
+      for (const group of nextGroups) {
+        const { raw: emailResult } = await apiPost("/api/events/email_students", { presentation_id: group.id }, authHeaders);
+        emailCount += (emailResult.emails_sent as number) ?? 0;
+      }
+      setEmailMessage(`Saved ${insertedCount} presentation${insertedCount === 1 ? "" : "s"} and emailed ${emailCount} student${emailCount === 1 ? "" : "s"}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      setDeployMessage(`Deploy failed: ${message}`);
+      setEmailMessage(`Failed: ${message}`);
     } finally {
       setDeployingPresentations(false);
     }
@@ -1228,13 +1234,13 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                       <div className="pt-1">
                         <button
                           type="button"
-                          onClick={() => void handleDeployPresentations()}
-                          disabled={deployingPresentations}
+                          onClick={() => void handleEmailPresentations()}
+                          disabled={emailingPresentations}
                           className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(27,110,43,0.25)] transition hover:bg-[#155622]"
                         >
-                          {deployingPresentations ? "Deploying..." : "Deploy Presentation"}
+                          {emailingPresentations ? "Sending Emails..." : "Send Emails"}
                         </button>
-                        {deployMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{deployMessage}</p> : null}
+                        {emailMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{emailMessage}</p> : null}
                       </div>
                     </div>
                   ) : null}
