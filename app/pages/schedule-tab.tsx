@@ -20,7 +20,7 @@ import {
   type ConflictContext,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut } from "../lib/api";
-import { useScheduleDrag } from "../lib/useScheduleDrag";
+import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
 
 function dayLabel(key: string) {
   return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
@@ -444,7 +444,7 @@ export default function ScheduleTab({
     symposiumTimeframes,
     resourceAvailability,
     professorIds: allProfessorIds,
-    slotMinutes: 15,
+    slotMinutes: 1,
   }), [presentations, personNames, constraints, symposiumTimeframes, resourceAvailability, allProfessorIds]);
 
   // Handlers
@@ -991,11 +991,17 @@ export default function ScheduleTab({
 
             {/* Snap-target highlight during drag */}
             {isDragging && dragState?.snapTarget ? (() => {
-              const { room, slotIndex } = dragState.snapTarget;
-              const durationSlots = Math.ceil(dragState.presentation.minutes / 15);
-              const gridRowStart = slotIndex - minSlot + 2;
-              const gridRowEnd = gridRowStart + durationSlots;
+              const { room, minuteInDay } = dragState.snapTarget;
+              const minuteFromDayStart = minuteInDay - 9 * 60;
+              const slotFloat = minuteFromDayStart / 15;
+              const relativeSlot = slotFloat - minSlot;
+              const durationSlots = dragState.presentation.minutes / 15;
+              const gridRowStart = Math.floor(relativeSlot) + 2;
+              const gridRowEnd = Math.ceil(relativeSlot + durationSlots) + 2;
               const gridCol = room + 2;
+              const fracStart = relativeSlot - Math.floor(relativeSlot);
+              const topOffset = fracStart * SLOT_HEIGHT;
+              const blockHeight = durationSlots * SLOT_HEIGHT;
               const conflict = dragState.conflict;
               const isBlocked = conflict?.blocked === true;
               const isWarning = conflict !== null && !conflict.blocked;
@@ -1005,6 +1011,9 @@ export default function ScheduleTab({
                   style={{
                     gridRow: `${gridRowStart} / ${gridRowEnd}`,
                     gridColumn: gridCol,
+                    position: "relative",
+                    top: `${topOffset}px`,
+                    height: `${blockHeight}px`,
                     alignSelf: "start",
                     pointerEvents: "none",
                   }}
@@ -1073,30 +1082,50 @@ export default function ScheduleTab({
         const color = colorMap.get(dragState.presentation.id) ?? BLOCK_COLORS[0];
         const durationSlots = Math.ceil(dragState.presentation.minutes / 15);
         const blockHeight = durationSlots * SLOT_HEIGHT;
+        const snap = dragState.snapTarget;
+        const timeLabel = snap ? formatMinuteTime(snap.minuteInDay) : null;
+        const endMinute = snap ? snap.minuteInDay + dragState.presentation.minutes : null;
+        const endLabel = endMinute !== null ? formatMinuteTime(endMinute) : null;
 
         return (
-          <div
-            style={{
-              position: "fixed",
-              left: dragState.currentX - dragState.offsetX,
-              top: dragState.currentY - dragState.offsetY,
-              width: 160,
-              height: blockHeight,
-              backgroundColor: color.bg,
-              color: color.text,
-              opacity: 0.7,
-              pointerEvents: "none",
-              zIndex: 9999,
-            }}
-            className="overflow-hidden rounded-md px-1.5 py-0.5 shadow-lg"
-          >
-            <div className="truncate text-xs font-semibold leading-tight">
-              {dragState.presentation.title}
+          <>
+            <div
+              style={{
+                position: "fixed",
+                left: dragState.currentX - dragState.offsetX,
+                top: dragState.currentY - dragState.offsetY,
+                width: 160,
+                height: blockHeight,
+                backgroundColor: color.bg,
+                color: color.text,
+                opacity: 0.7,
+                pointerEvents: "none",
+                zIndex: 9999,
+              }}
+              className="overflow-hidden rounded-md px-1.5 py-0.5 shadow-lg"
+            >
+              <div className="truncate text-xs font-semibold leading-tight">
+                {dragState.presentation.title}
+              </div>
+              <div className="truncate text-[10px] leading-tight opacity-80">
+                {dragState.presentation.presenterNames.join(", ") || "No presenters"}
+              </div>
             </div>
-            <div className="truncate text-[10px] leading-tight opacity-80">
-              {dragState.presentation.presenterNames.join(", ") || "No presenters"}
-            </div>
-          </div>
+            {timeLabel ? (
+              <div
+                style={{
+                  position: "fixed",
+                  left: dragState.currentX - dragState.offsetX + 164,
+                  top: dragState.currentY - dragState.offsetY,
+                  pointerEvents: "none",
+                  zIndex: 10000,
+                }}
+                className="whitespace-nowrap rounded bg-[#1e293b] px-2 py-1 text-xs font-semibold text-white shadow-lg"
+              >
+                {timeLabel} – {endLabel}
+              </div>
+            ) : null}
+          </>
         );
       })() : null}
 

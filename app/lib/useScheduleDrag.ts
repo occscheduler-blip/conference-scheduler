@@ -10,7 +10,8 @@ const TIME_COL_WIDTH = 72;
 
 export type SnapTarget = {
   room: number;
-  slotIndex: number;
+  /** Total minutes from midnight — minute-level precision */
+  minuteInDay: number;
   startTime: Date;
 };
 
@@ -57,7 +58,7 @@ function viewportToGridPosition(
   roomsAvailable: number,
   minSlot: number,
   maxSlot: number,
-): { room: number; slotIndex: number } | null {
+): { room: number; minuteInDay: number } | null {
   const rect = gridElement.getBoundingClientRect();
   const scrollLeft = gridElement.parentElement?.scrollLeft ?? 0;
   const scrollTop = gridElement.parentElement?.scrollTop ?? 0;
@@ -80,19 +81,28 @@ function viewportToGridPosition(
   if (room < 0 || room >= roomsAvailable) return null;
 
   const slotFloat = (y - headerHeight) / SLOT_HEIGHT;
-  const slotIndex = Math.floor(slotFloat) + minSlot;
-  if (slotIndex < minSlot || slotIndex >= maxSlot) return null;
+  const minuteInDay = Math.round(9 * 60 + (slotFloat + minSlot) * 15);
+  const minMinute = 9 * 60 + minSlot * 15;
+  const maxMinute = 9 * 60 + maxSlot * 15;
+  if (minuteInDay < minMinute || minuteInDay >= maxMinute) return null;
 
-  return { room, slotIndex };
+  return { room, minuteInDay };
 }
 
-function slotToDate(selectedDay: string, slotIndex: number): Date {
-  const totalMinutes = 9 * 60 + slotIndex * 15;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
+function minuteToDate(selectedDay: string, minuteInDay: number): Date {
+  const hours = Math.floor(minuteInDay / 60);
+  const minutes = minuteInDay % 60;
   const d = new Date(`${selectedDay}T00:00:00`);
   d.setHours(hours, minutes, 0, 0);
   return d;
+}
+
+export function formatMinuteTime(minuteInDay: number): string {
+  const hour24 = Math.floor(minuteInDay / 60);
+  const minutes = minuteInDay % 60;
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:${minutes.toString().padStart(2, "0")} ${suffix}`;
 }
 
 export function useScheduleDrag(config: UseScheduleDragConfig) {
@@ -151,8 +161,8 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
         if (grid) {
           const pos = viewportToGridPosition(e.clientX, e.clientY, grid, rooms, min, max);
           if (pos) {
-            const startTime = slotToDate(day, pos.slotIndex);
-            snapTarget = { room: pos.room, slotIndex: pos.slotIndex, startTime };
+            const startTime = minuteToDate(day, pos.minuteInDay);
+            snapTarget = { room: pos.room, minuteInDay: pos.minuteInDay, startTime };
             conflict = detectScheduleConflict(prev.presentation, pos.room, startTime, conflictContext);
           }
         }
