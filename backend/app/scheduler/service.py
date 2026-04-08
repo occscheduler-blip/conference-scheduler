@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from app.scheduler.cp_sat import solve_schedule
 
 logger = logging.getLogger(__name__)
+from app.scheduler.cp_sat import solve_schedule_with_relaxation
 from app.scheduler.models import (
     AvailabilityWindow,
     PresentationInput,
@@ -83,6 +84,7 @@ def build_problem_from_symposium(
     symposium_uuid = _coerce_uuid(symposium_id)
     symposium_row = _get_symposium_row(symposium_uuid)
     rooms_available = int(symposium_row["rooms_available"])
+    symposium_default_buffer = int(symposium_row.get("default_buffer") or 0)
 
     symposium_timeframes_resp = read.get_timeframes(linked_id=symposium_uuid)
     symposium_timeframes = list(getattr(symposium_timeframes_resp, "data", None) or [])
@@ -138,7 +140,7 @@ def build_problem_from_symposium(
                 id=presentation_id,
                 title=title,
                 duration_minutes=duration_minutes,
-                buffer_minutes=int(presentation.get("buffer") or 0),
+                buffer_minutes=int(presentation["buffer"] if presentation.get("buffer") is not None else symposium_default_buffer),
                 class_id=class_id,
                 resource_ids=tuple(dict.fromkeys(resource_ids)),
             )
@@ -229,12 +231,7 @@ def build_schedule_for_symposium(
         slot_minutes=slot_minutes,
         constraints=constraints,
     )
-    logger.info("Solving schedule: time_limit=%.1fs", time_limit_seconds)
     result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
-    logger.info(
-        "Solver result: status=%s  assignments=%d  unscheduled=%d  diagnostics=%s",
-        result.status, len(result.assignments), len(result.unscheduled_presentations), result.diagnostics,
-    )
     if result.status in ("optimal", "feasible"):
         _save_assignments(result)
     else:

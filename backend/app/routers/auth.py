@@ -35,6 +35,10 @@ class CreateAdminRequest(BaseModel):
     password: str
 
 
+class UpdateAdminRequest(BaseModel):
+    email: str
+
+
 @router.post("/admin/login")
 def admin_login(body: LoginRequest) -> dict[str, str]:
     logger.info("Admin login attempt for email=%s", body.email)
@@ -80,6 +84,51 @@ def admin_create(
         )
     logger.info("Admin created: admin_id=%s  email=%s", rows[0]["id"], body.email)
     return {"admin_id": str(rows[0]["id"])}
+
+
+@router.get("/admin/list")
+def admin_list(
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> list[dict[str, str]]:
+    resp = supabase.table("admins").select("id, email").order("email").execute()
+    rows = cast(list[dict[str, object]], resp.data or [])
+    return [{"id": str(row["id"]), "email": str(row["email"])} for row in rows]
+
+
+@router.put("/admin/{admin_id}", status_code=status.HTTP_200_OK)
+def admin_update(
+    admin_id: str,
+    body: UpdateAdminRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str]:
+    trimmed = body.email.strip().lower()
+    resp = (
+        supabase.table("admins")
+        .update({"email": trimmed})
+        .eq("id", admin_id)
+        .execute()
+    )
+    rows = cast(list[dict[str, object]], resp.data or [])
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Admin not found.",
+        )
+    return {"admin_id": admin_id, "email": trimmed}
+
+
+@router.delete("/admin/{admin_id}", status_code=status.HTTP_200_OK)
+def admin_delete(
+    admin_id: str,
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, str]:
+    if admin_id == claims.sub:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete your own account.",
+        )
+    supabase.table("admins").delete().eq("id", admin_id).execute()
+    return {"deleted_id": admin_id}
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from math import ceil
 
@@ -637,4 +638,92 @@ def solve_schedule(
         status=result_status,
         assignments=tuple(assignments),
         diagnostics=tuple(diagnostics),
+    )
+
+
+def _availability_blocked_ids(result: ScheduleResult) -> frozenset[str]:
+    """Return presentation IDs that failed availability filtering (pre-solver)."""
+    return frozenset(
+        pid
+        for pid, diag in zip(
+            result.unscheduled_presentations, result.diagnostics
+        )
+        if "no valid start times" in diag
+    ) if result.unscheduled_presentations else frozenset()
+
+
+def solve_schedule_with_relaxation(
+    problem: ScheduleProblem, time_limit_seconds: float = 10.0
+) -> ScheduleResult:
+    """
+    Attempt to solve the schedule, progressively relaxing constraints if infeasible.
+
+    Relaxation order:
+      1. (none) — strict solve
+      2. Treat all resources as fully available for presentations that had no valid
+         start times (availability-window conflict between presenter and professor).
+      3. Remove the same-room constraint for classes that still have blocked
+         presentations after relaxation 2.
+
+    Each relaxation is reported in ScheduleResult.relaxations_applied.
+    """
+    relaxations: list[str] = []
+
+    # ── Pass 1: strict ────────────────────────────────────────────────────────
+    result = solve_schedule(problem, time_limit_seconds)
+    if result.status in ("optimal", "feasible"):
+        return result
+
+    # ── Pass 2: relax resource availability for availability-blocked presentations ──
+    blocked_ids = _availability_blocked_ids(result)
+    if not blocked_ids:
+        # CP-SAT itself failed (not a filtering issue); skip to pass 3
+        blocked_ids = frozenset(p.id for p in problem.presentations)
+
+    new_resource_windows = dict(problem.resource_windows)
+    for pres in problem.presentations:
+        if pres.id in blocked_ids:
+            for rid in pres.resource_ids:
+                new_resource_windows[rid] = problem.symposium_windows
+
+    relaxed = replace(problem, resource_windows=new_resource_windows)
+    n = len(blocked_ids)
+    relaxations.append(
+        f"Ignored resource availability for {n} presentation(s) with no valid time slots "
+        f"— treated all their professors/students as available for the full symposium."
+    )
+
+    result = solve_schedule(relaxed, time_limit_seconds)
+    if result.status in ("optimal", "feasible"):
+        return replace(result, relaxations_applied=tuple(relaxations))
+
+    # ── Pass 3: relax same-room constraint for affected classes ───────────────
+    still_blocked = frozenset(result.unscheduled_presentations)
+    affected_classes = {
+        p.class_id
+        for p in relaxed.presentations
+        if p.id in still_blocked and p.class_id
+    }
+
+    if affected_classes:
+        new_presentations = tuple(
+            replace(p, class_id="") if p.class_id in affected_classes else p
+            for p in relaxed.presentations
+        )
+        relaxed = replace(relaxed, presentations=new_presentations)
+        relaxations.append(
+            f"Removed same-room constraint for {len(affected_classes)} class(es) "
+            f"({', '.join(sorted(affected_classes))}) — presentations from those "
+            f"classes may now be scheduled in different rooms."
+        )
+
+        result = solve_schedule(relaxed, time_limit_seconds)
+        if result.status in ("optimal", "feasible"):
+            return replace(result, relaxations_applied=tuple(relaxations))
+
+    # All relaxations exhausted
+    return replace(
+        result,
+        status="infeasible",
+        relaxations_applied=tuple(relaxations),
     )
