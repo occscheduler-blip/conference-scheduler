@@ -170,7 +170,7 @@ export const DEFAULT_CONSTRAINTS: ScheduleConstraints = {
   professorAvailability: "hard",
   studentAvailability: "hard",
   sameClassSameRoom: "hard",
-  slotAlignment: "hard",
+  slotAlignment: "off",
   minimizeMakespan: "soft",
   minimizeClassSpan: "soft",
   minimizeProfessorSpan: "soft",
