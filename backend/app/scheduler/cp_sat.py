@@ -403,28 +403,22 @@ def solve_schedule(
                                 assignment_vars[key]
                             )
             else:
-                # Soft: penalize each pair of same-class presentations in different rooms
-                for i, pres_a in enumerate(class_presentations):
-                    for pres_b in class_presentations[i + 1:]:
-                        for room_a in range(problem.rooms_available):
-                            for room_b in range(problem.rooms_available):
-                                if room_a == room_b:
-                                    continue
-                                for oi_a in range(len(eligible_starts[pres_a.id])):
-                                    for oi_b in range(len(eligible_starts[pres_b.id])):
-                                        key_a = (pres_a.id, oi_a, room_a)
-                                        key_b = (pres_b.id, oi_b, room_b)
-                                        violation = model.NewBoolVar(
-                                            f"sv_class_{class_id}_{_soft_violation_counter}"
-                                        )
-                                        _soft_violation_counter += 1
-                                        # both assigned to different rooms → violation
-                                        model.AddBoolOr([
-                                            assignment_vars[key_a].Not(),
-                                            assignment_vars[key_b].Not(),
-                                            violation,
-                                        ])
-                                        soft_violation_terms.append(violation)
+                # Soft: penalize presentations whose room doesn't match the class room
+                class_room_var = model.NewIntVar(
+                    0, problem.rooms_available - 1, f"class_room_{class_id}"
+                )
+                for presentation in class_presentations:
+                    deviation = model.NewBoolVar(
+                        f"sv_class_{class_id}_{presentation.id}_{_soft_violation_counter}"
+                    )
+                    _soft_violation_counter += 1
+                    for option_index in range(len(eligible_starts[presentation.id])):
+                        for room_index in range(problem.rooms_available):
+                            key = (presentation.id, option_index, room_index)
+                            model.Add(class_room_var == room_index).OnlyEnforceIf(
+                                assignment_vars[key], deviation.Not()
+                            )
+                    soft_violation_terms.append(deviation)
 
     all_instants = {
         instant
