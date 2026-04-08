@@ -12,6 +12,7 @@ import {
   totalSlots,
   formatTimeLabel,
   parseBackendDateTime,
+  toBackendDateTime,
   dayKey,
   normalizeId,
   detectScheduleConflict,
@@ -281,7 +282,13 @@ export default function ScheduleTab({
               const tfs = await apiFetch<Timeframe>(
                 `/api/events/timeframes?linked_id=${encodeURIComponent(row.id)}`
               );
-              return tfs[0] ?? null;
+              return tfs
+                .slice()
+                .sort(
+                  (a, b) =>
+                    parseBackendDateTime(a.start_time).getTime() -
+                    parseBackendDateTime(b.start_time).getTime()
+                )[0] ?? null;
             } catch {
               return null;
             }
@@ -512,8 +519,8 @@ export default function ScheduleTab({
   // Drag-and-drop
   const handleDrop = useCallback(
     (presId: string, room: number, startTime: Date, endTime: Date) => {
-      const startISO = startTime.toISOString();
-      const endISO = endTime.toISOString();
+      const startISO = toBackendDateTime(startTime);
+      const endISO = toBackendDateTime(endTime);
 
       setPendingChanges((prev) => {
         const next = new Map(prev);
@@ -564,8 +571,8 @@ export default function ScheduleTab({
 
     const room = Number(editRoom);
     const endDate = new Date(startDate.getTime() + editingPresentation.minutes * 60 * 1000);
-    const startISO = startDate.toISOString();
-    const endISO = endDate.toISOString();
+    const startISO = toBackendDateTime(startDate);
+    const endISO = toBackendDateTime(endDate);
 
     const conflict = detectScheduleConflict(editingPresentation, room, startDate, conflictContext);
     if (conflict?.blocked) {
@@ -890,13 +897,17 @@ export default function ScheduleTab({
             }}
           >
             {/* Header row */}
-            <div className="border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-xs font-bold uppercase text-[#2d3d7a]">
+            <div
+              className="border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-xs font-bold uppercase text-[#2d3d7a]"
+              style={{ gridRow: 1, gridColumn: 1 }}
+            >
               Time
             </div>
             {Array.from({ length: roomsAvailable }, (_, i) => (
               <div
                 key={i}
-                className="border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-center text-xs font-bold uppercase text-[#2d3d7a] last:border-r-0"
+                className="whitespace-nowrap border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-center text-xs font-bold uppercase text-[#2d3d7a] last:border-r-0"
+                style={{ gridRow: 1, gridColumn: i + 2 }}
               >
                 Room {i + 1}
               </div>
@@ -947,8 +958,9 @@ export default function ScheduleTab({
 
               // Sub-slot positioning for non-15-minute-aligned times
               const fracStart = (startSlotRaw - minSlot) - Math.floor(startSlotRaw - minSlot);
-              const topOffset = fracStart * SLOT_HEIGHT;
-              const blockHeight = (endSlotRaw - startSlotRaw) * SLOT_HEIGHT;
+              const verticalInset = 1;
+              const topOffset = fracStart * SLOT_HEIGHT + verticalInset;
+              const blockHeight = Math.max(8, (endSlotRaw - startSlotRaw) * SLOT_HEIGHT - verticalInset * 2);
               const durationSlots = endSlotRaw - startSlotRaw;
 
               const color = colorMap.get(pres.id) ?? BLOCK_COLORS[0];
@@ -959,7 +971,7 @@ export default function ScheduleTab({
                 <div
                   key={pres.id}
                   onPointerDown={(e) => handleBlockPointerDown(e, pres)}
-                  className={`z-10 m-[1px] overflow-hidden rounded-md px-1.5 py-0.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md ${isBeingDragged ? "opacity-30" : ""}`}
+                  className={`z-10 mx-[1px] overflow-hidden rounded-md px-1.5 py-0.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md ${isBeingDragged ? "opacity-30" : ""}`}
                   style={{
                     gridRow: `${gridRowStart} / ${gridRowEnd}`,
                     gridColumn: gridCol,
@@ -1029,11 +1041,11 @@ export default function ScheduleTab({
 
         {/* Unscheduled side panel */}
         {unscheduled.length > 0 ? (
-          <div className="w-56 shrink-0 rounded-lg border border-[#d8e2ff] bg-white">
+          <div className="max-h-[calc(100vh-180px)] w-56 shrink-0 overflow-hidden rounded-lg border border-[#d8e2ff] bg-white">
             <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
               Unscheduled ({unscheduled.length})
             </div>
-            <div className="max-h-[600px] overflow-y-auto p-2">
+            <div className="h-full overflow-y-auto p-2">
               <div className="space-y-1.5">
                 {unscheduled.map((pres) => {
                   const color = colorMap.get(pres.id) ?? BLOCK_COLORS[0];

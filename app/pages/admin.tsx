@@ -80,7 +80,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   const [deletingDepartmentId, setDeletingDepartmentId] = useState("");
   const [departmentMessage, setDepartmentMessage] = useState<string | null>(null);
   const [departmentMessageKind, setDepartmentMessageKind] = useState<"success" | "error" | null>(null);
-  const [deployEventMessage, setDeployEventMessage] = useState<string | null>(null);
+  const [emailEventMessage, setEmailEventMessage] = useState<string | null>(null);
 
   // Manage Admins tab state
   const [newAdminEmail, setNewAdminEmail] = useState("");
@@ -543,17 +543,24 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     }
   };
 
-  const handleDeployEvent = () => {
-    setDeployEventMessage(null);
+  const handleEmailEvent = async () => {
+    setEmailEventMessage(null);
     if (!selectedSymposiumId) {
-      setDeployEventMessage("Select an event first.");
+      setEmailEventMessage("Select an event first.");
       return;
     }
     if (departments.length === 0) {
-      setDeployEventMessage("Add at least one department before deploying.");
+      setEmailEventMessage("Add at least one department before sending emails.");
       return;
     }
-    setDeployEventMessage("Deploy is not connected yet.");
+    try {
+      const { raw } = await apiPost("/api/events/email_symposium", { symposium_id: selectedSymposiumId }, authHeaders);
+      const count = raw.emails_sent as number;
+      setEmailEventMessage(`Emailed ${count} department head${count === 1 ? "" : "s"}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setEmailEventMessage(message);
+    }
   };
 
   const resetCreateTabState = () => {
@@ -589,7 +596,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setDeletingDepartmentId("");
     setDepartmentMessage(null);
     setDepartmentMessageKind(null);
-    setDeployEventMessage(null);
+    setEmailEventMessage(null);
   };
 
   const resetAdminsTabState = () => {
@@ -1221,12 +1228,12 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                   <div className="mt-3 flex flex-wrap items-center gap-3">
                     <button
                       type="button"
-                      onClick={handleDeployEvent}
+                      onClick={handleEmailEvent}
                       className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#155622]"
                     >
-                      Deploy
+                      Send Emails
                     </button>
-                    {deployEventMessage ? <p className="text-sm font-semibold text-[#222]">{deployEventMessage}</p> : null}
+                    {emailEventMessage ? <p className="text-sm font-semibold text-[#222]">{emailEventMessage}</p> : null}
                   </div>
 
                 </div>

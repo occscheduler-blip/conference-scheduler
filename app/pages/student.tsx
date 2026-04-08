@@ -6,6 +6,7 @@ import {
   totalSlots,
   formatTimeLabel,
   buildCalendarFromTimeframes,
+  toBackendDateTime,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
@@ -308,14 +309,14 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
             rangeEnd = slotEnd;
           }
         } else if (rangeStart && rangeEnd) {
-          timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
+          timeframes.push({ start_time: toBackendDateTime(rangeStart), end_time: toBackendDateTime(rangeEnd) });
           rangeStart = null;
           rangeEnd = null;
         }
       }
 
       if (rangeStart && rangeEnd) {
-        timeframes.push({ start_time: rangeStart.toISOString(), end_time: rangeEnd.toISOString() });
+        timeframes.push({ start_time: toBackendDateTime(rangeStart), end_time: toBackendDateTime(rangeEnd) });
       }
     }
 

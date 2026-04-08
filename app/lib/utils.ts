@@ -13,9 +13,9 @@ export function formatTimeLabel(slotIndex: number) {
 }
 
 export function dayKey(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
@@ -24,12 +24,28 @@ export function formatCalendarDate(date: Date) {
     weekday: "short",
     month: "short",
     day: "numeric",
+    timeZone: "UTC",
   });
 }
 
 export function parseBackendDateTime(value: string) {
   const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
   return new Date(hasExplicitTimezone ? value : `${value}Z`);
+}
+
+export function toBackendDateTime(value: Date) {
+  const pad = (n: number) => String(Math.trunc(Math.abs(n))).padStart(2, "0");
+  const year = value.getFullYear();
+  const month = pad(value.getMonth() + 1);
+  const day = pad(value.getDate());
+  const hours = pad(value.getHours());
+  const minutes = pad(value.getMinutes());
+  const seconds = pad(value.getSeconds());
+  const offsetMinutes = -value.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const offsetHours = pad(Math.floor(Math.abs(offsetMinutes) / 60));
+  const offsetRemainder = pad(Math.abs(offsetMinutes) % 60);
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${sign}${offsetHours}:${offsetRemainder}`;
 }
 
 export function toMessage(detail: unknown, fallback: string): string {
@@ -54,15 +70,15 @@ export function normalizeId(value: string) {
 
 export function buildCalendarDates(startDate: string, endDate: string) {
   if (!startDate || !endDate) return [] as Date[];
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [] as Date[];
 
   const dates: Date[] = [];
   const cursor = new Date(start);
   while (cursor <= end) {
     dates.push(new Date(cursor));
-    cursor.setDate(cursor.getDate() + 1);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return dates;
 }
@@ -79,7 +95,7 @@ export function buildTimeframesFromGrid(dates: Date[], availability: boolean[][]
       if (availability[dayIndex]?.[slotIndex]) {
         const slotStart = new Date(dates[dayIndex]);
         const startMinutes = 9 * 60 + slotIndex * 15;
-        slotStart.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
+        slotStart.setUTCHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
 
         const slotEnd = new Date(slotStart);
         slotEnd.setMinutes(slotEnd.getMinutes() + 15);
@@ -91,14 +107,14 @@ export function buildTimeframesFromGrid(dates: Date[], availability: boolean[][]
           rangeEnd = slotEnd;
         }
       } else if (rangeStart && rangeEnd) {
-        tuples.push([rangeStart.toISOString(), rangeEnd.toISOString()]);
+        tuples.push([toBackendDateTime(rangeStart), toBackendDateTime(rangeEnd)]);
         rangeStart = null;
         rangeEnd = null;
       }
     }
 
     if (rangeStart && rangeEnd) {
-      tuples.push([rangeStart.toISOString(), rangeEnd.toISOString()]);
+      tuples.push([toBackendDateTime(rangeStart), toBackendDateTime(rangeEnd)]);
     }
   }
 
@@ -106,8 +122,8 @@ export function buildTimeframesFromGrid(dates: Date[], availability: boolean[][]
 }
 
 export function slotRange(start: Date, end: Date | null): { startSlot: number; slotSpan: number } {
-  const startMinutes = start.getHours() * 60 + start.getMinutes();
-  const endMinutes = end ? end.getHours() * 60 + end.getMinutes() : startMinutes + 15;
+  const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
+  const endMinutes = end ? end.getUTCHours() * 60 + end.getUTCMinutes() : startMinutes + 15;
   return {
     startSlot: Math.floor((startMinutes - 9 * 60) / 15),
     slotSpan: Math.max(1, Math.ceil((endMinutes - startMinutes) / 15)),
@@ -385,7 +401,7 @@ export function buildCalendarFromTimeframes(
     .sort()
     .map((key) => ({
       key,
-      label: formatCalendarDate(new Date(`${key}T00:00:00`)),
+      label: formatCalendarDate(new Date(`${key}T00:00:00Z`)),
     }));
 
   const dayIndexByKey = new Map(calendarDays.map((day, index) => [day.key, index]));
