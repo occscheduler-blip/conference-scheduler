@@ -538,3 +538,15 @@ class ScheduleConstraintsRequest(BaseModel):
 class RunSchedulerRequest(BaseModel):
     symposium_id: UUID
     constraints: ScheduleConstraintsRequest = ScheduleConstraintsRequest()
+
+
+class EmailSymposiumRequest(BaseModel):
+    symposium_id: UUID
+
+
+class EmailClassesRequest(BaseModel):
+    department_id: UUID
+
+
+class EmailStudentsRequest(BaseModel):
+    presentation_id: UUID

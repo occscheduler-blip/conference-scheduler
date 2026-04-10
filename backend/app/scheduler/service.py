@@ -9,7 +9,6 @@ from uuid import UUID, uuid4
 from app.scheduler.cp_sat import solve_schedule
 
 logger = logging.getLogger(__name__)
-from app.scheduler.cp_sat import solve_schedule_with_relaxation
 from app.scheduler.models import (
     AvailabilityWindow,
     PresentationInput,
@@ -19,6 +18,7 @@ from app.scheduler.models import (
 )
 from app.supabase_io import read
 from app.supabase_io.client import supabase
+from app.utils import parse_app_datetime
 
 
 def _coerce_uuid(value: str | UUID) -> UUID:
@@ -26,11 +26,20 @@ def _coerce_uuid(value: str | UUID) -> UUID:
 
 
 def _coerce_datetime(value: object) -> datetime:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    raise ValueError(f"Invalid datetime value: {value!r}")
+    return parse_app_datetime(value)
+
+
+def _assignments_within_symposium_windows(
+    problem: ScheduleProblem,
+    result: ScheduleResult,
+) -> bool:
+    return all(
+        any(
+            assignment.start >= window.start and assignment.end <= window.end
+            for window in problem.symposium_windows
+        )
+        for assignment in result.assignments
+    )
 
 
 def _window_rows_to_models(rows: list[dict[str, Any]]) -> tuple[AvailabilityWindow, ...]:
@@ -188,14 +197,16 @@ def build_problem_from_symposium(
     )
 
 
-def _save_assignments(result: ScheduleResult) -> None:
+def _save_assignments(
+    result: ScheduleResult,
+    presentation_ids_to_reset: tuple[str, ...],
+) -> None:
     from app.supabase_io import delete, write
 
     logger.info("Saving %d schedule assignments", len(result.assignments))
-    # Clean up old schedule assignments before re-saving
-    presentation_ids = [
-        UUID(a.presentation_id) for a in result.assignments
-    ]
+    # Clear existing assignments for every presentation in the symposium so
+    # anything the solver leaves unscheduled is reflected in the DB/UI.
+    presentation_ids = [UUID(pid) for pid in presentation_ids_to_reset]
     if presentation_ids:
         delete.delete_timeframes(presentation_ids)
         for pid in presentation_ids:
@@ -232,8 +243,19 @@ def build_schedule_for_symposium(
         constraints=constraints,
     )
     result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
+    if result.status in ("optimal", "feasible") and not _assignments_within_symposium_windows(problem, result):
+        logger.error("Scheduler returned an assignment outside the symposium windows: symposium_id=%s", symposium_id)
+        return ScheduleResult(
+            status="invalid",
+            assignments=(),
+            unscheduled_presentations=tuple(p.id for p in problem.presentations),
+            diagnostics=("Scheduler produced an assignment outside the symposium windows.",),
+        )
     if result.status in ("optimal", "feasible"):
-        _save_assignments(result)
+        _save_assignments(
+            result,
+            tuple(p.id for p in problem.presentations),
+        )
     else:
         logger.warning("Scheduler did not find a solution: status=%s", result.status)
     return result

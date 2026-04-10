@@ -70,4 +70,3 @@ class ScheduleResult:
     unscheduled_presentations: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
-    relaxations_applied: tuple[str, ...] = ()

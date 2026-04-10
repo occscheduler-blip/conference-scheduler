@@ -9,7 +9,11 @@ from postgrest.base_request_builder import APIResponse
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
-from app.utils import rows_affected as _rows_affected
+from app.utils import (
+    ensure_app_timezone,
+    parse_app_datetime,
+    rows_affected as _rows_affected,
+)
 
 logger = logging.getLogger(__name__)
 from app.supabase_io import delete, read, write
@@ -27,6 +31,9 @@ import app.routers.request_schemas as request_schemas
 import app.supabase_io.supabase_schemas as supabase_schemas
 from app.scheduler import build_schedule_for_symposium
 from app.scheduler.models import ScheduleConstraints
+
+from app.auth.email import send_dept_head_notification, send_professor_notification, send_student_notification
+from app.config import get_settings
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -69,6 +76,32 @@ def _sum_counts(*groups: dict[str, int]) -> int:
             if isinstance(value, int) and value >= 0:
                 total += value
     return total
+
+
+def _load_symposium_windows(symposium_id: UUID) -> tuple[tuple[datetime, datetime], ...]:
+    tf_resp = read.get_timeframes(linked_id=symposium_id)
+    windows: list[tuple[datetime, datetime]] = []
+    for row in list(getattr(tf_resp, "data", None) or []):
+        start = parse_app_datetime(row["start_time"])
+        end = parse_app_datetime(row["end_time"])
+        if end > start:
+            windows.append((start, end))
+    windows.sort(key=lambda item: item[0])
+    return tuple(windows)
+
+
+def _assert_within_symposium_windows(
+    symposium_id: UUID,
+    start: datetime,
+    end: datetime,
+) -> None:
+    windows = _load_symposium_windows(symposium_id)
+    if any(start >= window_start and end <= window_end for window_start, window_end in windows):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail="Presentation falls outside the symposium hours.",
+    )
 
 
 # Admin Only
@@ -293,6 +326,40 @@ def delete_department(
         ) from exc
 
 
+@router.post("/email_symposium")
+def email_symposium(
+    body: request_schemas.EmailSymposiumRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    try:
+        logger.info("email_symposium: symposium_id=%s", body.symposium_id)
+        settings = get_settings()
+        frontend_url = settings.cors_origins[0]
+
+        symposium_resp = supabase.table("symposiums").select("name").eq("id", str(body.symposium_id)).execute()
+        symposium_name = (symposium_resp.data or [{}])[0].get("name", "the symposium")
+
+        dept_resp = supabase.table("departments").select("id,department_head_name,email").eq("symposium_id", str(body.symposium_id)).execute()
+        depts = dept_resp.data or []
+
+        for dept in depts:
+            login_url = f"{frontend_url}/pages?view=login"
+            send_dept_head_notification(
+                to_email=dept["email"],
+                name=dept["department_head_name"],
+                symposium_name=symposium_name,
+                login_url=login_url,
+            )
+
+        logger.info("email_symposium: sent %d emails", len(depts))
+        return {"status": "ok", "emails_sent": len(depts)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("email_symposium failed: symposium_id=%s", body.symposium_id)
+        raise HTTPException(status_code=500, detail=f"Failed to email symposium: {exc}") from exc
+
+
 # Admins and Department Heads
 
 
@@ -435,6 +502,48 @@ def delete_class(
         raise HTTPException(
             status_code=400, detail=f"Failed to delete class: {exc}"
         ) from exc
+
+
+@router.post("/email_classes")
+def email_classes(
+    body: request_schemas.EmailClassesRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, object]:
+    try:
+        logger.info("email_classes: department_id=%s", body.department_id)
+        settings = get_settings()
+        frontend_url = settings.cors_origins[0]
+
+        dept_resp = supabase.table("departments").select("symposium_id").eq("id", str(body.department_id)).execute()
+        symposium_id = (dept_resp.data or [{}])[0].get("symposium_id")
+        sym_resp = supabase.table("symposiums").select("name").eq("id", str(symposium_id)).execute()
+        symposium_name = (sym_resp.data or [{}])[0].get("name", "the symposium")
+
+        classes_resp = supabase.table("classes").select("id").eq("department_id", str(body.department_id)).execute()
+        class_ids = [c["id"] for c in (classes_resp.data or [])]
+
+        if not class_ids:
+            return {"status": "ok", "emails_sent": 0}
+
+        profs_resp = supabase.table("professors").select("id,name,email").in_("class_id", class_ids).execute()
+        professors = profs_resp.data or []
+
+        for prof in professors:
+            login_url = f"{frontend_url}/pages?view=login"
+            send_professor_notification(
+                to_email=prof["email"],
+                name=prof["name"],
+                symposium_name=symposium_name,
+                login_url=login_url,
+            )
+
+        logger.info("email_classes: sent %d emails", len(professors))
+        return {"status": "ok", "emails_sent": len(professors)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("email_classes failed: department_id=%s", body.department_id)
+        raise HTTPException(status_code=500, detail=f"Failed to email classes: {exc}") from exc
 
 
 # Admins, Department Heads, and Professors
@@ -687,6 +796,52 @@ def delete_student(
         ) from exc
 
 
+@router.post("/email_students")
+def email_students(
+    body: request_schemas.EmailStudentsRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),  # admin + dept head + professor
+) -> dict[str, object]:
+    try:
+        logger.info("email_students: presentation_id=%s", body.presentation_id)
+        settings = get_settings()
+        frontend_url = settings.cors_origins[0]
+
+        pres_resp = supabase.table("presentations").select("class_id").eq("id", str(body.presentation_id)).execute()
+        class_id = (pres_resp.data or [{}])[0].get("class_id")
+        class_resp = supabase.table("classes").select("department_id").eq("id", str(class_id)).execute()
+        dept_id = (class_resp.data or [{}])[0].get("department_id")
+        dept_resp = supabase.table("departments").select("symposium_id").eq("id", str(dept_id)).execute()
+        symposium_id = (dept_resp.data or [{}])[0].get("symposium_id")
+        sym_resp = supabase.table("symposiums").select("name").eq("id", str(symposium_id)).execute()
+        symposium_name = (sym_resp.data or [{}])[0].get("name", "the symposium")
+
+        ps_resp = supabase.table("presenting_students").select("student_id").eq("presentation_id", str(body.presentation_id)).execute()
+        student_ids = [r["student_id"] for r in (ps_resp.data or [])]
+
+        if not student_ids:
+            return {"status": "ok", "emails_sent": 0}
+
+        students_resp = supabase.table("students").select("id,name,email").in_("id", student_ids).execute()
+        students = students_resp.data or []
+
+        for student in students:
+            login_url = f"{frontend_url}/pages?view=login"
+            send_student_notification(
+                to_email=student["email"],
+                name=student["name"],
+                symposium_name=symposium_name,
+                login_url=login_url,
+            )
+
+        logger.info("email_students: sent %d emails", len(students))
+        return {"status": "ok", "emails_sent": len(students)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("email_students failed: presentation_id=%s", body.presentation_id)
+        raise HTTPException(status_code=500, detail=f"Failed to email students: {exc}") from exc
+
+
 # Admins, Department Heads, Professors, and Students
 
 
@@ -868,8 +1023,9 @@ def update_schedule_assignment(
                 if name:
                     person_name_by_id[sid] = name
 
-        new_start = payload.start_time if payload.start_time.tzinfo else payload.start_time.replace(tzinfo=timezone.utc)
-        new_end = payload.end_time if payload.end_time.tzinfo else payload.end_time.replace(tzinfo=timezone.utc)
+        new_start = ensure_app_timezone(payload.start_time)
+        new_end = ensure_app_timezone(payload.end_time)
+        _assert_within_symposium_windows(payload.symposium_id, new_start, new_end)
         target_buffer = timedelta(minutes=int(target_pres.get("buffer") or 0))
         new_buffered_end = new_end + target_buffer
 
@@ -897,14 +1053,8 @@ def update_schedule_assignment(
                     continue
 
                 other_tf = tf_by_pres[other_id]
-                other_start_raw = datetime.fromisoformat(
-                    str(other_tf["start_time"]).replace("Z", "+00:00")
-                )
-                other_end_raw = datetime.fromisoformat(
-                    str(other_tf["end_time"]).replace("Z", "+00:00")
-                )
-                other_start = other_start_raw if other_start_raw.tzinfo else other_start_raw.replace(tzinfo=timezone.utc)
-                other_end = other_end_raw if other_end_raw.tzinfo else other_end_raw.replace(tzinfo=timezone.utc)
+                other_start = parse_app_datetime(other_tf["start_time"])
+                other_end = parse_app_datetime(other_tf["end_time"])
                 other_buffer = timedelta(minutes=int(other.get("buffer") or 0))
                 other_buffered_end = other_end + other_buffer
                 times_overlap = new_start < other_buffered_end and new_buffered_end > other_start
@@ -1072,18 +1222,17 @@ def bulk_update_schedule_assignments(
             buf = timedelta(minutes=int(p.get("buffer") or 0))
             if pid in assignment_map:
                 a = assignment_map[pid]
-                start = a.start_time if a.start_time.tzinfo else a.start_time.replace(tzinfo=timezone.utc)
-                end = a.end_time if a.end_time.tzinfo else a.end_time.replace(tzinfo=timezone.utc)
+                start = ensure_app_timezone(a.start_time)
+                end = ensure_app_timezone(a.end_time)
+                _assert_within_symposium_windows(payload.symposium_id, start, end)
                 effective[pid] = (a.room, start, end + buf)
             elif pid in existing_tf:
                 room_val = p.get("room")
                 if room_val is None:
                     continue
                 tf = existing_tf[pid]
-                start_raw = datetime.fromisoformat(str(tf["start_time"]).replace("Z", "+00:00"))
-                end_raw = datetime.fromisoformat(str(tf["end_time"]).replace("Z", "+00:00"))
-                start = start_raw if start_raw.tzinfo else start_raw.replace(tzinfo=timezone.utc)
-                end = end_raw if end_raw.tzinfo else end_raw.replace(tzinfo=timezone.utc)
+                start = parse_app_datetime(tf["start_time"])
+                end = parse_app_datetime(tf["end_time"])
                 effective[pid] = (int(room_val), start, end + buf)
 
         # Check all pairs for conflicts
