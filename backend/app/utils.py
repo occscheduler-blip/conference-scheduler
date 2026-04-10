@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
 from postgrest.base_request_builder import APIResponse
@@ -10,6 +11,21 @@ def force_uuid(id: object) -> UUID:
         return id
     else:
         raise ValueError(f"Invalid UUID: {id}")
+
+
+def ensure_app_timezone(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def parse_app_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return ensure_app_timezone(value)
+    if isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return ensure_app_timezone(parsed)
+    raise ValueError(f"Invalid datetime value: {value!r}")
 
 
 def rows_affected(

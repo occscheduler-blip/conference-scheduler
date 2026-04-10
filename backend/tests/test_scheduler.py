@@ -2,7 +2,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from app.scheduler.cp_sat import solve_schedule, solve_schedule_with_relaxation
+from app.scheduler.cp_sat import solve_schedule
 from app.scheduler.models import AvailabilityWindow, PresentationInput, ScheduleProblem
 
 
@@ -327,19 +327,16 @@ def test_massive_symposium():
     )
 
     t0 = time.perf_counter()
-    result = solve_schedule_with_relaxation(problem, time_limit_seconds=60.0)
+    result = solve_schedule(problem, time_limit_seconds=60.0)
     elapsed = time.perf_counter() - t0
 
     print(f"\nMassive symposium ({total} presentations) — status: {result.status} — {elapsed:.2f}s")
     print(f"  Scheduled: {len(result.assignments)}, Unscheduled: {len(result.unscheduled_presentations)}")
-    for r in result.relaxations_applied:
-        print(f"  relaxation: {r}")
     for d in result.diagnostics:
         print(f"  diagnostic: {d}")
 
     assert result.status in ("optimal", "feasible"), (
-        f"Expected a feasible schedule after relaxation, got: {result.status}\n"
-        f"Relaxations attempted: {result.relaxations_applied}\n"
+        f"Expected a partial schedule, got: {result.status}\n"
         f"Diagnostics: {result.diagnostics}"
     )
     assert elapsed < 60.0, f"Solver exceeded time limit: {elapsed:.2f}s"
