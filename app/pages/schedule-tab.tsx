@@ -44,7 +44,7 @@ function timeLabel(start: string, end: string) {
 /** Convert a Date to a datetime-local input value (YYYY-MM-DDTHH:MM). */
 function toDatetimeLocal(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
 const fieldClass =
@@ -403,8 +403,8 @@ export default function ScheduleTab({
       const start = parseBackendDateTime(tf.start_time);
       if (dayKey(start) !== selectedDay) continue;
       const end = parseBackendDateTime(tf.end_time);
-      const startMinutes = start.getHours() * 60 + start.getMinutes();
-      const endMinutes = end.getHours() * 60 + end.getMinutes();
+      const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
+      const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
       const firstSlot = Math.floor((startMinutes - 9 * 60) / 15);
       const lastSlot = Math.ceil((endMinutes - 9 * 60) / 15);
       for (let s = firstSlot; s < lastSlot; s++) {
@@ -946,8 +946,8 @@ export default function ScheduleTab({
               if (pres.room === null || !pres.timeframe) return null;
               const start = parseBackendDateTime(pres.timeframe.start_time);
               const end = parseBackendDateTime(pres.timeframe.end_time);
-              const startMinutes = start.getHours() * 60 + start.getMinutes();
-              const endMinutes = end.getHours() * 60 + end.getMinutes();
+              const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
+              const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
               const startSlotRaw = (startMinutes - 9 * 60) / 15;
               const endSlotRaw = (endMinutes - 9 * 60) / 15;
 
