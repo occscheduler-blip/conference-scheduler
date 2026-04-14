@@ -234,7 +234,7 @@ def _save_assignments(
 def build_schedule_for_symposium(
     symposium_id: str | UUID,
     slot_minutes: int = 5,
-    time_limit_seconds: float = 10.0,
+    time_limit_seconds: float = 30.0,
     constraints: ScheduleConstraints | None = None,
 ) -> ScheduleResult:
     problem = build_problem_from_symposium(
