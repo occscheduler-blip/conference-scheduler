@@ -14,6 +14,8 @@ import {
   parseBackendDateTime,
   toBackendDateTime,
   dayKey,
+  dayLabel,
+  timeLabel,
   normalizeId,
   detectScheduleConflict,
   DEFAULT_CONSTRAINTS,
@@ -23,32 +25,13 @@ import {
 import { apiFetch, apiPost, apiPut } from "../lib/api";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
 
-function dayLabel(key: string) {
-  return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function timeLabel(start: string, end: string) {
-  const s = parseBackendDateTime(start);
-  const e = parseBackendDateTime(end);
-  return `${s.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} - ${e.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  })}`;
-}
-
 /** Convert a Date to a datetime-local input value (YYYY-MM-DDTHH:MM). */
 function toDatetimeLocal(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
-const fieldClass =
-  "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
+import { FIELD_CLASS as fieldClass } from "../lib/styles";
 
 const SLOT_HEIGHT = 24;
 
@@ -85,6 +68,7 @@ export default function ScheduleTab({
   // Scheduler
   const [isRunningScheduler, setIsRunningScheduler] = useState(false);
   const [schedulerMessage, setSchedulerMessage] = useState<string | null>(null);
+  const [schedulerFailure, setSchedulerFailure] = useState<{ unscheduledCount: number } | null>(null);
 
   // Edit modal
   const [editingPresentation, setEditingPresentation] = useState<SchedulePresentation | null>(null);
@@ -455,12 +439,13 @@ export default function ScheduleTab({
   }), [presentations, personNames, constraints, symposiumTimeframes, resourceAvailability, allProfessorIds]);
 
   // Handlers
-  const handleRunScheduler = async () => {
+  const handleRunScheduler = async (skipConfirm: boolean = false) => {
     if (!selectedSymposiumId) return;
-    if (!window.confirm("This will regenerate the schedule. Existing assignments will be replaced. Continue?")) return;
+    if (!skipConfirm && !window.confirm("This will regenerate the schedule. Existing assignments will be replaced. Continue?")) return;
 
     setIsRunningScheduler(true);
     setSchedulerMessage(null);
+    setSchedulerFailure(null);
     try {
       const { raw } = await apiPost("/api/events/schedule", {
         symposium_id: selectedSymposiumId,
@@ -487,6 +472,9 @@ export default function ScheduleTab({
       setPendingChanges(new Map());
       setBulkSaveMessage(null);
       await fetchScheduleData(selectedSymposiumId);
+      if (unscheduledIds.length > 0) {
+        setSchedulerFailure({ unscheduledCount: unscheduledIds.length });
+      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       setSchedulerMessage(`Error: ${msg}`);
@@ -681,7 +669,7 @@ export default function ScheduleTab({
         <div className="flex items-center gap-4">
           <button
             type="button"
-            onClick={handleRunScheduler}
+            onClick={() => handleRunScheduler()}
             disabled={isRunningScheduler}
             className="rounded-lg bg-[#1b6e2b] px-6 py-2.5 text-base font-semibold text-white transition hover:bg-[#15572b] disabled:opacity-50"
           >
@@ -1278,6 +1266,90 @@ export default function ScheduleTab({
                   className="rounded-lg border border-[#0f33a8] bg-white px-5 py-2 text-sm font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
                 >
                   Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Scheduler failure popup — appears whenever the scheduler leaves presentations unscheduled. */}
+      {schedulerFailure ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setSchedulerFailure(null)}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border border-[#d6b676] bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-[#9a1f1f] px-5 py-3 text-lg font-semibold text-white">
+              Schedule incomplete
+            </div>
+            <div className="space-y-4 px-5 py-4">
+              <p className="text-sm text-[#111]">
+                The scheduler could not place{" "}
+                <span className="font-bold">{schedulerFailure.unscheduledCount}</span>{" "}
+                presentation{schedulerFailure.unscheduledCount !== 1 ? "s" : ""}. Try relaxing one or more of the constraints below, then re-run.
+              </p>
+
+              <div className="space-y-1">
+                {([
+                  { key: "professorAvailability" as const, label: "Professor availability" },
+                  { key: "studentAvailability" as const, label: "Student availability" },
+                  { key: "sameClassSameRoom" as const, label: "Same class \u2192 same room" },
+                ]).map(({ key, label }) => (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between gap-2 rounded-md border border-[#e5eaff] px-3 py-2"
+                  >
+                    <span className="text-sm font-medium text-[#111]">{label}</span>
+                    <div className="flex shrink-0 overflow-hidden rounded-md border border-[#d0d8f0]">
+                      {(["off", "soft", "hard"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setConstraints((prev) => ({ ...prev, [key]: mode }))}
+                          className={`w-[42px] py-1 text-[10px] font-semibold transition ${
+                            constraints[key] === mode
+                              ? mode === "off"
+                                ? "bg-[#e0e0e0] text-[#555]"
+                                : mode === "soft"
+                                  ? "bg-[#fff3cd] text-[#856404]"
+                                  : "bg-[#1635a7] text-white"
+                              : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
+                          }`}
+                        >
+                          {mode === "off" ? "Off" : mode === "soft" ? "Soft" : "Hard"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-[11px] text-[#888]">
+                Soft constraints are preferred but can be violated; Off removes the constraint entirely.
+              </p>
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSchedulerFailure(null);
+                    void handleRunScheduler(true);
+                  }}
+                  disabled={isRunningScheduler}
+                  className="rounded-lg bg-[#0f33a8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] disabled:opacity-50"
+                >
+                  {isRunningScheduler ? "Re-running..." : "Re-run scheduler"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSchedulerFailure(null)}
+                  className="rounded-lg border border-[#0f33a8] bg-white px-5 py-2 text-sm font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+                >
+                  Dismiss
                 </button>
               </div>
             </div>

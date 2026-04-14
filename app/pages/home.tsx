@@ -11,26 +11,8 @@ import type {
   SymposiumOption,
   Timeframe,
 } from "./types";
-import { parseBackendDateTime, normalizeId, dayKey } from "../lib/utils";
+import { parseBackendDateTime, normalizeId, dayKey, dayLabel, timeLabel } from "../lib/utils";
 import { apiFetch } from "../lib/api";
-
-function dayLabel(key: string) {
-  return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function timeLabel(start: string, end: string) {
-  const s = parseBackendDateTime(start);
-  const e = parseBackendDateTime(end);
-  return `${s.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} - ${e.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  })}`;
-}
 
 function HomeContent() {
   const searchParams = useSearchParams();

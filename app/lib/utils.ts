@@ -28,9 +28,27 @@ export function formatCalendarDate(date: Date) {
   });
 }
 
+export function dayLabel(key: string) {
+  return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export function parseBackendDateTime(value: string) {
   const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
   return new Date(hasExplicitTimezone ? value : `${value}Z`);
+}
+
+export function timeLabel(start: string, end: string) {
+  const s = parseBackendDateTime(start);
+  const e = parseBackendDateTime(end);
+  return `${s.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} - ${e.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
 }
 
 export function toBackendDateTime(value: Date) {
