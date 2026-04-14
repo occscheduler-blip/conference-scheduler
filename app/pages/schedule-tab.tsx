@@ -165,26 +165,22 @@ export default function ScheduleTab({
           return;
         }
 
-        // Fetch classes
-        const classRows = (
-          await Promise.all(
-            departmentRows.map(async (dept) => {
-              try {
-                return await apiFetch<ClassRecord>(
-                  `/api/events/classes?department_id=${encodeURIComponent(dept.id)}`
-                );
-              } catch {
-                return [];
-              }
-            })
-          )
-        ).flat();
+        // Bulk-fetch classes for all departments in one call
+        const departmentIdParam = departmentRows.map((d) => d.id).join(",");
+        let classRows: ClassRecord[] = [];
+        try {
+          classRows = await apiFetch<ClassRecord>(
+            `/api/events/classes?department_id=${encodeURIComponent(departmentIdParam)}`
+          );
+        } catch {
+          classRows = [];
+        }
 
         // Department lookup
         const deptById = new Map(departmentRows.map((d) => [d.id, d]));
         const deptIdByClassId = new Map(classRows.map((c) => [c.id, c.department_id]));
 
-        // Fetch presentations and students
+        // Fetch presentations, students, and professors for all classes in parallel (3 calls total)
         type RawPresentation = {
           id?: string;
           class_id?: string;
@@ -198,46 +194,25 @@ export default function ScheduleTab({
 
         type RawProfessor = { id?: string; name?: string; class_id?: string };
 
-        const [rawPresentations, rawStudents, rawProfessors] = await Promise.all([
-          Promise.all(
-            classRows.map(async (row) => {
-              try {
-                return await apiFetch<RawPresentation>(
-                  `/api/events/presentations?class_id=${encodeURIComponent(row.id)}`
-                );
-              } catch {
-                return [];
-              }
-            })
-          ),
-          Promise.all(
-            classRows.map(async (row) => {
-              try {
-                return await apiFetch<RawStudent>(
-                  `/api/events/students?class_id=${encodeURIComponent(row.id)}`
-                );
-              } catch {
-                return [];
-              }
-            })
-          ),
-          Promise.all(
-            classRows.map(async (row) => {
-              try {
-                return await apiFetch<RawProfessor>(
-                  `/api/events/professors?class_id=${encodeURIComponent(row.id)}`
-                );
-              } catch {
-                return [];
-              }
-            })
-          ),
-        ]);
+        const classIdParam = classRows.map((row) => row.id).join(",");
+        const [rawPresentations, rawStudents, rawProfessors] = classIdParam
+          ? await Promise.all([
+              apiFetch<RawPresentation>(
+                `/api/events/presentations?class_id=${encodeURIComponent(classIdParam)}`
+              ).catch(() => [] as RawPresentation[]),
+              apiFetch<RawStudent>(
+                `/api/events/students?class_id=${encodeURIComponent(classIdParam)}`
+              ).catch(() => [] as RawStudent[]),
+              apiFetch<RawProfessor>(
+                `/api/events/professors?class_id=${encodeURIComponent(classIdParam)}`
+              ).catch(() => [] as RawProfessor[]),
+            ])
+          : [[] as RawPresentation[], [] as RawStudent[], [] as RawProfessor[]];
 
         // Professor IDs grouped by class_id (all professors in a class are resources for all its presentations)
         const professorIdsByClass = new Map<string, string[]>();
         const personNameById = new Map<string, string>();
-        for (const prof of rawProfessors.flat()) {
+        for (const prof of rawProfessors) {
           const cid = prof.class_id ?? "";
           const pid = prof.id ?? "";
           if (cid && pid) {
@@ -251,36 +226,40 @@ export default function ScheduleTab({
 
         const studentNameById = new Map(
           rawStudents
-            .flat()
             .filter((r): r is { id: string; name: string } => Boolean(r.id && r.name?.trim()))
             .map((r) => [normalizeId(r.id), r.name.trim()])
         );
 
-        const flatPresentations = rawPresentations.flat();
+        // Bulk-fetch timeframes for all presentations in one call
+        const presentationIds = rawPresentations
+          .map((row) => row.id ?? "")
+          .filter((id) => id.length > 0);
+        let allPresentationTimeframes: Timeframe[] = [];
+        if (presentationIds.length > 0) {
+          try {
+            allPresentationTimeframes = await apiFetch<Timeframe>(
+              `/api/events/timeframes?linked_id=${encodeURIComponent(presentationIds.join(","))}`
+            );
+          } catch {
+            allPresentationTimeframes = [];
+          }
+        }
+        const timeframeByPresentation = new Map<string, Timeframe>();
+        for (const tf of allPresentationTimeframes) {
+          const key = normalizeId(tf.linked_id ?? "");
+          if (!key) continue;
+          const existing = timeframeByPresentation.get(key);
+          if (
+            !existing ||
+            parseBackendDateTime(tf.start_time).getTime() <
+              parseBackendDateTime(existing.start_time).getTime()
+          ) {
+            timeframeByPresentation.set(key, tf);
+          }
+        }
 
-        // Fetch timeframes for all presentations
-        const presentationTimeframes = await Promise.all(
-          flatPresentations.map(async (row) => {
-            if (!row.id) return null;
-            try {
-              const tfs = await apiFetch<Timeframe>(
-                `/api/events/timeframes?linked_id=${encodeURIComponent(row.id)}`
-              );
-              return tfs
-                .slice()
-                .sort(
-                  (a, b) =>
-                    parseBackendDateTime(a.start_time).getTime() -
-                    parseBackendDateTime(b.start_time).getTime()
-                )[0] ?? null;
-            } catch {
-              return null;
-            }
-          })
-        );
-
-        const presentationRows: SchedulePresentation[] = flatPresentations
-          .map((row, i) => {
+        const presentationRows: SchedulePresentation[] = rawPresentations
+          .map((row) => {
             const presenterNames = (row.presenting_students ?? [])
               .map((s) => {
                 const directName = s.name?.trim() ?? "";
@@ -312,7 +291,7 @@ export default function ScheduleTab({
               minutes: row.minutes ?? 0,
               buffer: row.buffer ?? 0,
               room: row.room ?? null,
-              timeframe: presentationTimeframes[i] ?? null,
+              timeframe: timeframeByPresentation.get(normalizeId(row.id ?? "")) ?? null,
               presenterNames: Array.from(new Set(presenterNames)),
               departmentName: dept?.department_name ?? "",
               resourceIds: Array.from(resourceIds),
@@ -326,25 +305,33 @@ export default function ScheduleTab({
           for (const pid of ids) profIdSet.add(pid);
         }
         const allResourceIds = new Set(profIdSet);
-        for (const row of rawStudents.flat()) {
+        for (const row of rawStudents) {
           const sid = normalizeId(row.id ?? "");
           if (sid) allResourceIds.add(sid);
         }
 
-        // Fetch availability timeframes for professors and students
+        // Bulk-fetch availability timeframes for all professors and students in one call
         const resAvailMap = new Map<string, Array<{ start_time: string; end_time: string }>>();
-        await Promise.all(
-          Array.from(allResourceIds).map(async (rid) => {
-            try {
-              const tfs = await apiFetch<Timeframe>(
-                `/api/events/timeframes?linked_id=${encodeURIComponent(rid)}`,
-              );
-              if (tfs.length > 0) resAvailMap.set(rid, tfs);
-            } catch {
-              // skip — no availability means fully available
+        const resourceIdList = Array.from(allResourceIds);
+        if (resourceIdList.length > 0) {
+          try {
+            const allAvailTfs = await apiFetch<Timeframe>(
+              `/api/events/timeframes?linked_id=${encodeURIComponent(resourceIdList.join(","))}`,
+            );
+            for (const tf of allAvailTfs) {
+              const key = normalizeId(tf.linked_id ?? "");
+              if (!key) continue;
+              const existing = resAvailMap.get(key);
+              if (existing) {
+                existing.push({ start_time: tf.start_time, end_time: tf.end_time });
+              } else {
+                resAvailMap.set(key, [{ start_time: tf.start_time, end_time: tf.end_time }]);
+              }
             }
-          }),
-        );
+          } catch {
+            // skip — no availability means fully available
+          }
+        }
 
         setPresentations(presentationRows);
         setPersonNames(new Map(personNameById));

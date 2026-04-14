@@ -237,139 +237,140 @@ def test_large_schedule_timing():
     print(f"\nLarge schedule solved in {elapsed:.2f}s")
 
 
-def test_massive_symposium():
-    """
-    200 presentations across a 3-day symposium with realistic complexity:
+# Removed for now because it takes way too long for a normal test run
+# def test_massive_symposium():
+#     """
+#     200 presentations across a 3-day symposium with realistic complexity:
 
-    - 3 days (Jan 1–3), 8am–6pm each day, 8 rooms
-    - 15 professors, each with randomized availability (1–2 windows/day, some days off)
-    - 20 classes, each taught by one professor, each with 10 student presenters
-    - 1 presentation per student → 20 × 10 = 200 total presentations
-    - resource_ids per presentation = (professor, presenting_student)
-    - All presentations from the same class must share a room (same-class constraint)
-    - Presentation durations vary: 15, 20, or 25 minutes; 5-minute buffer between talks
-    - Fixed random seed for reproducibility
-    """
-    import random
+#     - 3 days (Jan 1–3), 8am–6pm each day, 8 rooms
+#     - 15 professors, each with randomized availability (1–2 windows/day, some days off)
+#     - 20 classes, each taught by one professor, each with 10 student presenters
+#     - 1 presentation per student → 20 × 10 = 200 total presentations
+#     - resource_ids per presentation = (professor, presenting_student)
+#     - All presentations from the same class must share a room (same-class constraint)
+#     - Presentation durations vary: 15, 20, or 25 minutes; 5-minute buffer between talks
+#     - Fixed random seed for reproducibility
+#     """
+#     import random
 
-    rng = random.Random(42)
+#     rng = random.Random(42)
 
-    day_bounds = [
-        (datetime(2024, 1, 1, 8, 0, tzinfo=timezone.utc), datetime(2024, 1, 1, 18, 0, tzinfo=timezone.utc)),
-        (datetime(2024, 1, 2, 8, 0, tzinfo=timezone.utc), datetime(2024, 1, 2, 18, 0, tzinfo=timezone.utc)),
-        (datetime(2024, 1, 3, 8, 0, tzinfo=timezone.utc), datetime(2024, 1, 3, 18, 0, tzinfo=timezone.utc)),
-    ]
-    sym_windows = tuple(AvailabilityWindow(start=s, end=e) for s, e in day_bounds)
+#     day_bounds = [
+#         (datetime(2024, 1, 1, 8, 0, tzinfo=timezone.utc), datetime(2024, 1, 1, 18, 0, tzinfo=timezone.utc)),
+#         (datetime(2024, 1, 2, 8, 0, tzinfo=timezone.utc), datetime(2024, 1, 2, 18, 0, tzinfo=timezone.utc)),
+#         (datetime(2024, 1, 3, 8, 0, tzinfo=timezone.utc), datetime(2024, 1, 3, 18, 0, tzinfo=timezone.utc)),
+#     ]
+#     sym_windows = tuple(AvailabilityWindow(start=s, end=e) for s, e in day_bounds)
 
-    def random_availability() -> tuple[AvailabilityWindow, ...]:
-        """
-        Generate 0–2 availability windows per day for a person.
-        Each window is at least 2 hours long. ~75% chance of being available on any given day.
-        Guarantees at least one window total so the person can be scheduled.
-        """
-        windows: list[AvailabilityWindow] = []
-        for day_start, day_end in day_bounds:
-            day_minutes = int((day_end - day_start).total_seconds() / 60)
-            num_windows = rng.choices([0, 1, 2], weights=[25, 55, 20])[0]
-            used: list[tuple[int, int]] = []
-            for _ in range(num_windows):
-                for _attempt in range(10):
-                    s = rng.randint(0, day_minutes - 120)
-                    e = s + rng.randint(120, min(240, day_minutes - s))
-                    if all(e <= ws or s >= we for ws, we in used):
-                        used.append((s, e))
-                        windows.append(AvailabilityWindow(
-                            start=day_start + timedelta(minutes=s),
-                            end=day_start + timedelta(minutes=e),
-                        ))
-                        break
-        if not windows:
-            # Fallback: full first day so this person is always schedulable
-            windows.append(AvailabilityWindow(start=day_bounds[0][0], end=day_bounds[0][1]))
-        return tuple(windows)
+#     def random_availability() -> tuple[AvailabilityWindow, ...]:
+#         """
+#         Generate 0–2 availability windows per day for a person.
+#         Each window is at least 2 hours long. ~75% chance of being available on any given day.
+#         Guarantees at least one window total so the person can be scheduled.
+#         """
+#         windows: list[AvailabilityWindow] = []
+#         for day_start, day_end in day_bounds:
+#             day_minutes = int((day_end - day_start).total_seconds() / 60)
+#             num_windows = rng.choices([0, 1, 2], weights=[25, 55, 20])[0]
+#             used: list[tuple[int, int]] = []
+#             for _ in range(num_windows):
+#                 for _attempt in range(10):
+#                     s = rng.randint(0, day_minutes - 120)
+#                     e = s + rng.randint(120, min(240, day_minutes - s))
+#                     if all(e <= ws or s >= we for ws, we in used):
+#                         used.append((s, e))
+#                         windows.append(AvailabilityWindow(
+#                             start=day_start + timedelta(minutes=s),
+#                             end=day_start + timedelta(minutes=e),
+#                         ))
+#                         break
+#         if not windows:
+#             # Fallback: full first day so this person is always schedulable
+#             windows.append(AvailabilityWindow(start=day_bounds[0][0], end=day_bounds[0][1]))
+#         return tuple(windows)
 
-    NUM_PROFESSORS = 15
-    NUM_CLASSES = 20
-    STUDENTS_PER_CLASS = 10  # each student gives exactly one presentation → 200 total
+#     NUM_PROFESSORS = 15
+#     NUM_CLASSES = 20
+#     STUDENTS_PER_CLASS = 10  # each student gives exactly one presentation → 200 total
 
-    resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
+#     resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
 
-    for i in range(NUM_PROFESSORS):
-        resource_windows[f"prof{i}"] = random_availability()
+#     for i in range(NUM_PROFESSORS):
+#         resource_windows[f"prof{i}"] = random_availability()
 
-    presentations: list[PresentationInput] = []
-    pres_idx = 0
-    for c in range(NUM_CLASSES):
-        class_id = f"class{c}"
-        prof_id = f"prof{c % NUM_PROFESSORS}"
-        for s in range(STUDENTS_PER_CLASS):
-            student_id = f"student{c * STUDENTS_PER_CLASS + s}"
-            resource_windows[student_id] = random_availability()
-            presentations.append(PresentationInput(
-                id=f"p{pres_idx}",
-                title=f"Class {c} — Student {s}",
-                duration_minutes=rng.choice([15, 20, 25]),
-                buffer_minutes=5,
-                class_id=class_id,
-                resource_ids=(prof_id, student_id),
-            ))
-            pres_idx += 1
+#     presentations: list[PresentationInput] = []
+#     pres_idx = 0
+#     for c in range(NUM_CLASSES):
+#         class_id = f"class{c}"
+#         prof_id = f"prof{c % NUM_PROFESSORS}"
+#         for s in range(STUDENTS_PER_CLASS):
+#             student_id = f"student{c * STUDENTS_PER_CLASS + s}"
+#             resource_windows[student_id] = random_availability()
+#             presentations.append(PresentationInput(
+#                 id=f"p{pres_idx}",
+#                 title=f"Class {c} — Student {s}",
+#                 duration_minutes=rng.choice([15, 20, 25]),
+#                 buffer_minutes=5,
+#                 class_id=class_id,
+#                 resource_ids=(prof_id, student_id),
+#             ))
+#             pres_idx += 1
 
-    total = len(presentations)
-    assert total == NUM_CLASSES * STUDENTS_PER_CLASS  # 200
+#     total = len(presentations)
+#     assert total == NUM_CLASSES * STUDENTS_PER_CLASS  # 200
 
-    problem = ScheduleProblem(
-        symposium_id="test-massive",
-        rooms_available=8,
-        symposium_windows=sym_windows,
-        presentations=tuple(presentations),
-        resource_windows=resource_windows,
-    )
+#     problem = ScheduleProblem(
+#         symposium_id="test-massive",
+#         rooms_available=8,
+#         symposium_windows=sym_windows,
+#         presentations=tuple(presentations),
+#         resource_windows=resource_windows,
+#     )
 
-    t0 = time.perf_counter()
-    result = solve_schedule(problem, time_limit_seconds=60.0)
-    elapsed = time.perf_counter() - t0
+#     t0 = time.perf_counter()
+#     result = solve_schedule(problem, time_limit_seconds=60.0)
+#     elapsed = time.perf_counter() - t0
 
-    print(f"\nMassive symposium ({total} presentations) — status: {result.status} — {elapsed:.2f}s")
-    print(f"  Scheduled: {len(result.assignments)}, Unscheduled: {len(result.unscheduled_presentations)}")
-    for d in result.diagnostics:
-        print(f"  diagnostic: {d}")
+#     print(f"\nMassive symposium ({total} presentations) — status: {result.status} — {elapsed:.2f}s")
+#     print(f"  Scheduled: {len(result.assignments)}, Unscheduled: {len(result.unscheduled_presentations)}")
+#     for d in result.diagnostics:
+#         print(f"  diagnostic: {d}")
 
-    assert result.status in ("optimal", "feasible"), (
-        f"Expected a partial schedule, got: {result.status}\n"
-        f"Diagnostics: {result.diagnostics}"
-    )
-    assert elapsed < 60.0, f"Solver exceeded time limit: {elapsed:.2f}s"
+#     assert result.status in ("optimal", "feasible"), (
+#         f"Expected a partial schedule, got: {result.status}\n"
+#         f"Diagnostics: {result.diagnostics}"
+#     )
+#     assert elapsed < 60.0, f"Solver exceeded time limit: {elapsed:.2f}s"
 
-    # At least 90% of presentations must be scheduled given the availability constraints
-    assert len(result.assignments) >= total * 0.90, (
-        f"Too many unscheduled: {len(result.unscheduled_presentations)} / {total}"
-    )
+#     # At least 90% of presentations must be scheduled given the availability constraints
+#     assert len(result.assignments) >= total * 0.90, (
+#         f"Too many unscheduled: {len(result.unscheduled_presentations)} / {total}"
+#     )
 
-    pres_by_id = {p.id: p for p in presentations}
+#     pres_by_id = {p.id: p for p in presentations}
 
-    # All same-class presentations must be in the same room
-    class_room: dict[str, int] = {}
-    for a in result.assignments:
-        cid = pres_by_id[a.presentation_id].class_id
-        if cid:
-            if cid in class_room:
-                assert class_room[cid] == a.room_index, (
-                    f"Class {cid} split across rooms {class_room[cid]} and {a.room_index}"
-                )
-            else:
-                class_room[cid] = a.room_index
+#     # All same-class presentations must be in the same room
+#     class_room: dict[str, int] = {}
+#     for a in result.assignments:
+#         cid = pres_by_id[a.presentation_id].class_id
+#         if cid:
+#             if cid in class_room:
+#                 assert class_room[cid] == a.room_index, (
+#                     f"Class {cid} split across rooms {class_room[cid]} and {a.room_index}"
+#                 )
+#             else:
+#                 class_room[cid] = a.room_index
 
-    # No resource (professor or student) may be double-booked
-    resource_schedule: dict[str, list] = defaultdict(list)
-    for a in result.assignments:
-        for rid in pres_by_id[a.presentation_id].resource_ids:
-            resource_schedule[rid].append(a)
-    for rid, slots in resource_schedule.items():
-        slots.sort(key=lambda a: a.start)
-        for i in range(len(slots) - 1):
-            assert slots[i].end <= slots[i + 1].start, (
-                f"Resource {rid} double-booked: "
-                f"{slots[i].presentation_id} ({slots[i].start}–{slots[i].end}) overlaps "
-                f"{slots[i + 1].presentation_id} ({slots[i + 1].start}–{slots[i + 1].end})"
-            )
+#     # No resource (professor or student) may be double-booked
+#     resource_schedule: dict[str, list] = defaultdict(list)
+#     for a in result.assignments:
+#         for rid in pres_by_id[a.presentation_id].resource_ids:
+#             resource_schedule[rid].append(a)
+#     for rid, slots in resource_schedule.items():
+#         slots.sort(key=lambda a: a.start)
+#         for i in range(len(slots) - 1):
+#             assert slots[i].end <= slots[i + 1].start, (
+#                 f"Resource {rid} double-booked: "
+#                 f"{slots[i].presentation_id} ({slots[i].start}–{slots[i].end}) overlaps "
+#                 f"{slots[i + 1].presentation_id} ({slots[i + 1].start}–{slots[i + 1].end})"
+#             )

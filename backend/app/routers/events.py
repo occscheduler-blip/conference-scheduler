@@ -1,7 +1,6 @@
 import logging
 
 from datetime import datetime, timedelta, timezone, date
-from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4, UUID
 from postgrest.base_request_builder import APIResponse
@@ -36,6 +35,24 @@ from app.auth.email import send_dept_head_notification, send_professor_notificat
 from app.config import get_settings
 
 router = APIRouter(prefix="/events", tags=["events"])
+
+
+def _parse_uuid_list(value: str | None) -> list[UUID] | None:
+    """
+    Parse a query parameter that may be a single UUID or a comma-separated list of UUIDs
+    into a list[UUID]. Returns None if the value is empty/missing. Raises HTTP 400 on
+    an invalid UUID.
+    """
+    if value is None:
+        return None
+    parts = [piece.strip() for piece in value.split(",")]
+    parts = [piece for piece in parts if piece]
+    if not parts:
+        return None
+    try:
+        return [UUID(piece) for piece in parts]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid UUID: {exc}") from exc
 
 
 def _serialize_update_fields(fields: dict[str, object]) -> dict[str, Any]:
@@ -1499,16 +1516,17 @@ def get_symposium(symposium_id: UUID) -> dict[str, object]:
 
 @router.get("/departments", response_model=None)
 def get_departments(
-    symposium_id: UUID | None = None,
+    symposium_id: str | None = None,
     include: str | None = None,
 ) -> APIResponse | list[dict[str, object]]:
     try:
+        ids = _parse_uuid_list(symposium_id)
         includes = parse_include(include, allowed=DEPARTMENT_ALLOWS)
         if includes:
             if includes & CLASS_CHILDREN:
                 includes = includes | {"classes"}
-            return get_departments_nested(symposium_id=symposium_id, includes=includes)
-        return read.get_departments(symposium_id=symposium_id)
+            return get_departments_nested(symposium_id=ids, includes=includes)
+        return read.get_departments(symposium_id=ids)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1520,14 +1538,15 @@ def get_departments(
 
 @router.get("/classes", response_model=None)
 def get_classes(
-    department_id: UUID | None = None,
+    department_id: str | None = None,
     include: str | None = None,
 ) -> APIResponse | list[dict[str, object]]:
     try:
+        ids = _parse_uuid_list(department_id)
         includes = parse_include(include, allowed=CLASS_ALLOWS)
         if includes:
-            return get_classes_nested(department_id=department_id, includes=includes)
-        return read.get_classes(department_id=department_id)
+            return get_classes_nested(department_id=ids, includes=includes)
+        return read.get_classes(department_id=ids)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1538,9 +1557,9 @@ def get_classes(
 
 
 @router.get("/students")
-def get_students(class_id: UUID | None = None) -> APIResponse:
+def get_students(class_id: str | None = None) -> APIResponse:
     try:
-        return read.get_students(class_id=class_id)
+        return read.get_students(class_id=_parse_uuid_list(class_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -1551,9 +1570,9 @@ def get_students(class_id: UUID | None = None) -> APIResponse:
 
 
 @router.get("/presentations", response_model=None)
-def get_presentations(class_id: UUID | None = None) -> SimpleNamespace | APIResponse:
+def get_presentations(class_id: str | None = None) -> APIResponse:
     try:
-        return read.get_presentations(class_id=class_id)
+        return read.get_presentations(class_id=_parse_uuid_list(class_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -1564,9 +1583,9 @@ def get_presentations(class_id: UUID | None = None) -> SimpleNamespace | APIResp
 
 
 @router.get("/professors")
-def get_professors(class_id: UUID | None = None) -> APIResponse:
+def get_professors(class_id: str | None = None) -> APIResponse:
     try:
-        return read.get_professors(class_id=class_id)
+        return read.get_professors(class_id=_parse_uuid_list(class_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -1577,9 +1596,9 @@ def get_professors(class_id: UUID | None = None) -> APIResponse:
 
 
 @router.get("/timeframes")
-def get_timeframes(linked_id: UUID | None = None) -> APIResponse:
+def get_timeframes(linked_id: str | None = None) -> APIResponse:
     try:
-        return read.get_timeframes(linked_id=linked_id)
+        return read.get_timeframes(linked_id=_parse_uuid_list(linked_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -1590,9 +1609,9 @@ def get_timeframes(linked_id: UUID | None = None) -> APIResponse:
 
 
 @router.get("/requests")
-def get_requests(student_id: UUID | None = None) -> APIResponse:
+def get_requests(student_id: str | None = None) -> APIResponse:
     try:
-        return read.get_requests(student_id=student_id)
+        return read.get_requests(student_id=_parse_uuid_list(student_id))
     except HTTPException:
         raise
     except Exception as exc:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from math import ceil
@@ -450,45 +451,116 @@ def solve_schedule(
                             )
                     soft_violation_terms.append(deviation)
 
-    all_instants = {
-        instant
-        for instant in all_instants
-        if any(
-            instant >= window.start and instant < window.end
-            for window in symposium_windows
-        )
-    }
+    # ---- Conflict constraints ----
+    # Fast path (hard mode): one interval var per (presentation, option, room)
+    # plus AddNoOverlap — lets CP-SAT's C++ core handle overlap detection instead
+    # of enumerating every time instant in Python.
+    # Slow path (soft mode): the original per-instant enumeration, because soft
+    # violations need a per-instant penalty var.
+    t_fast = time.perf_counter()
+    if problem.constraints.room_conflicts == "hard":
+        intervals_by_room: dict[int, list[cp_model.IntervalVar]] = defaultdict(list)
+        for presentation in schedulable_presentations:
+            buffered_slots = _slot_count(
+                presentation.duration_minutes + presentation.buffer_minutes,
+                problem.slot_minutes,
+            )
+            for option_index, start_time in enumerate(eligible_starts[presentation.id]):
+                start_slot = int((start_time - base_time) / step)
+                for room_index in range(problem.rooms_available):
+                    key = (presentation.id, option_index, room_index)
+                    interval = model.NewOptionalFixedSizeIntervalVar(
+                        start_slot,
+                        buffered_slots,
+                        assignment_vars[key],
+                        f"iv_room_{presentation.id}_{option_index}_{room_index}",
+                    )
+                    intervals_by_room[room_index].append(interval)
+        for room_index, room_intervals in intervals_by_room.items():
+            if len(room_intervals) >= 2:
+                model.AddNoOverlap(room_intervals)
 
-    for instant in sorted(all_instants):
-        if problem.constraints.room_conflicts != "off":
-            for room_index in range(problem.rooms_available):
-                overlapping: list[cp_model.IntVar] = []
-                for presentation in schedulable_presentations:
-                    for option_index in range(len(eligible_starts[presentation.id])):
-                        key = (presentation.id, option_index, room_index)
-                        start_time, end_time = option_lookup[key]
-                        buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
-                        if start_time <= instant < buffered_end:
-                            overlapping.append(assignment_vars[key])
-                _add_constraint_or_penalty(
-                    overlapping, problem.constraints.room_conflicts, f"room_{room_index}_{instant}"
+    if problem.constraints.person_conflicts == "hard":
+        # One "option selected" bool per (presentation, option): true iff any
+        # room assignment for that option is chosen. Used as is_present for the
+        # per-resource optional interval.
+        intervals_by_resource: dict[str, list[cp_model.IntervalVar]] = defaultdict(list)
+        for presentation in schedulable_presentations:
+            if not presentation.resource_ids:
+                continue
+            duration_slots = _slot_count(
+                presentation.duration_minutes, problem.slot_minutes
+            )
+            for option_index, start_time in enumerate(eligible_starts[presentation.id]):
+                start_slot = int((start_time - base_time) / step)
+                option_selected = model.NewBoolVar(
+                    f"opt_sel_{presentation.id}_{option_index}"
                 )
-
-        if problem.constraints.person_conflicts != "off":
-            resources_at_time: dict[str, list[cp_model.IntVar]] = defaultdict(list)
-            for presentation in schedulable_presentations:
+                model.Add(
+                    option_selected
+                    == sum(
+                        assignment_vars[(presentation.id, option_index, room_index)]
+                        for room_index in range(problem.rooms_available)
+                    )
+                )
                 for resource_id in presentation.resource_ids:
-                    for option_index in range(len(eligible_starts[presentation.id])):
-                        for room_index in range(problem.rooms_available):
+                    interval = model.NewOptionalFixedSizeIntervalVar(
+                        start_slot,
+                        duration_slots,
+                        option_selected,
+                        f"iv_person_{resource_id}_{presentation.id}_{option_index}",
+                    )
+                    intervals_by_resource[resource_id].append(interval)
+        for resource_id, resource_intervals in intervals_by_resource.items():
+            if len(resource_intervals) >= 2:
+                model.AddNoOverlap(resource_intervals)
+    logger.info("[solve-timing] hard conflict constraints: %.3fs", time.perf_counter() - t_fast)
+
+    needs_slow_path = (
+        problem.constraints.room_conflicts == "soft"
+        or problem.constraints.person_conflicts == "soft"
+    )
+    if needs_slow_path:
+        t_slow = time.perf_counter()
+        filtered_instants = {
+            instant
+            for instant in all_instants
+            if any(
+                instant >= window.start and instant < window.end
+                for window in symposium_windows
+            )
+        }
+        for instant in sorted(filtered_instants):
+            if problem.constraints.room_conflicts == "soft":
+                for room_index in range(problem.rooms_available):
+                    overlapping: list[cp_model.IntVar] = []
+                    for presentation in schedulable_presentations:
+                        for option_index in range(len(eligible_starts[presentation.id])):
                             key = (presentation.id, option_index, room_index)
                             start_time, end_time = option_lookup[key]
-                            if start_time <= instant < end_time:
-                                resources_at_time[resource_id].append(assignment_vars[key])
+                            buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
+                            if start_time <= instant < buffered_end:
+                                overlapping.append(assignment_vars[key])
+                    _add_constraint_or_penalty(
+                        overlapping, "soft", f"room_{room_index}_{instant}"
+                    )
 
-            for resource_id, overlapping_res in resources_at_time.items():
-                _add_constraint_or_penalty(
-                    overlapping_res, problem.constraints.person_conflicts, f"person_{resource_id}_{instant}"
-                )
+            if problem.constraints.person_conflicts == "soft":
+                resources_at_time: dict[str, list[cp_model.IntVar]] = defaultdict(list)
+                for presentation in schedulable_presentations:
+                    for resource_id in presentation.resource_ids:
+                        for option_index in range(len(eligible_starts[presentation.id])):
+                            for room_index in range(problem.rooms_available):
+                                key = (presentation.id, option_index, room_index)
+                                start_time, end_time = option_lookup[key]
+                                if start_time <= instant < end_time:
+                                    resources_at_time[resource_id].append(assignment_vars[key])
+
+                for resource_id, overlapping_res in resources_at_time.items():
+                    _add_constraint_or_penalty(
+                        overlapping_res, "soft", f"person_{resource_id}_{instant}"
+                    )
+        logger.info("[solve-timing] soft conflict constraints: %.3fs", time.perf_counter() - t_slow)
 
     makespan = model.NewIntVar(0, 1000000, "makespan")
     model.AddMaxEquality(makespan, list(eff_end_for_max.values()))

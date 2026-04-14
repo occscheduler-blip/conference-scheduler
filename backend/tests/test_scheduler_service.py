@@ -59,9 +59,11 @@ def test_save_assignments_clears_unscheduled_presentations(monkeypatch):
             assert table_name == "timeframes"
             inserted_rows.extend(rows)
 
+    import app.supabase_io
+
     monkeypatch.setattr("app.scheduler.service.supabase", fake_supabase)
-    monkeypatch.setitem(__import__("sys").modules, "app.supabase_io.delete", _FakeDelete)
-    monkeypatch.setitem(__import__("sys").modules, "app.supabase_io.write", _FakeWrite)
+    monkeypatch.setattr(app.supabase_io, "delete", _FakeDelete)
+    monkeypatch.setattr(app.supabase_io, "write", _FakeWrite)
 
     result = ScheduleResult(
         status="feasible",
