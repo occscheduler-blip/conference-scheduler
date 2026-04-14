@@ -2,7 +2,7 @@ import logging
 
 from datetime import datetime, timedelta, timezone, date
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4, UUID
 from postgrest.base_request_builder import APIResponse
 
@@ -337,10 +337,11 @@ def email_symposium(
         frontend_url = settings.cors_origins[0]
 
         symposium_resp = supabase.table("symposiums").select("name").eq("id", str(body.symposium_id)).execute()
-        symposium_name = (symposium_resp.data or [{}])[0].get("name", "the symposium")
+        symposium_rows = cast(list[dict[str, Any]], symposium_resp.data or [])
+        symposium_name = symposium_rows[0].get("name", "the symposium") if symposium_rows else "the symposium"
 
         dept_resp = supabase.table("departments").select("id,department_head_name,email").eq("symposium_id", str(body.symposium_id)).execute()
-        depts = dept_resp.data or []
+        depts = cast(list[dict[str, Any]], dept_resp.data or [])
 
         for dept in depts:
             login_url = f"{frontend_url}/pages?view=login"
@@ -515,18 +516,21 @@ def email_classes(
         frontend_url = settings.cors_origins[0]
 
         dept_resp = supabase.table("departments").select("symposium_id").eq("id", str(body.department_id)).execute()
-        symposium_id = (dept_resp.data or [{}])[0].get("symposium_id")
+        dept_rows = cast(list[dict[str, Any]], dept_resp.data or [])
+        symposium_id = dept_rows[0].get("symposium_id") if dept_rows else None
         sym_resp = supabase.table("symposiums").select("name").eq("id", str(symposium_id)).execute()
-        symposium_name = (sym_resp.data or [{}])[0].get("name", "the symposium")
+        sym_rows = cast(list[dict[str, Any]], sym_resp.data or [])
+        symposium_name = sym_rows[0].get("name", "the symposium") if sym_rows else "the symposium"
 
         classes_resp = supabase.table("classes").select("id").eq("department_id", str(body.department_id)).execute()
-        class_ids = [c["id"] for c in (classes_resp.data or [])]
+        class_rows = cast(list[dict[str, Any]], classes_resp.data or [])
+        class_ids = [c["id"] for c in class_rows]
 
         if not class_ids:
             return {"status": "ok", "emails_sent": 0}
 
         profs_resp = supabase.table("professors").select("id,name,email").in_("class_id", class_ids).execute()
-        professors = profs_resp.data or []
+        professors = cast(list[dict[str, Any]], profs_resp.data or [])
 
         for prof in professors:
             login_url = f"{frontend_url}/pages?view=login"
@@ -807,22 +811,27 @@ def email_students(
         frontend_url = settings.cors_origins[0]
 
         pres_resp = supabase.table("presentations").select("class_id").eq("id", str(body.presentation_id)).execute()
-        class_id = (pres_resp.data or [{}])[0].get("class_id")
+        pres_rows = cast(list[dict[str, Any]], pres_resp.data or [])
+        class_id = pres_rows[0].get("class_id") if pres_rows else None
         class_resp = supabase.table("classes").select("department_id").eq("id", str(class_id)).execute()
-        dept_id = (class_resp.data or [{}])[0].get("department_id")
+        class_rows = cast(list[dict[str, Any]], class_resp.data or [])
+        dept_id = class_rows[0].get("department_id") if class_rows else None
         dept_resp = supabase.table("departments").select("symposium_id").eq("id", str(dept_id)).execute()
-        symposium_id = (dept_resp.data or [{}])[0].get("symposium_id")
+        dept_rows = cast(list[dict[str, Any]], dept_resp.data or [])
+        symposium_id = dept_rows[0].get("symposium_id") if dept_rows else None
         sym_resp = supabase.table("symposiums").select("name").eq("id", str(symposium_id)).execute()
-        symposium_name = (sym_resp.data or [{}])[0].get("name", "the symposium")
+        sym_rows = cast(list[dict[str, Any]], sym_resp.data or [])
+        symposium_name = sym_rows[0].get("name", "the symposium") if sym_rows else "the symposium"
 
         ps_resp = supabase.table("presenting_students").select("student_id").eq("presentation_id", str(body.presentation_id)).execute()
-        student_ids = [r["student_id"] for r in (ps_resp.data or [])]
+        ps_rows = cast(list[dict[str, Any]], ps_resp.data or [])
+        student_ids = [r["student_id"] for r in ps_rows]
 
         if not student_ids:
             return {"status": "ok", "emails_sent": 0}
 
         students_resp = supabase.table("students").select("id,name,email").in_("id", student_ids).execute()
-        students = students_resp.data or []
+        students = cast(list[dict[str, Any]], students_resp.data or [])
 
         for student in students:
             login_url = f"{frontend_url}/pages?view=login"
