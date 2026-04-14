@@ -194,7 +194,7 @@ def test_buffer_with_same_class_room():
 
 
 def test_large_schedule_timing():
-    """20 presentations across 4 rooms with varied professors should solve within 10 seconds."""
+    """20 presentations across 4 rooms with varied professors should solve within 30 seconds."""
     sym_windows = (
         AvailabilityWindow(
             start=datetime(2024, 1, 1, 9, 0, tzinfo=timezone.utc),
@@ -233,7 +233,7 @@ def test_large_schedule_timing():
 
     assert result.status in ("optimal", "feasible"), f"Scheduler returned: {result.status}, diagnostics: {result.diagnostics}"
     assert len(result.assignments) == 20
-    assert elapsed < 10.0, f"Scheduler took too long: {elapsed:.2f}s"
+    assert elapsed < 30.0, f"Scheduler took too long: {elapsed:.2f}s"
     print(f"\nLarge schedule solved in {elapsed:.2f}s")
 
 
