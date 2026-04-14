@@ -191,7 +191,7 @@ def _build_admin_suggestions(
 
 
 def solve_schedule(
-    problem: ScheduleProblem, time_limit_seconds: float = 10.0
+    problem: ScheduleProblem, time_limit_seconds: float = 30.0
 ) -> ScheduleResult:
     logger.info(
         "solve_schedule: presentations=%d  rooms=%d  windows=%d  time_limit=%.1fs",
