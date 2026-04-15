@@ -538,7 +538,7 @@ export default function ScheduleTab({
       return;
     }
 
-    const startDate = new Date(editStartTime);
+    const startDate = new Date(`${editStartTime}:00Z`);
     if (Number.isNaN(startDate.getTime())) {
       setAssignmentMessage("Invalid start time.");
       return;
@@ -623,10 +623,10 @@ export default function ScheduleTab({
   // Computed end time for display in modal
   const editEndTimeDisplay = useMemo(() => {
     if (!editStartTime || !editingPresentation) return "";
-    const start = new Date(editStartTime);
+    const start = new Date(`${editStartTime}:00Z`);
     if (Number.isNaN(start.getTime())) return "";
     const end = new Date(start.getTime() + editingPresentation.minutes * 60 * 1000);
-    return end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZone: "UTC" });
   }, [editStartTime, editingPresentation]);
 
   return (

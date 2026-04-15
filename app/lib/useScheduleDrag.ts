@@ -92,8 +92,8 @@ function viewportToGridPosition(
 function minuteToDate(selectedDay: string, minuteInDay: number): Date {
   const hours = Math.floor(minuteInDay / 60);
   const minutes = minuteInDay % 60;
-  const d = new Date(`${selectedDay}T00:00:00`);
-  d.setHours(hours, minutes, 0, 0);
+  const d = new Date(`${selectedDay}T00:00:00Z`);
+  d.setUTCHours(hours, minutes, 0, 0);
   return d;
 }
 

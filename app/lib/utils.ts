@@ -38,32 +38,26 @@ export function dayLabel(key: string) {
 }
 
 export function parseBackendDateTime(value: string) {
-  const hasExplicitTimezone = /(?:Z|[+\-]\d{2}:\d{2})$/i.test(value);
-  return new Date(hasExplicitTimezone ? value : `${value}Z`);
+  const stripped = value.replace(/(?:Z|[+\-]\d{2}:?\d{2})$/i, "");
+  return new Date(`${stripped}Z`);
 }
 
 export function timeLabel(start: string, end: string) {
   const s = parseBackendDateTime(start);
   const e = parseBackendDateTime(end);
-  return `${s.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} - ${e.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  })}`;
+  const opts = { hour: "numeric", minute: "2-digit", timeZone: "UTC" } as const;
+  return `${s.toLocaleTimeString([], opts)} - ${e.toLocaleTimeString([], opts)}`;
 }
 
 export function toBackendDateTime(value: Date) {
-  const pad = (n: number) => String(Math.trunc(Math.abs(n))).padStart(2, "0");
-  const year = value.getFullYear();
-  const month = pad(value.getMonth() + 1);
-  const day = pad(value.getDate());
-  const hours = pad(value.getHours());
-  const minutes = pad(value.getMinutes());
-  const seconds = pad(value.getSeconds());
-  const offsetMinutes = -value.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? "+" : "-";
-  const offsetHours = pad(Math.floor(Math.abs(offsetMinutes) / 60));
-  const offsetRemainder = pad(Math.abs(offsetMinutes) % 60);
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${sign}${offsetHours}:${offsetRemainder}`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const year = value.getUTCFullYear();
+  const month = pad(value.getUTCMonth() + 1);
+  const day = pad(value.getUTCDate());
+  const hours = pad(value.getUTCHours());
+  const minutes = pad(value.getUTCMinutes());
+  const seconds = pad(value.getUTCSeconds());
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 }
 
 export function toMessage(detail: unknown, fallback: string): string {
@@ -116,7 +110,7 @@ export function buildTimeframesFromGrid(dates: Date[], availability: boolean[][]
         slotStart.setUTCHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
 
         const slotEnd = new Date(slotStart);
-        slotEnd.setMinutes(slotEnd.getMinutes() + 15);
+        slotEnd.setUTCMinutes(slotEnd.getUTCMinutes() + 15);
 
         if (!rangeStart) {
           rangeStart = slotStart;
@@ -255,7 +249,7 @@ export function detectScheduleConflict(
 
   // Slot alignment
   if (constraints.slotAlignment !== "off") {
-    const m = startTime.getMinutes();
+    const m = startTime.getUTCMinutes();
     if (m % ctx.slotMinutes !== 0) {
       addViolation(constraints.slotAlignment, `Start time must align to ${ctx.slotMinutes}-minute intervals.`);
     }

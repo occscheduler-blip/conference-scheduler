@@ -325,10 +325,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         const available = availability[dayIndex]?.[slotIndex] ?? false;
 
         if (editable && available) {
-          const slotStart = new Date(year, month - 1, dayOfMonth, 9, 0, 0, 0);
-          slotStart.setMinutes(slotStart.getMinutes() + slotIndex * 15);
+          const slotStart = new Date(Date.UTC(year, month - 1, dayOfMonth, 9, 0, 0, 0));
+          slotStart.setUTCMinutes(slotStart.getUTCMinutes() + slotIndex * 15);
           const slotEnd = new Date(slotStart);
-          slotEnd.setMinutes(slotEnd.getMinutes() + 15);
+          slotEnd.setUTCMinutes(slotEnd.getUTCMinutes() + 15);
 
           if (!rangeStart) {
             rangeStart = slotStart;
