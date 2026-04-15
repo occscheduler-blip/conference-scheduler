@@ -231,12 +231,12 @@ def _save_assignments(
     presentation_ids = [UUID(pid) for pid in presentation_ids_to_reset]
     if presentation_ids:
         delete.delete_timeframes(presentation_ids)
-        for pid in presentation_ids:
-            supabase.table("presentations").update(
-                {"room": None}
-            ).eq("id", str(pid)).execute()
+        write.update_column_by_ids(
+            "presentations", "room", {pid: None for pid in presentation_ids}
+        )
 
     timeframe_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
+    room_by_presentation: dict[UUID, str | int | None] = {}
     for assignment in result.assignments:
         timeframe_rows.append({
             "id": uuid4(),
@@ -244,9 +244,10 @@ def _save_assignments(
             "start_time": assignment.start.isoformat(),
             "end_time": assignment.end.isoformat(),
         })
-        supabase.table("presentations").update({
-            "room": assignment.room_index,
-        }).eq("id", assignment.presentation_id).execute()
+        room_by_presentation[UUID(assignment.presentation_id)] = assignment.room_index
+
+    if room_by_presentation:
+        write.update_column_by_ids("presentations", "room", room_by_presentation)
 
     if timeframe_rows:
         write.insert("timeframes", timeframe_rows)

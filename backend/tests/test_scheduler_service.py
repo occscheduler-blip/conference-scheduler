@@ -1,51 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Mapping
+from uuid import UUID
 
 from app.scheduler.models import AvailabilityWindow, ScheduleProblem, ScheduleResult, ScheduledPresentation
 from app.scheduler.service import _assignments_within_symposium_windows, _save_assignments
 
-
-class _FakeExecute:
-    def execute(self):
-        return self
-
-
-class _FakeUpdate(_FakeExecute):
-    def __init__(self, updates: list[tuple[dict[str, int | None], str]]):
-        self._updates = updates
-        self._payload: dict[str, int | None] | None = None
-
-    def eq(self, field: str, value: str):
-        assert field == "id"
-        assert self._payload is not None
-        self._updates.append((self._payload, value))
-        return self
-
-
-class _FakeTable:
-    def __init__(self, updates: list[tuple[dict[str, int | None], str]]):
-        self._updates = updates
-
-    def update(self, payload: dict[str, int | None]):
-        updater = _FakeUpdate(self._updates)
-        updater._payload = payload
-        return updater
-
-
-class _FakeSupabase:
-    def __init__(self):
-        self.updates: list[tuple[dict[str, int | None], str]] = []
-
-    def table(self, name: str):
-        assert name == "presentations"
-        return _FakeTable(self.updates)
+# Force `delete` and `write` to be imported as attributes of the namespace
+# package before the test runs, so monkeypatching them works when this file
+# is run in isolation.
+from app.supabase_io import delete as _delete, write as _write  # noqa: F401
 
 
 def test_save_assignments_clears_unscheduled_presentations(monkeypatch):
     deleted_ids: list[str] = []
     inserted_rows: list[dict[str, object]] = []
-    fake_supabase = _FakeSupabase()
+    update_calls: list[tuple[str, str, dict[UUID, object]]] = []
 
     class _FakeDelete:
         @staticmethod
@@ -59,9 +30,17 @@ def test_save_assignments_clears_unscheduled_presentations(monkeypatch):
             assert table_name == "timeframes"
             inserted_rows.extend(rows)
 
+        @staticmethod
+        def update_column_by_ids(
+            table_name: str,
+            column: str,
+            id_to_value: Mapping[UUID, object],
+        ) -> int:
+            update_calls.append((table_name, column, dict(id_to_value)))
+            return len(id_to_value)
+
     import app.supabase_io
 
-    monkeypatch.setattr("app.scheduler.service.supabase", fake_supabase)
     monkeypatch.setattr(app.supabase_io, "delete", _FakeDelete)
     monkeypatch.setattr(app.supabase_io, "write", _FakeWrite)
 
@@ -90,10 +69,22 @@ def test_save_assignments_clears_unscheduled_presentations(monkeypatch):
         "00000000-0000-0000-0000-000000000001",
         "00000000-0000-0000-0000-000000000002",
     ]
-    assert fake_supabase.updates == [
-        ({"room": None}, "00000000-0000-0000-0000-000000000001"),
-        ({"room": None}, "00000000-0000-0000-0000-000000000002"),
-        ({"room": 1}, "00000000-0000-0000-0000-000000000001"),
+    # First call clears rooms to None for every presentation in the symposium;
+    # second call sets the scheduled ones to their assigned room index.
+    assert update_calls == [
+        (
+            "presentations",
+            "room",
+            {
+                UUID("00000000-0000-0000-0000-000000000001"): None,
+                UUID("00000000-0000-0000-0000-000000000002"): None,
+            },
+        ),
+        (
+            "presentations",
+            "room",
+            {UUID("00000000-0000-0000-0000-000000000001"): 1},
+        ),
     ]
     assert len(inserted_rows) == 1
     assert inserted_rows[0]["linked_id"].hex == "00000000000000000000000000000001"

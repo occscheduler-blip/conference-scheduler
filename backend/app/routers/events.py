@@ -1317,16 +1317,20 @@ def bulk_update_schedule_assignments(
         delete.delete_timeframes(batch_pids)
 
         tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
+        room_by_presentation: dict[UUID, str | int | None] = {}
         for pid, a in assignment_map.items():
-            supabase.table("presentations").update(
-                {"room": a.room}
-            ).eq("id", pid).execute()
+            room_by_presentation[UUID(pid)] = a.room
             tf_rows.append({
                 "id": uuid4(),
                 "linked_id": UUID(pid),
                 "start_time": a.start_time,
                 "end_time": a.end_time,
             })
+
+        if room_by_presentation:
+            write.update_column_by_ids(
+                "presentations", "room", room_by_presentation
+            )
 
         if tf_rows:
             write.insert("timeframes", tf_rows)

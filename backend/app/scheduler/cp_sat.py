@@ -198,6 +198,8 @@ def solve_schedule(
         "solve_schedule: presentations=%d  rooms=%d  windows=%d  time_limit=%.1fs",
         len(problem.presentations), problem.rooms_available, len(problem.symposium_windows), time_limit_seconds,
     )
+
+    # Immediately fail if schedule is impossible to make
     if problem.rooms_available < 1:
         return ScheduleResult(
             status="invalid",
