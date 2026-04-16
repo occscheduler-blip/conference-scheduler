@@ -31,6 +31,7 @@ function HomeContent() {
   const [professorFilter, setProfessorFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const [popupCard, setPopupCard] = useState<{
     title: string;
     timeframe: Timeframe | null;
@@ -444,7 +445,43 @@ function HomeContent() {
           </div>
         </div>
 
-        <p className="mt-4 text-2xl font-semibold text-[#111]">Time Zone: {Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
+        <div className="mt-2 flex items-center justify-between">
+          <p className="text-2xl font-semibold text-[#111]">Time Zone: {Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
+          {/* List / Calendar view toggle */}
+          {selectedDay ? (
+            <div className="flex overflow-hidden rounded-lg border-2 border-[#1635a7]">
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                className={`px-3 py-2 text-sm font-semibold ${
+                  viewMode === "list" ? "bg-white text-[#111]" : "bg-[#1635a7] text-white hover:bg-[#0b2a8d]"
+                }`}
+                title="List view"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <rect x="1" y="2" width="14" height="2" rx="1"/>
+                  <rect x="1" y="7" width="14" height="2" rx="1"/>
+                  <rect x="1" y="12" width="14" height="2" rx="1"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("calendar")}
+                className={`px-3 py-2 text-sm font-semibold ${
+                  viewMode === "calendar" ? "bg-white text-[#111]" : "bg-[#1635a7] text-white hover:bg-[#0b2a8d]"
+                }`}
+                title="Calendar view"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <rect x="1" y="1" width="6" height="6" rx="1"/>
+                  <rect x="9" y="1" width="6" height="6" rx="1"/>
+                  <rect x="1" y="9" width="6" height="6" rx="1"/>
+                  <rect x="9" y="9" width="6" height="6" rx="1"/>
+                </svg>
+              </button>
+            </div>
+          ) : null}
+        </div>
 
         <div className="mt-4 space-y-4">
           {message ? <p className="text-sm font-semibold text-[#9a1f1f]">{message}</p> : null}
@@ -458,7 +495,7 @@ function HomeContent() {
             <p className="text-sm font-semibold text-[#555]">No matches found for your search.</p>
           ) : null}
 
-          {filteredCards.map(({ department, timeframe, room, title, presenterNames }, index) => {
+          {viewMode === "list" ? filteredCards.map(({ department, timeframe, room, title, presenterNames }, index) => {
             const dept = department.department_name;
             const prof = department.department_head_name;
             const safePresenterNames = presenterNames ?? [];
@@ -490,7 +527,160 @@ function HomeContent() {
                 </div>
               </article>
             );
-          })}
+          }) : null}
+
+          {viewMode === "calendar" && selectedDay && visibleRows.length > 0 ? (() => {
+            const SLOT_HEIGHT = 24;
+            const BLOCK_COLORS = [
+              { bg: "#1635a7", text: "#fff" },
+              { bg: "#2e7d32", text: "#fff" },
+              { bg: "#c62828", text: "#fff" },
+              { bg: "#6a1b9a", text: "#fff" },
+              { bg: "#ef6c00", text: "#fff" },
+              { bg: "#00838f", text: "#fff" },
+            ];
+
+            // Compute active slots from symposium timeframes for this day
+            const activeSlots = new Set<number>();
+            for (const tf of visibleRows) {
+              const s = parseBackendDateTime(tf.start_time);
+              const e = parseBackendDateTime(tf.end_time);
+              const startSlot = Math.floor((s.getUTCHours() * 60 + s.getUTCMinutes() - 9 * 60) / 15);
+              const endSlot = Math.ceil((e.getUTCHours() * 60 + e.getUTCMinutes() - 9 * 60) / 15);
+              for (let i = startSlot; i < endSlot; i++) activeSlots.add(i);
+            }
+            const minSlot = activeSlots.size > 0 ? Math.min(...activeSlots) : 0;
+            const maxSlot = activeSlots.size > 0 ? Math.max(...activeSlots) + 1 : 36;
+            const visibleSlotCount = maxSlot - minSlot;
+
+            const formatTimeLabel = (slotIndex: number) => {
+              const totalMinutes = 9 * 60 + slotIndex * 15;
+              const h = Math.floor(totalMinutes / 60);
+              const m = totalMinutes % 60;
+              const ampm = h >= 12 ? "PM" : "AM";
+              const hour = h > 12 ? h - 12 : h === 0 ? 12 : h;
+              return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+            };
+
+            // Build color map by presentation id
+            const colorMap = new Map<string, { bg: string; text: string }>();
+            filteredCards.forEach((card, i) => {
+              colorMap.set(card.title + card.department.id, BLOCK_COLORS[i % BLOCK_COLORS.length]);
+            });
+
+            const scheduledCards = filteredCards.filter((c) => c.timeframe && c.room !== "Room TBD");
+
+            return (
+              <div className="overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
+                <div
+                  className="grid"
+                  style={{
+                    gridTemplateColumns: `72px repeat(${roomsAvailable}, minmax(140px, 1fr))`,
+                    gridTemplateRows: `auto repeat(${visibleSlotCount}, ${SLOT_HEIGHT}px)`,
+                  }}
+                >
+                  {/* Header row */}
+                  <div
+                    className="border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-xs font-bold uppercase text-[#2d3d7a]"
+                    style={{ gridRow: 1, gridColumn: 1 }}
+                  >
+                    Time
+                  </div>
+                  {Array.from({ length: roomsAvailable }, (_, i) => (
+                    <div
+                      key={i}
+                      className="whitespace-nowrap border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-center text-xs font-bold uppercase text-[#2d3d7a] last:border-r-0"
+                      style={{ gridRow: 1, gridColumn: i + 2 }}
+                    >
+                      Room {i + 1}
+                    </div>
+                  ))}
+
+                  {/* Time slot background cells */}
+                  {Array.from({ length: visibleSlotCount }, (_, i) => {
+                    const slotIndex = minSlot + i;
+                    const showLabel = slotIndex % 2 === 0;
+                    const gridRow = i + 2;
+                    return (
+                      <div key={`time-${slotIndex}`} className="contents">
+                        <div
+                          className={`flex items-center justify-end border-b border-r border-[#e5e7eb] px-1 text-[11px] leading-none text-[#888] ${
+                            slotIndex % 4 === 0 ? "bg-[#f9fafb]" : "bg-white"
+                          }`}
+                          style={{ gridRow, gridColumn: 1 }}
+                        >
+                          {showLabel ? formatTimeLabel(slotIndex) : ""}
+                        </div>
+                        {Array.from({ length: roomsAvailable }, (_, roomIdx) => (
+                          <div
+                            key={roomIdx}
+                            className={`border-b border-r border-[#e5e7eb] last:border-r-0 ${
+                              slotIndex % 4 === 0 ? "bg-[#f9fafb]" : "bg-white"
+                            }`}
+                            style={{ gridRow, gridColumn: roomIdx + 2 }}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+
+                  {/* Presentation blocks */}
+                  {scheduledCards.map((card, idx) => {
+                    if (!card.timeframe) return null;
+                    const roomNum = parseInt(card.room.replace(/\D/g, ""), 10) - 1;
+                    if (isNaN(roomNum) || roomNum < 0) return null;
+
+                    const start = parseBackendDateTime(card.timeframe.start_time);
+                    const end = parseBackendDateTime(card.timeframe.end_time);
+                    const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
+                    const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
+                    const startSlotRaw = (startMinutes - 9 * 60) / 15;
+                    const endSlotRaw = (endMinutes - 9 * 60) / 15;
+
+                    const gridRowStart = Math.floor(startSlotRaw - minSlot) + 2;
+                    const gridRowEnd = Math.ceil(endSlotRaw - minSlot) + 2;
+                    const gridCol = roomNum + 2;
+
+                    const fracStart = (startSlotRaw - minSlot) - Math.floor(startSlotRaw - minSlot);
+                    const verticalInset = 1;
+                    const topOffset = fracStart * SLOT_HEIGHT + verticalInset;
+                    const blockHeight = Math.max(8, (endSlotRaw - startSlotRaw) * SLOT_HEIGHT - verticalInset * 2);
+                    const durationSlots = endSlotRaw - startSlotRaw;
+
+                    const colorKey = card.title + card.department.id;
+                    const color = colorMap.get(colorKey) ?? BLOCK_COLORS[idx % BLOCK_COLORS.length];
+                    const safePresenterNames = card.presenterNames ?? [];
+
+                    return (
+                      <div
+                        key={`${card.department.id}-${idx}`}
+                        onClick={() => setPopupCard({ title: card.title, timeframe: card.timeframe, room: card.room, presenterNames: safePresenterNames, department: card.department })}
+                        className="z-10 mx-[1px] cursor-pointer overflow-hidden rounded-md px-1.5 py-0.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md"
+                        style={{
+                          gridRow: `${gridRowStart} / ${gridRowEnd}`,
+                          gridColumn: gridCol,
+                          backgroundColor: color.bg,
+                          color: color.text,
+                          position: "relative",
+                          top: `${topOffset}px`,
+                          height: `${blockHeight}px`,
+                          alignSelf: "start",
+                        }}
+                        title={`${card.title}\n${safePresenterNames.join(", ")}`}
+                      >
+                        <div className="truncate text-xs font-semibold leading-tight">{card.title}</div>
+                        {durationSlots > 1 ? (
+                          <div className="truncate text-[10px] leading-tight opacity-80">
+                            {safePresenterNames.join(", ") || "No presenters"}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })() : null}
         </div>
       </div>
 
