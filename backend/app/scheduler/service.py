@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
@@ -90,33 +91,39 @@ def build_problem_from_symposium(
     if constraints is None:
         constraints = ScheduleConstraints()
     logger.info("Building schedule problem for symposium_id=%s  slot_minutes=%d", symposium_id, slot_minutes)
+    t_total = time.perf_counter()
     symposium_uuid = _coerce_uuid(symposium_id)
+
+    t = time.perf_counter()
     symposium_row = _get_symposium_row(symposium_uuid)
+    logger.info("[setup-timing] symposium_row: %.3fs", time.perf_counter() - t)
     rooms_available = int(symposium_row["rooms_available"])
     symposium_default_buffer = int(symposium_row.get("default_buffer") or 0)
 
-    symposium_timeframes_resp = read.get_timeframes(linked_id=symposium_uuid)
-    symposium_timeframes = list(getattr(symposium_timeframes_resp, "data", None) or [])
-    symposium_windows = _window_rows_to_models(symposium_timeframes)
-    if not symposium_windows:
-        raise ValueError(f"Symposium {symposium_uuid} has no timeframes.")
-
+    t = time.perf_counter()
     departments_resp = read.get_departments(symposium_id=symposium_uuid)
+    logger.info("[setup-timing] get_departments: %.3fs", time.perf_counter() - t)
     departments = list(getattr(departments_resp, "data", None) or [])
     department_ids = [UUID(str(row["id"])) for row in departments if row.get("id")]
 
     classes = []
     if department_ids:
+        t = time.perf_counter()
         classes_resp = read.get_classes(department_id=department_ids)
+        logger.info("[setup-timing] get_classes: %.3fs", time.perf_counter() - t)
         classes = list(getattr(classes_resp, "data", None) or [])
     class_ids = [UUID(str(row["id"])) for row in classes if row.get("id")]
 
     professors = []
     presentations = []
     if class_ids:
+        t = time.perf_counter()
         professors_resp = read.get_professors(class_id=class_ids)
+        logger.info("[setup-timing] get_professors: %.3fs", time.perf_counter() - t)
         professors = list(getattr(professors_resp, "data", None) or [])
+        t = time.perf_counter()
         presentations_resp = read.get_presentations(class_id=class_ids)
+        logger.info("[setup-timing] get_presentations: %.3fs", time.perf_counter() - t)
         presentations = list(getattr(presentations_resp, "data", None) or [])
 
     professors_by_class: dict[str, list[str]] = defaultdict(list)
@@ -155,34 +162,49 @@ def build_problem_from_symposium(
             )
         )
 
+    all_linked_ids: list[UUID] = [symposium_uuid]
+    all_linked_ids.extend(UUID(pid) for pid in person_ids)
+    t = time.perf_counter()
+    timeframe_resp = read.get_timeframes(linked_id=all_linked_ids)
+    logger.info("[setup-timing] get_timeframes (%d ids): %.3fs", len(all_linked_ids), time.perf_counter() - t)
+    timeframe_rows = list(getattr(timeframe_resp, "data", None) or [])
+    grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in timeframe_rows:
+        grouped_rows[str(row["linked_id"])].append(row)
+
+    symposium_windows = _window_rows_to_models(grouped_rows.get(str(symposium_uuid), []))
+    if not symposium_windows:
+        raise ValueError(f"Symposium {symposium_uuid} has no timeframes.")
+
     resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
     soft_resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
-    if person_ids:
-        timeframe_resp = read.get_timeframes(linked_id=[UUID(person_id) for person_id in person_ids])
-        timeframe_rows = list(getattr(timeframe_resp, "data", None) or [])
-        grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in timeframe_rows:
-            grouped_rows[str(row["linked_id"])].append(row)
-        for person_id, rows in grouped_rows.items():
-            windows = _window_rows_to_models(rows)
-            if person_id in professor_ids and constraints.professor_availability == "hard":
-                resource_windows[person_id] = windows
-            elif person_id in professor_ids and constraints.professor_availability == "soft":
-                soft_resource_windows[person_id] = windows
-            elif person_id in student_ids and constraints.student_availability == "hard":
-                resource_windows[person_id] = windows
-            elif person_id in student_ids and constraints.student_availability == "soft":
-                soft_resource_windows[person_id] = windows
+    for linked_id, rows in grouped_rows.items():
+        if linked_id == str(symposium_uuid):
+            continue
+        windows = _window_rows_to_models(rows)
+        if linked_id in professor_ids and constraints.professor_availability == "hard":
+            resource_windows[linked_id] = windows
+        elif linked_id in professor_ids and constraints.professor_availability == "soft":
+            soft_resource_windows[linked_id] = windows
+        elif linked_id in student_ids and constraints.student_availability == "hard":
+            resource_windows[linked_id] = windows
+        elif linked_id in student_ids and constraints.student_availability == "soft":
+            soft_resource_windows[linked_id] = windows
 
-    # Professors with no timeframes are treated as fully available (when hard constraint).
-    if constraints.professor_availability == "hard":
-        for person_id in professor_ids:
-            if person_id not in resource_windows:
-                resource_windows[person_id] = symposium_windows
+    # Professors with no timeframes are treated as fully available.
+    for id in professor_ids:
+        if id not in resource_windows:
+            resource_windows[id] = symposium_windows
+
+    # Do the same for students
+    for id in student_ids:
+        if id not in resource_windows:
+            resource_windows[id] = symposium_windows
 
     logger.info(
-        "Schedule problem built: rooms=%d  presentations=%d  professors=%d  students=%d  windows=%d",
+        "Schedule problem built: rooms=%d  presentations=%d  professors=%d  students=%d  windows=%d  total=%.3fs",
         rooms_available, len(scheduler_presentations), len(professor_ids), len(student_ids), len(symposium_windows),
+        time.perf_counter() - t_total,
     )
     return ScheduleProblem(
         symposium_id=str(symposium_uuid),
@@ -209,12 +231,12 @@ def _save_assignments(
     presentation_ids = [UUID(pid) for pid in presentation_ids_to_reset]
     if presentation_ids:
         delete.delete_timeframes(presentation_ids)
-        for pid in presentation_ids:
-            supabase.table("presentations").update(
-                {"room": None}
-            ).eq("id", str(pid)).execute()
+        write.update_column_by_ids(
+            "presentations", "room", {pid: None for pid in presentation_ids}
+        )
 
     timeframe_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
+    room_by_presentation: dict[UUID, str | int | None] = {}
     for assignment in result.assignments:
         timeframe_rows.append({
             "id": uuid4(),
@@ -222,9 +244,10 @@ def _save_assignments(
             "start_time": assignment.start.isoformat(),
             "end_time": assignment.end.isoformat(),
         })
-        supabase.table("presentations").update({
-            "room": assignment.room_index,
-        }).eq("id", assignment.presentation_id).execute()
+        room_by_presentation[UUID(assignment.presentation_id)] = assignment.room_index
+
+    if room_by_presentation:
+        write.update_column_by_ids("presentations", "room", room_by_presentation)
 
     if timeframe_rows:
         write.insert("timeframes", timeframe_rows)
@@ -234,7 +257,7 @@ def _save_assignments(
 def build_schedule_for_symposium(
     symposium_id: str | UUID,
     slot_minutes: int = 5,
-    time_limit_seconds: float = 10.0,
+    time_limit_seconds: float = 30.0,
     constraints: ScheduleConstraints | None = None,
 ) -> ScheduleResult:
     problem = build_problem_from_symposium(

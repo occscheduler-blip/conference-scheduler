@@ -1,8 +1,7 @@
 import logging
 
 from datetime import datetime, timedelta, timezone, date
-from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4, UUID
 from postgrest.base_request_builder import APIResponse
 
@@ -36,6 +35,24 @@ from app.auth.email import send_dept_head_notification, send_professor_notificat
 from app.config import get_settings
 
 router = APIRouter(prefix="/events", tags=["events"])
+
+
+def _parse_uuid_list(value: str | None) -> list[UUID] | None:
+    """
+    Parse a query parameter that may be a single UUID or a comma-separated list of UUIDs
+    into a list[UUID]. Returns None if the value is empty/missing. Raises HTTP 400 on
+    an invalid UUID.
+    """
+    if value is None:
+        return None
+    parts = [piece.strip() for piece in value.split(",")]
+    parts = [piece for piece in parts if piece]
+    if not parts:
+        return None
+    try:
+        return [UUID(piece) for piece in parts]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid UUID: {exc}") from exc
 
 
 def _serialize_update_fields(fields: dict[str, object]) -> dict[str, Any]:
@@ -326,40 +343,6 @@ def delete_department(
         ) from exc
 
 
-@router.post("/email_symposium")
-def email_symposium(
-    body: request_schemas.EmailSymposiumRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
-) -> dict[str, object]:
-    try:
-        logger.info("email_symposium: symposium_id=%s", body.symposium_id)
-        settings = get_settings()
-        frontend_url = settings.cors_origins[0]
-
-        symposium_resp = supabase.table("symposiums").select("name").eq("id", str(body.symposium_id)).execute()
-        symposium_name = (symposium_resp.data or [{}])[0].get("name", "the symposium")
-
-        dept_resp = supabase.table("departments").select("id,department_head_name,email").eq("symposium_id", str(body.symposium_id)).execute()
-        depts = dept_resp.data or []
-
-        for dept in depts:
-            login_url = f"{frontend_url}/pages?view=login"
-            send_dept_head_notification(
-                to_email=dept["email"],
-                name=dept["department_head_name"],
-                symposium_name=symposium_name,
-                login_url=login_url,
-            )
-
-        logger.info("email_symposium: sent %d emails", len(depts))
-        return {"status": "ok", "emails_sent": len(depts)}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("email_symposium failed: symposium_id=%s", body.symposium_id)
-        raise HTTPException(status_code=500, detail=f"Failed to email symposium: {exc}") from exc
-
-
 # Admins and Department Heads
 
 
@@ -502,48 +485,6 @@ def delete_class(
         raise HTTPException(
             status_code=400, detail=f"Failed to delete class: {exc}"
         ) from exc
-
-
-@router.post("/email_classes")
-def email_classes(
-    body: request_schemas.EmailClassesRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
-) -> dict[str, object]:
-    try:
-        logger.info("email_classes: department_id=%s", body.department_id)
-        settings = get_settings()
-        frontend_url = settings.cors_origins[0]
-
-        dept_resp = supabase.table("departments").select("symposium_id").eq("id", str(body.department_id)).execute()
-        symposium_id = (dept_resp.data or [{}])[0].get("symposium_id")
-        sym_resp = supabase.table("symposiums").select("name").eq("id", str(symposium_id)).execute()
-        symposium_name = (sym_resp.data or [{}])[0].get("name", "the symposium")
-
-        classes_resp = supabase.table("classes").select("id").eq("department_id", str(body.department_id)).execute()
-        class_ids = [c["id"] for c in (classes_resp.data or [])]
-
-        if not class_ids:
-            return {"status": "ok", "emails_sent": 0}
-
-        profs_resp = supabase.table("professors").select("id,name,email").in_("class_id", class_ids).execute()
-        professors = profs_resp.data or []
-
-        for prof in professors:
-            login_url = f"{frontend_url}/pages?view=login"
-            send_professor_notification(
-                to_email=prof["email"],
-                name=prof["name"],
-                symposium_name=symposium_name,
-                login_url=login_url,
-            )
-
-        logger.info("email_classes: sent %d emails", len(professors))
-        return {"status": "ok", "emails_sent": len(professors)}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("email_classes failed: department_id=%s", body.department_id)
-        raise HTTPException(status_code=500, detail=f"Failed to email classes: {exc}") from exc
 
 
 # Admins, Department Heads, and Professors
@@ -794,52 +735,6 @@ def delete_student(
         raise HTTPException(
             status_code=400, detail=f"Failed to delete student: {exc}"
         ) from exc
-
-
-@router.post("/email_students")
-def email_students(
-    body: request_schemas.EmailStudentsRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),  # admin + dept head + professor
-) -> dict[str, object]:
-    try:
-        logger.info("email_students: presentation_id=%s", body.presentation_id)
-        settings = get_settings()
-        frontend_url = settings.cors_origins[0]
-
-        pres_resp = supabase.table("presentations").select("class_id").eq("id", str(body.presentation_id)).execute()
-        class_id = (pres_resp.data or [{}])[0].get("class_id")
-        class_resp = supabase.table("classes").select("department_id").eq("id", str(class_id)).execute()
-        dept_id = (class_resp.data or [{}])[0].get("department_id")
-        dept_resp = supabase.table("departments").select("symposium_id").eq("id", str(dept_id)).execute()
-        symposium_id = (dept_resp.data or [{}])[0].get("symposium_id")
-        sym_resp = supabase.table("symposiums").select("name").eq("id", str(symposium_id)).execute()
-        symposium_name = (sym_resp.data or [{}])[0].get("name", "the symposium")
-
-        ps_resp = supabase.table("presenting_students").select("student_id").eq("presentation_id", str(body.presentation_id)).execute()
-        student_ids = [r["student_id"] for r in (ps_resp.data or [])]
-
-        if not student_ids:
-            return {"status": "ok", "emails_sent": 0}
-
-        students_resp = supabase.table("students").select("id,name,email").in_("id", student_ids).execute()
-        students = students_resp.data or []
-
-        for student in students:
-            login_url = f"{frontend_url}/pages?view=login"
-            send_student_notification(
-                to_email=student["email"],
-                name=student["name"],
-                symposium_name=symposium_name,
-                login_url=login_url,
-            )
-
-        logger.info("email_students: sent %d emails", len(students))
-        return {"status": "ok", "emails_sent": len(students)}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("email_students failed: presentation_id=%s", body.presentation_id)
-        raise HTTPException(status_code=500, detail=f"Failed to email students: {exc}") from exc
 
 
 # Admins, Department Heads, Professors, and Students
@@ -1291,16 +1186,20 @@ def bulk_update_schedule_assignments(
         delete.delete_timeframes(batch_pids)
 
         tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
+        room_by_presentation: dict[UUID, str | int | None] = {}
         for pid, a in assignment_map.items():
-            supabase.table("presentations").update(
-                {"room": a.room}
-            ).eq("id", pid).execute()
+            room_by_presentation[UUID(pid)] = a.room
             tf_rows.append({
                 "id": uuid4(),
                 "linked_id": UUID(pid),
                 "start_time": a.start_time,
                 "end_time": a.end_time,
             })
+
+        if room_by_presentation:
+            write.update_column_by_ids(
+                "presentations", "room", room_by_presentation
+            )
 
         if tf_rows:
             write.insert("timeframes", tf_rows)
@@ -1490,16 +1389,17 @@ def get_symposium(symposium_id: UUID) -> dict[str, object]:
 
 @router.get("/departments", response_model=None)
 def get_departments(
-    symposium_id: UUID | None = None,
+    symposium_id: str | None = None,
     include: str | None = None,
 ) -> APIResponse | list[dict[str, object]]:
     try:
+        ids = _parse_uuid_list(symposium_id)
         includes = parse_include(include, allowed=DEPARTMENT_ALLOWS)
         if includes:
             if includes & CLASS_CHILDREN:
                 includes = includes | {"classes"}
-            return get_departments_nested(symposium_id=symposium_id, includes=includes)
-        return read.get_departments(symposium_id=symposium_id)
+            return get_departments_nested(symposium_id=ids, includes=includes)
+        return read.get_departments(symposium_id=ids)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1511,14 +1411,15 @@ def get_departments(
 
 @router.get("/classes", response_model=None)
 def get_classes(
-    department_id: UUID | None = None,
+    department_id: str | None = None,
     include: str | None = None,
 ) -> APIResponse | list[dict[str, object]]:
     try:
+        ids = _parse_uuid_list(department_id)
         includes = parse_include(include, allowed=CLASS_ALLOWS)
         if includes:
-            return get_classes_nested(department_id=department_id, includes=includes)
-        return read.get_classes(department_id=department_id)
+            return get_classes_nested(department_id=ids, includes=includes)
+        return read.get_classes(department_id=ids)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1529,9 +1430,9 @@ def get_classes(
 
 
 @router.get("/students")
-def get_students(class_id: UUID | None = None) -> APIResponse:
+def get_students(class_id: str | None = None) -> APIResponse:
     try:
-        return read.get_students(class_id=class_id)
+        return read.get_students(class_id=_parse_uuid_list(class_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -1542,9 +1443,9 @@ def get_students(class_id: UUID | None = None) -> APIResponse:
 
 
 @router.get("/presentations", response_model=None)
-def get_presentations(class_id: UUID | None = None) -> SimpleNamespace | APIResponse:
+def get_presentations(class_id: str | None = None) -> APIResponse:
     try:
-        return read.get_presentations(class_id=class_id)
+        return read.get_presentations(class_id=_parse_uuid_list(class_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -1555,9 +1456,9 @@ def get_presentations(class_id: UUID | None = None) -> SimpleNamespace | APIResp
 
 
 @router.get("/professors")
-def get_professors(class_id: UUID | None = None) -> APIResponse:
+def get_professors(class_id: str | None = None) -> APIResponse:
     try:
-        return read.get_professors(class_id=class_id)
+        return read.get_professors(class_id=_parse_uuid_list(class_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -1568,9 +1469,9 @@ def get_professors(class_id: UUID | None = None) -> APIResponse:
 
 
 @router.get("/timeframes")
-def get_timeframes(linked_id: UUID | None = None) -> APIResponse:
+def get_timeframes(linked_id: str | None = None) -> APIResponse:
     try:
-        return read.get_timeframes(linked_id=linked_id)
+        return read.get_timeframes(linked_id=_parse_uuid_list(linked_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -1581,9 +1482,9 @@ def get_timeframes(linked_id: UUID | None = None) -> APIResponse:
 
 
 @router.get("/requests")
-def get_requests(student_id: UUID | None = None) -> APIResponse:
+def get_requests(student_id: str | None = None) -> APIResponse:
     try:
-        return read.get_requests(student_id=student_id)
+        return read.get_requests(student_id=_parse_uuid_list(student_id))
     except HTTPException:
         raise
     except Exception as exc:

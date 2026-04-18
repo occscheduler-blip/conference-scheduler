@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from math import ceil
@@ -191,12 +192,14 @@ def _build_admin_suggestions(
 
 
 def solve_schedule(
-    problem: ScheduleProblem, time_limit_seconds: float = 10.0
+    problem: ScheduleProblem, time_limit_seconds: float = 30.0
 ) -> ScheduleResult:
     logger.info(
         "solve_schedule: presentations=%d  rooms=%d  windows=%d  time_limit=%.1fs",
         len(problem.presentations), problem.rooms_available, len(problem.symposium_windows), time_limit_seconds,
     )
+
+    # Immediately fail if schedule is impossible to make
     if problem.rooms_available < 1:
         return ScheduleResult(
             status="invalid",
@@ -469,7 +472,7 @@ def solve_schedule(
         if problem.constraints.room_conflicts != "off":
             for room_index in range(problem.rooms_available):
                 overlapping: list[cp_model.IntVar] = []
-                for presentation in schedulable_presentations:
+                for presentation in problem.presentations:
                     for option_index in range(len(eligible_starts[presentation.id])):
                         key = (presentation.id, option_index, room_index)
                         start_time, end_time = option_lookup[key]
@@ -482,7 +485,7 @@ def solve_schedule(
 
         if problem.constraints.person_conflicts != "off":
             resources_at_time: dict[str, list[cp_model.IntVar]] = defaultdict(list)
-            for presentation in schedulable_presentations:
+            for presentation in problem.presentations:
                 for resource_id in presentation.resource_ids:
                     for option_index in range(len(eligible_starts[presentation.id])):
                         for room_index in range(problem.rooms_available):
@@ -491,10 +494,11 @@ def solve_schedule(
                             if start_time <= instant < end_time:
                                 resources_at_time[resource_id].append(assignment_vars[key])
 
-            for resource_id, overlapping_res in resources_at_time.items():
-                _add_constraint_or_penalty(
-                    overlapping_res, problem.constraints.person_conflicts, f"person_{resource_id}_{instant}"
-                )
+                for resource_id, overlapping_res in resources_at_time.items():
+                    _add_constraint_or_penalty(
+                        overlapping_res, "soft", f"person_{resource_id}_{instant}"
+                    )
+        logger.info("[solve-timing] soft conflict constraints: %.3fs", time.perf_counter() - t_slow)
 
     makespan = model.NewIntVar(0, 1000000, "makespan")
     model.AddMaxEquality(makespan, list(eff_end_for_max.values()))

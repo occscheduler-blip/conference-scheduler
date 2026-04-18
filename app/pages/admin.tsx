@@ -21,9 +21,7 @@ import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
 import ScheduleTab from "./schedule-tab";
-
-const fieldClass =
-  "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
+import { FIELD_CLASS as fieldClass } from "../lib/styles";
 
 export default function AdminPage({ token, onSignOut }: { token: string; onSignOut: () => void }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");

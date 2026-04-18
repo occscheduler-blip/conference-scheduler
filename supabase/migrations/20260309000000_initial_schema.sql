@@ -54,8 +54,8 @@ create table if not exists public.presenting_students (
 create table if not exists public.timeframes (
     id         uuid primary key default gen_random_uuid(),
     linked_id  uuid not null,
-    start_time timestamptz not null,
-    end_time   timestamptz not null
+    start_time timestamp not null,
+    end_time   timestamp not null
 );
 
 create table if not exists public.requests (

@@ -1,10 +1,10 @@
 import logging
-from types import SimpleNamespace
-from app.supabase_io.client import supabase
+from typing import Any, cast
 from uuid import UUID
+
 from postgrest.base_request_builder import APIResponse
-from typing import cast
-from app.utils import force_uuid
+
+from app.supabase_io.client import supabase
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +14,17 @@ def get_symposiums() -> APIResponse:
     return resp
 
 
-def get_departments(symposium_id: UUID | None = None) -> APIResponse:
+def get_departments(symposium_id: UUID | list[UUID] | None = None) -> APIResponse:
     query = supabase.table("departments").select("*")
+
     if symposium_id:
-        query = query.eq("symposium_id", symposium_id)
+        if isinstance(symposium_id, UUID):
+            query = query.eq("symposium_id", str(symposium_id))
+        elif isinstance(symposium_id, list):
+            query = query.in_("symposium_id", [str(uid) for uid in symposium_id])
+        else:
+            raise ValueError("symposium_id must be a UUID or list of UUIDs.")
+
     return query.execute()
 
 
@@ -65,8 +72,10 @@ def get_professors(class_id: UUID | list[UUID] | None = None) -> APIResponse:
 
 def get_presentations(
     class_id: UUID | list[UUID] | None = None,
-) -> SimpleNamespace | APIResponse:
-    query = supabase.table("presentations").select("*")
+) -> APIResponse:
+    query = supabase.table("presentations").select(
+        "*, presenting_students(students(*))"
+    )
 
     if class_id:
         if isinstance(class_id, UUID):
@@ -76,70 +85,16 @@ def get_presentations(
         else:
             raise ValueError("class_id must be a UUID or list of UUIDs.")
 
-    presentations_resp = query.execute()
-    presentations = cast(list[dict[str, object]], list(presentations_resp.data or []))
-
-    presentation_ids = [
-        presentation["id"] for presentation in presentations if "id" in presentation
-    ]
-    if not presentation_ids:
-        return presentations_resp
-
-    presenting_students_resp = (
-        supabase.table("presenting_students")
-        .select("*")
-        .in_("presentation_id", presentation_ids)
-        .execute()
-    )
-    presenting_rows = cast(
-        list[dict[str, object]], list(presenting_students_resp.data or [])
-    )
-
-    student_ids = [row["student_id"] for row in presenting_rows if "student_id" in row]
-    students_by_id = {}
-    if student_ids:
-        students_resp = (
-            supabase.table("students").select("*").in_("id", student_ids).execute()
-        )
-        students_by_id = {
-            str(student["id"]): student
-            for student in cast(
-                list[dict[str, UUID | str | None]], students_resp.data or []
-            )
-            if "id" in student
-        }
-
-    presenting_by_presentation: dict[str, list[dict[str, UUID | str | None]]] = {}
-    for row in presenting_rows:
-        raw_pres_id = row.get("presentation_id")
-        if raw_pres_id is None:
-            continue
-        pres_id_key = str(force_uuid(raw_pres_id))
-        raw_student_id = row.get("student_id")
-        if raw_student_id is None:
-            continue
-        student_id_key = str(force_uuid(raw_student_id))
-        student = students_by_id.get(student_id_key)
-        if student is not None:
-            presenting_by_presentation.setdefault(pres_id_key, []).append(student)
-
-    enriched_presentations = []
-    for presentation in presentations:
-        raw_id = presentation.get("id")
-        if raw_id is None:
-            raise ValueError(
-                f"Invalid presentation ID in presentations table: {raw_id}"
-            )
-        pres_id_key = str(force_uuid(raw_id))
-        enriched_presentation = dict(presentation)
-        enriched_presentation["presenting_students"] = presenting_by_presentation.get(
-            pres_id_key, []
-        )
-        enriched_presentations.append(enriched_presentation)
-
-    return SimpleNamespace(
-        data=enriched_presentations, count=len(enriched_presentations)
-    )
+    resp = query.execute()
+    rows = cast(list[dict[str, Any]], resp.data or [])
+    for presentation in rows:
+        joined = presentation.get("presenting_students") or []
+        presentation["presenting_students"] = [
+            row["students"]
+            for row in joined
+            if isinstance(row, dict) and row.get("students")
+        ]
+    return resp
 
 
 def get_presenting_students(

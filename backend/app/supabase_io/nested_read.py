@@ -140,7 +140,7 @@ def _attach_timeframes(
 
 
 def get_departments_nested(
-    symposium_id: UUID | None,
+    symposium_id: UUID | list[UUID] | None,
     includes: frozenset[str],
 ) -> list[dict[str, object]]:
     """Fetch departments with optionally nested child data.
@@ -152,7 +152,10 @@ def get_departments_nested(
     select_str = build_department_select(includes)
     query = supabase.table("departments").select(select_str)
     if symposium_id is not None:
-        query = query.eq("symposium_id", str(symposium_id))
+        if isinstance(symposium_id, UUID):
+            query = query.eq("symposium_id", str(symposium_id))
+        else:
+            query = query.in_("symposium_id", [str(uid) for uid in symposium_id])
     resp = query.execute()
     departments = list(cast(list[dict[str, object]], resp.data or []))
 
@@ -191,7 +194,7 @@ def get_departments_nested(
 
 
 def get_classes_nested(
-    department_id: UUID | None,
+    department_id: UUID | list[UUID] | None,
     includes: frozenset[str],
 ) -> list[dict[str, object]]:
     """Fetch classes with optionally nested child data.
@@ -203,7 +206,10 @@ def get_classes_nested(
     select_str = build_class_select(includes)
     query = supabase.table("classes").select(select_str)
     if department_id is not None:
-        query = query.eq("department_id", str(department_id))
+        if isinstance(department_id, UUID):
+            query = query.eq("department_id", str(department_id))
+        else:
+            query = query.in_("department_id", [str(uid) for uid in department_id])
     resp = query.execute()
     classes = list(cast(list[dict[str, object]], resp.data or []))
 

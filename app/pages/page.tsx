@@ -9,9 +9,7 @@ import DepartmentHeadPage from "./department-head";
 import HomePage from "./home";
 import ProfessorPage from "./professor";
 import StudentPage from "./student";
-
-const fieldClass =
-  "w-full rounded-lg border-2 border-[#2f53c4] bg-white px-3 py-2.5 text-base text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] placeholder:text-[#6b6b6b]";
+import { FIELD_CLASS as fieldClass } from "../lib/styles";
 
 type AuthState = {
   token: string;
@@ -24,6 +22,7 @@ const ROLE_VIEW: Record<string, string> = {
   department_head: "department-head",
   professor: "professor",
   student: "student",
+  attendee: "attendee",
 };
 
 function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
@@ -35,9 +34,10 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
 
   // OTP login
   const [otpEmail, setOtpEmail] = useState("");
-  const [otpRole, setOtpRole] = useState<string>("professor");
+  const [otpRole, setOtpRole] = useState<string>("attendee");
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
+
 
   // Shared
   const [loading, setLoading] = useState(false);
@@ -65,7 +65,11 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
     setLoading(true);
     setError("");
     try {
-      await apiPost("/api/auth/otp/request", { email: otpEmail, role: otpRole });
+      if (otpRole === "attendee") {
+        await apiPost("/api/auth/attendee/register", { email: otpEmail });
+      } else {
+        await apiPost("/api/auth/otp/request", { email: otpEmail, role: otpRole });
+      }
       setOtpSent(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reach the server.");
@@ -83,6 +87,7 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
         token: (raw.access_token as string) ?? "",
         role: (raw.role as string) ?? otpRole,
         entityId: (raw.entity_id as string) ?? "",
+
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reach the server.");
@@ -171,13 +176,14 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
               <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">I am a...</span>
               <select
                 value={otpRole}
-                onChange={(e) => { setOtpRole(e.target.value); setOtpSent(false); setOtpCode(""); setError(""); }}
+                onChange={(e) => { setOtpRole(e.target.value); setOtpSent(false); setOtpCode(""); setAttendeeName(""); setError(""); }}
                 className={fieldClass}
                 disabled={otpSent}
               >
+                <option value="attendee">Attendee</option>
+                <option value="student">Student</option>
                 <option value="professor">Professor</option>
                 <option value="department_head">Department Head</option>
-                <option value="student">Student</option>
               </select>
             </label>
             <input
@@ -261,6 +267,7 @@ function PagesRouterContent() {
   if (roleView === "department-head") return <DepartmentHeadPage token={auth.token} onSignOut={handleSignOut} entityId={auth.entityId} />;
   if (roleView === "professor") return <ProfessorPage token={auth.token} onSignOut={handleSignOut} entityId={auth.entityId} />;
   if (roleView === "student") return <StudentPage token={auth.token} onSignOut={handleSignOut} entityId={auth.entityId} />;
+  if (roleView === "attendee") return <HomePage isAttendee={true} attendeeId={auth.entityId} authToken={auth.token} onSignOut={handleSignOut} />;
   return <HomePage />;
 }
 

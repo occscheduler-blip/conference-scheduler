@@ -18,6 +18,7 @@ export type Timeframe = {
   id: string;
   start_time: string;
   end_time: string;
+  linked_id?: string;
 };
 
 // A time slot tied to a specific symposium (used when fetching from the DB)
