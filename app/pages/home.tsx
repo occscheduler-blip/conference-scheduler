@@ -14,7 +14,20 @@ import type {
 import { parseBackendDateTime, normalizeId, dayKey, dayLabel, timeLabel } from "../lib/utils";
 import { apiFetch } from "../lib/api";
 
-function HomeContent() {
+type ItineraryDetailItem = {
+  presentation_id: string;
+  title: string;
+  room: string | null;
+  presenter_names: string[];
+  department_name: string;
+  department_head_name: string;
+  symposium_id: string;
+  symposium_name: string;
+  start_time: string | null;
+  end_time: string | null;
+};
+
+function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAttendee?: boolean; attendeeId?: string; authToken?: string; onSignOut?: () => void }) {
   const searchParams = useSearchParams();
 
   const [symposia, setSymposia] = useState<SymposiumOption[]>([]);
@@ -32,12 +45,74 @@ function HomeContent() {
   const [departmentFilter, setDepartmentFilter] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [itinerary, setItinerary] = useState<Set<string>>(new Set());
+  const [showItinerary, setShowItinerary] = useState(false);
+  const [itineraryDetails, setItineraryDetails] = useState<ItineraryDetailItem[] | null>(null);
+  const [itineraryLoading, setItineraryLoading] = useState(false);
+
+  const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+  // Load itinerary from DB on mount
+  useEffect(() => {
+    if (!attendeeId || !authToken) return;
+    fetch(`/api/backend/api/auth/attendee/itinerary`, {
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => r.json())
+      .then((ids: unknown) => {
+        if (Array.isArray(ids)) setItinerary(new Set(ids as string[]));
+      })
+      .catch(() => {});
+  }, [attendeeId, authToken]);
+
+  const toggleItinerary = (presentationId: string) => {
+    const isBookmarked = itinerary.has(presentationId);
+    // Optimistic update
+    setItinerary((prev) => {
+      const next = new Set(prev);
+      if (isBookmarked) next.delete(presentationId);
+      else next.add(presentationId);
+      return next;
+    });
+    // Persist to DB
+    const method = isBookmarked ? "DELETE" : "POST";
+    fetch(`/api/backend/api/auth/attendee/itinerary/${presentationId}`, {
+      method,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+    }).catch(() => {
+      // Revert on failure
+      setItinerary((prev) => {
+        const next = new Set(prev);
+        if (isBookmarked) next.add(presentationId);
+        else next.delete(presentationId);
+        return next;
+      });
+    });
+  };
+
+  const openItinerary = () => {
+    setShowItinerary(true);
+    setItineraryLoading(true);
+    setItineraryDetails(null);
+    fetch(`/api/backend/api/auth/attendee/itinerary/details`, {
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => r.json())
+      .then((data: unknown) => {
+        if (Array.isArray(data)) setItineraryDetails(data as ItineraryDetailItem[]);
+        else setItineraryDetails([]);
+      })
+      .catch(() => setItineraryDetails([]))
+      .finally(() => setItineraryLoading(false));
+  };
+
   const [popupCard, setPopupCard] = useState<{
     title: string;
     timeframe: Timeframe | null;
     room: string;
     presenterNames: string[];
     department: DepartmentRecord;
+    presentationId: string;
   } | null>(null);
 
   const isLoggedIn = Boolean(
@@ -251,6 +326,7 @@ function HomeContent() {
             title: presentation.title || `${department.department_name} Presentation`,
             presenterNames: Array.isArray(presentation.presenterNames) ? presentation.presenterNames : [],
             scheduled,
+            presentationId: presentation.id,
           };
         })
         .filter(
@@ -263,6 +339,7 @@ function HomeContent() {
             title: string;
             presenterNames: string[];
             scheduled: boolean;
+            presentationId: string;
           } => Boolean(card)
         );
 
@@ -275,6 +352,7 @@ function HomeContent() {
         title: `${department.department_name} Presentation`,
         presenterNames: [],
         scheduled: false,
+        presentationId: "",
       }));
     },
     [classes, departments, presentations]
@@ -314,19 +392,31 @@ function HomeContent() {
     });
   }, [cards, departmentFilter, locationFilter, professorFilter, searchQuery, selectedDay]);
 
+
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-4 py-6">
       <div className="mx-auto w-full max-w-6xl">
-        <div className="mb-4 flex justify-center">
-          <Link
-            href="/pages?view=login"
-            className="rounded-md border border-[#0f33a8] bg-[#0f33a8] px-6 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] md:text-base"
-          >
-            Sign In
-          </Link>
+        <div className="relative mb-4 flex items-center justify-center">
+          <h1 className="text-center text-4xl font-extrabold tracking-wide text-black md:text-6xl">OCC THESIS SYMPOSIUM</h1>
+          <div className="absolute right-0 flex items-center gap-3">
+            {isAttendee ? (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="rounded-md border border-[#0f33a8] bg-white px-4 py-2 text-sm font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff] md:text-base"
+              >
+                Sign Out
+              </button>
+            ) : (
+              <Link
+                href="/pages?view=login"
+                className="rounded-md border border-[#0f33a8] bg-[#0f33a8] px-6 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] md:text-base"
+              >
+                Sign In
+              </Link>
+            )}
+          </div>
         </div>
-
-        <h1 className="mb-4 text-center text-4xl font-extrabold tracking-wide text-black md:text-6xl">OCC THESIS SYMPOSIUM</h1>
 
         <div className="mb-4 rounded-xl border border-[#b9c6f8] bg-white p-4">
           <label className="block text-xs font-bold uppercase tracking-wide text-[#1b338f]">Select Symposium</label>
@@ -343,58 +433,16 @@ function HomeContent() {
             ))}
           </select>
         </div>
-
-        <section className="overflow-hidden rounded-lg border-4 border-[#1635a7] bg-[#1635a7]">
-          <div className="flex items-stretch">
-            {days.length > 4 ? (
-              <button
-                type="button"
-                onClick={() => setDayPage((p) => p - 1)}
-                disabled={dayPage === 0}
-                className="flex items-center justify-center px-3 text-white disabled:opacity-30 hover:bg-[#0b2a8d]"
-                aria-label="Previous days"
-              >
-                &#8592;
-              </button>
-            ) : null}
-            <div className="grid flex-1 grid-cols-1 md:grid-cols-4">
-              {days.slice(dayPage * 4, (dayPage + 1) * 4).map((day) => {
-                const active = day === selectedDay;
-                return (
-                  <button
-                    key={day}
-                    type="button"
-                    onClick={() => setSelectedDay(day)}
-                    className={`whitespace-nowrap border-b border-r border-[#1635a7] px-4 py-3 text-left text-lg leading-tight ${
-                      active ? "bg-white text-[#111]" : "bg-[#1635a7] text-white"
-                    }`}
-                  >
-                    {dayLabel(day)}
-                  </button>
-                );
-              })}
-            </div>
-            {days.length > 4 ? (
-              <button
-                type="button"
-                onClick={() => setDayPage((p) => p + 1)}
-                disabled={(dayPage + 1) * 4 >= days.length}
-                className="flex items-center justify-center px-3 text-white disabled:opacity-30 hover:bg-[#0b2a8d]"
-                aria-label="Next days"
-              >
-                &#8594;
-              </button>
-            ) : null}
-          </div>
-
-          {isLoggedIn ? (
-            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto]">
-              <button type="button" className="border-t border-[#1635a7] bg-white px-6 py-2 text-xl font-semibold text-[#111]">
-                My Itinerary
-              </button>
-            </div>
-          ) : null}
-        </section>
+        {isAttendee ? (
+          <button
+            type="button"
+            onClick={openItinerary}
+            className="mb-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#1635a7] px-4 py-2.5 text-base font-semibold text-white transition hover:bg-[#0b2a8d]"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h14a1 1 0 0 1 1 1v17l-8-4-8 4V4a1 1 0 0 1 1-1z"/></svg>
+            My Itinerary{itinerary.size > 0 ? ` (${itinerary.size})` : ""}
+          </button>
+        ) : null}
 
         <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
           <input
@@ -447,6 +495,7 @@ function HomeContent() {
 
         <div className="mt-2 flex items-center justify-between">
           <p className="text-2xl font-semibold text-[#111]">Time Zone: {Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
+          <div className="flex items-center gap-2">
           {/* List / Calendar view toggle */}
           {selectedDay ? (
             <div className="flex overflow-hidden rounded-lg border-2 border-[#1635a7]">
@@ -481,7 +530,53 @@ function HomeContent() {
               </button>
             </div>
           ) : null}
+          </div>
         </div>
+
+        <section className="mt-2 overflow-hidden rounded-lg border-4 border-[#1635a7] bg-[#1635a7]">
+          <div className="flex items-stretch">
+            {days.length > 4 ? (
+              <button
+                type="button"
+                onClick={() => setDayPage((p) => p - 1)}
+                disabled={dayPage === 0}
+                className="flex items-center justify-center px-3 text-white disabled:opacity-30 hover:bg-[#0b2a8d]"
+                aria-label="Previous days"
+              >
+                &#8592;
+              </button>
+            ) : null}
+            <div className="grid flex-1 grid-cols-1 md:grid-cols-4">
+              {days.slice(dayPage * 4, (dayPage + 1) * 4).map((day) => {
+                const active = day === selectedDay;
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => setSelectedDay(day)}
+                    className={`whitespace-nowrap border-b border-r border-[#1635a7] px-4 py-3 text-left text-lg leading-tight ${
+                      active ? "bg-white text-[#111]" : "bg-[#1635a7] text-white"
+                    }`}
+                  >
+                    {dayLabel(day)}
+                  </button>
+                );
+              })}
+            </div>
+            {days.length > 4 ? (
+              <button
+                type="button"
+                onClick={() => setDayPage((p) => p + 1)}
+                disabled={(dayPage + 1) * 4 >= days.length}
+                className="flex items-center justify-center px-3 text-white disabled:opacity-30 hover:bg-[#0b2a8d]"
+                aria-label="Next days"
+              >
+                &#8594;
+              </button>
+            ) : null}
+          </div>
+
+        </section>
 
         <div className="mt-4 space-y-4">
           {message ? <p className="text-sm font-semibold text-[#9a1f1f]">{message}</p> : null}
@@ -495,35 +590,53 @@ function HomeContent() {
             <p className="text-sm font-semibold text-[#555]">No matches found for your search.</p>
           ) : null}
 
-          {viewMode === "list" ? filteredCards.map(({ department, timeframe, room, title, presenterNames }, index) => {
+          {viewMode === "list" ? filteredCards.map(({ department, timeframe, room, title, presenterNames, presentationId }, index) => {
             const dept = department.department_name;
             const prof = department.department_head_name;
             const safePresenterNames = presenterNames ?? [];
+            const cardKey = presentationId;
+            const bookmarked = itinerary.has(cardKey);
             return (
               <article key={`${department.id}-${selectedDay || "no-day"}-${index}`} className="overflow-hidden rounded-md border border-[#d6b676] bg-white">
                 <div className="bg-[#1635a7] px-4 py-2 text-2xl font-semibold text-white">
                   {timeframe ? timeLabel(timeframe.start_time, timeframe.end_time) : "Time TBD"}
                 </div>
-                <div className="px-4 py-3">
-                  <h3 className="text-3xl font-extrabold text-[#111]">
+                <div className="flex items-start px-4 py-3">
+                  <div className="flex-1">
+                    <h3 className="text-3xl font-extrabold text-[#111]">
+                      <button
+                        type="button"
+                        onClick={() => setPopupCard({ title, timeframe, room, presenterNames: safePresenterNames, department, presentationId })}
+                        className="text-left underline hover:text-[#1635a7]"
+                      >
+                        {title}
+                      </button>
+                    </h3>
+                    <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xl text-[#111]">
+                      <span>{room}</span>
+                      {safePresenterNames.length > 0 ? (
+                        safePresenterNames.map((name) => <span key={`${department.id}-${title}-${name}`}>{name}</span>)
+                      ) : (
+                        <span>Presenters TBD</span>
+                      )}
+                      <span>{dept}</span>
+                      <span>{prof}</span>
+                    </div>
+                  </div>
+                  {isAttendee ? (
                     <button
                       type="button"
-                      onClick={() => setPopupCard({ title, timeframe, room, presenterNames: safePresenterNames, department })}
-                      className="text-left underline hover:text-[#1635a7]"
+                      onClick={() => toggleItinerary(cardKey)}
+                      title={bookmarked ? "Remove from itinerary" : "Add to itinerary"}
+                      className="ml-4 mt-1 shrink-0 text-[#1635a7] transition hover:scale-110"
                     >
-                      {title}
+                      {bookmarked ? (
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h14a1 1 0 0 1 1 1v17l-8-4-8 4V4a1 1 0 0 1 1-1z"/></svg>
+                      ) : (
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3h14a1 1 0 0 1 1 1v17l-8-4-8 4V4a1 1 0 0 1 1-1z"/></svg>
+                      )}
                     </button>
-                  </h3>
-                  <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xl text-[#111]">
-                    <span>{room}</span>
-                    {safePresenterNames.length > 0 ? (
-                      safePresenterNames.map((name) => <span key={`${department.id}-${title}-${name}`}>{name}</span>)
-                    ) : (
-                      <span>Presenters TBD</span>
-                    )}
-                    <span>{dept}</span>
-                    <span>{prof}</span>
-                  </div>
+                  ) : null}
                 </div>
               </article>
             );
@@ -540,9 +653,11 @@ function HomeContent() {
               { bg: "#00838f", text: "#fff" },
             ];
 
+            const calendarRows = visibleRows;
+
             // Compute active slots from symposium timeframes for this day
             const activeSlots = new Set<number>();
-            for (const tf of visibleRows) {
+            for (const tf of calendarRows) {
               const s = parseBackendDateTime(tf.start_time);
               const e = parseBackendDateTime(tf.end_time);
               const startSlot = Math.floor((s.getUTCHours() * 60 + s.getUTCMinutes() - 9 * 60) / 15);
@@ -568,7 +683,10 @@ function HomeContent() {
               colorMap.set(card.title + card.department.id, BLOCK_COLORS[i % BLOCK_COLORS.length]);
             });
 
-            const scheduledCards = filteredCards.filter((c) => c.timeframe && c.room !== "Room TBD");
+            const scheduledCards = filteredCards.filter((c) => {
+              if (!c.timeframe || c.room === "Room TBD") return false;
+              return true;
+            });
 
             return (
               <div className="overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
@@ -654,7 +772,7 @@ function HomeContent() {
                     return (
                       <div
                         key={`${card.department.id}-${idx}`}
-                        onClick={() => setPopupCard({ title: card.title, timeframe: card.timeframe, room: card.room, presenterNames: safePresenterNames, department: card.department })}
+                        onClick={() => setPopupCard({ title: card.title, timeframe: card.timeframe, room: card.room, presenterNames: safePresenterNames, department: card.department, presentationId: card.presentationId })}
                         className="z-10 mx-[1px] cursor-pointer overflow-hidden rounded-md px-1.5 py-0.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md"
                         style={{
                           gridRow: `${gridRowStart} / ${gridRowEnd}`,
@@ -707,13 +825,144 @@ function HomeContent() {
                   {popupCard.presenterNames.length > 0 ? popupCard.presenterNames.join(", ") : "TBD"}
                 </p>
               </div>
+              <div className="flex gap-3">
+                {isAttendee ? (() => {
+                  const cardKey = popupCard.presentationId;
+                  const bookmarked = itinerary.has(cardKey);
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => toggleItinerary(cardKey)}
+                      className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
+                        bookmarked
+                          ? "border-[#1635a7] bg-[#1635a7] text-white hover:bg-[#0b2a8d]"
+                          : "border-[#1635a7] bg-white text-[#1635a7] hover:bg-[#eef3ff]"
+                      }`}
+                    >
+                      {bookmarked ? "✓ Added to Itinerary" : "Add to Itinerary"}
+                    </button>
+                  );
+                })() : null}
+                <button
+                  type="button"
+                  onClick={() => setPopupCard(null)}
+                  className="rounded-lg border border-[#ccc] bg-white px-4 py-2 text-sm font-semibold text-[#555] hover:bg-[#f5f5f5]"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showItinerary ? (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setShowItinerary(false)}
+        >
+          <div
+            className="my-8 w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between bg-[#1635a7] px-6 py-4">
+              <div className="flex items-center gap-3">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="white"><path d="M5 3h14a1 1 0 0 1 1 1v17l-8-4-8 4V4a1 1 0 0 1 1-1z"/></svg>
+                <h2 className="text-xl font-bold text-white">My Itinerary</h2>
+                {itinerary.size > 0 ? (
+                  <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-sm font-semibold text-white">{itinerary.size}</span>
+                ) : null}
+              </div>
               <button
                 type="button"
-                onClick={() => setPopupCard(null)}
-                className="mt-2 rounded-lg bg-[#1635a7] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0b2a8d]"
+                onClick={() => setShowItinerary(false)}
+                className="rounded-full p-1 text-white/80 transition hover:bg-white/20 hover:text-white"
+                aria-label="Close"
               >
-                Close
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"/></svg>
               </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6">
+              {itineraryLoading ? (
+                <div className="flex items-center justify-center py-16 text-[#1635a7]">
+                  <svg className="animate-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                </div>
+              ) : !itineraryDetails || itineraryDetails.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#c5cfe8" strokeWidth="1.5"><path d="M5 3h14a1 1 0 0 1 1 1v17l-8-4-8 4V4a1 1 0 0 1 1-1z"/></svg>
+                  <p className="text-lg font-semibold text-[#555]">No bookmarks yet</p>
+                  <p className="text-sm text-[#888]">Tap the bookmark icon on any presentation to add it here.</p>
+                </div>
+              ) : (() => {
+                // Group by symposium, then by day
+                const bySymposium = new Map<string, { name: string; byDay: Map<string, ItineraryDetailItem[]> }>();
+                for (const item of itineraryDetails) {
+                  const sid = item.symposium_id;
+                  if (!bySymposium.has(sid)) bySymposium.set(sid, { name: item.symposium_name, byDay: new Map() });
+                  const dayK = item.start_time ? dayKey(parseBackendDateTime(item.start_time)) : "unscheduled";
+                  const group = bySymposium.get(sid)!;
+                  if (!group.byDay.has(dayK)) group.byDay.set(dayK, []);
+                  group.byDay.get(dayK)!.push(item);
+                }
+                // Sort each day's presentations by start_time
+                for (const { byDay } of bySymposium.values()) {
+                  for (const items of byDay.values()) {
+                    items.sort((a, b) => (a.start_time ?? "").localeCompare(b.start_time ?? ""));
+                  }
+                }
+                return (
+                  <div className="space-y-8">
+                    {Array.from(bySymposium.values()).map(({ name: sympName, byDay }) => (
+                      <div key={sympName}>
+                        {bySymposium.size > 1 ? (
+                          <h3 className="mb-4 border-b border-[#e5e9ff] pb-2 text-sm font-bold uppercase tracking-widest text-[#1635a7]">{sympName}</h3>
+                        ) : null}
+                        <div className="space-y-6">
+                          {Array.from(byDay.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([day, items]) => (
+                            <div key={day}>
+                              <div className="mb-3 flex items-center gap-2">
+                                <span className="rounded-full bg-[#eef2ff] px-3 py-1 text-sm font-semibold text-[#1635a7]">
+                                  {day === "unscheduled" ? "Time TBD" : dayLabel(day)}
+                                </span>
+                                <span className="text-xs text-[#aaa]">{items.length} presentation{items.length !== 1 ? "s" : ""}</span>
+                              </div>
+                              <div className="space-y-3">
+                                {items.map((item) => (
+                                  <div key={item.presentation_id} className="flex gap-3 rounded-xl border border-[#e5e9ff] bg-[#f8f9ff] p-4 transition hover:border-[#b9c6f8] hover:bg-[#eef2ff]">
+                                    <div className="flex-1 min-w-0">
+                                      {item.start_time && item.end_time ? (
+                                        <p className="mb-1 text-xs font-semibold text-[#1635a7]">{timeLabel(item.start_time, item.end_time)}</p>
+                                      ) : null}
+                                      <p className="font-bold text-[#111] leading-snug">{item.title}</p>
+                                      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-sm text-[#555]">
+                                        {item.room ? <span>{item.room}</span> : null}
+                                        {item.presenter_names.length > 0 ? <span>{item.presenter_names.join(", ")}</span> : null}
+                                        <span>{item.department_name}</span>
+                                        <span>{item.department_head_name}</span>
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleItinerary(item.presentation_id)}
+                                      title="Remove from itinerary"
+                                      className="shrink-0 self-start text-[#1635a7] transition hover:text-[#c0392b] hover:scale-110"
+                                    >
+                                      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h14a1 1 0 0 1 1 1v17l-8-4-8 4V4a1 1 0 0 1 1-1z"/></svg>
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -722,10 +971,10 @@ function HomeContent() {
   );
 }
 
-export default function Home() {
+export default function Home({ isAttendee, attendeeId, authToken, onSignOut }: { isAttendee?: boolean; attendeeId?: string; authToken?: string; onSignOut?: () => void } = {}) {
   return (
     <Suspense fallback={<main className="min-h-screen bg-[#f5f5f5] px-4 py-8">Loading...</main>}>
-      <HomeContent />
+      <HomeContent isAttendee={isAttendee} attendeeId={attendeeId} authToken={authToken} onSignOut={onSignOut} />
     </Suspense>
   );
 }
