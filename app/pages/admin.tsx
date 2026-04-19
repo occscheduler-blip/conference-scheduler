@@ -23,6 +23,21 @@ import { useWeekPagination } from "../lib/useWeekPagination";
 import ScheduleTab from "./schedule-tab";
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
 
+function normalizeRoomNames(roomNames: Array<string | null> | null | undefined, roomCount: number): string[] {
+  return Array.from({ length: Math.max(0, roomCount) }, (_, index) => roomNames?.[index]?.trim() ?? "");
+}
+
+function roomNamesForSave(roomNames: string[], roomCount: number): Array<string | null> {
+  const saved = Array.from({ length: Math.max(0, roomCount) }, (_, index) => {
+    const name = roomNames[index]?.trim() ?? "";
+    return name || null;
+  });
+  while (saved.length > 0 && saved[saved.length - 1] === null) {
+    saved.pop();
+  }
+  return saved;
+}
+
 export default function AdminPage({ token, onSignOut }: { token: string; onSignOut: () => void }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
@@ -50,6 +65,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
   const [editSymposiumName, setEditSymposiumName] = useState("");
   const [editRooms, setEditRooms] = useState("");
+  const [editRoomNames, setEditRoomNames] = useState<string[]>([]);
   const [editStartDate, setEditStartDate] = useState("");
   const [editEndDate, setEditEndDate] = useState("");
   const [editDefaultBuffer, setEditDefaultBuffer] = useState("");
@@ -154,6 +170,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       if (!symposiumId.trim()) {
         setEditSymposiumName("");
         setEditRooms("");
+        setEditRoomNames([]);
         setEditDefaultBuffer("");
         setEditStartDate("");
         setEditEndDate("");
@@ -172,7 +189,13 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         });
         const payload = (await response.json()) as {
           detail?: string;
-          symposium?: { id: string; name: string; rooms_available: number; default_buffer?: number };
+          symposium?: {
+            id: string;
+            name: string;
+            rooms_available: number;
+            room_names?: Array<string | null> | null;
+            default_buffer?: number;
+          };
           timeframes?: TimeframeRecord[];
         };
         if (!response.ok || !payload.symposium) {
@@ -181,7 +204,10 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         }
 
         setEditSymposiumName(payload.symposium.name ?? "");
+        const loadedRooms = Number(payload.symposium.rooms_available ?? 0);
+        const normalizedLoadedRooms = Number.isFinite(loadedRooms) && loadedRooms > 0 ? Math.floor(loadedRooms) : 0;
         setEditRooms(String(payload.symposium.rooms_available ?? ""));
+        setEditRoomNames(normalizeRoomNames(payload.symposium.room_names, normalizedLoadedRooms));
         setEditDefaultBuffer(String(payload.symposium.default_buffer ?? "0"));
 
         const grid = gridFromTimeframes(payload.timeframes ?? []);
@@ -326,6 +352,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       setSymposiumEditMessage("Enter a valid number of rooms.");
       return;
     }
+    const roomNames = roomNamesForSave(editRoomNames, parsedRooms);
 
     const parsedBuffer = Number.parseInt(editDefaultBuffer, 10);
     if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0) {
@@ -345,12 +372,14 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         symposium_id: selectedSymposiumId,
         symposium_name: trimmedName,
         rooms_available: parsedRooms,
+        room_names: roomNames,
         default_buffer: parsedBuffer,
         timeframes: timeframes.map(([start_time, end_time]) => ({ start_time, end_time })),
       }, authHeaders);
 
-      setSymposiumEditMessage("Event updated successfully.");
       await fetchSymposia();
+      await fetchSymposiumDetails(selectedSymposiumId);
+      setSymposiumEditMessage("Event updated successfully.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setSymposiumEditMessage(message);
@@ -575,6 +604,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setSelectedSymposiumId("");
     setEditSymposiumName("");
     setEditRooms("");
+    setEditRoomNames([]);
     setEditDefaultBuffer("");
     setEditStartDate("");
     setEditEndDate("");
@@ -987,7 +1017,14 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                           min={1}
                           className={fieldClass}
                           value={editRooms}
-                          onChange={(event) => setEditRooms(event.target.value)}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setEditRooms(nextValue);
+                            const nextCount = Number.parseInt(nextValue, 10);
+                            if (Number.isFinite(nextCount) && nextCount > 0) {
+                              setEditRoomNames((current) => normalizeRoomNames(current, nextCount));
+                            }
+                          }}
                           disabled={isLoadingSymposiumDetails}
                         />
                       </label>
@@ -1023,6 +1060,40 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
                           onChange={(event) => setEditEndDate(event.target.value)}
                         />
                       </label>
+                    </div>
+
+                    <div className="mt-5">
+                      <h4 className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a]">Room Names</h4>
+                      <p className="mt-1 text-sm text-[#555]">
+                        Leave a room blank to keep its default label.
+                      </p>
+                      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                        {editRoomNames.length === 0 ? (
+                          <p className="text-sm font-semibold text-[#555]">Enter the number of rooms first.</p>
+                        ) : (
+                          editRoomNames.map((roomName, index) => (
+                            <label key={index} className="flex flex-col gap-1.5">
+                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">
+                                Room {index + 1}
+                              </span>
+                              <input
+                                className={fieldClass}
+                                placeholder={`Ex. KJ ${101 + index}`}
+                                value={roomName}
+                                onChange={(event) => {
+                                  const nextName = event.target.value;
+                                  setEditRoomNames((current) => {
+                                    const next = normalizeRoomNames(current, current.length);
+                                    next[index] = nextName;
+                                    return next;
+                                  });
+                                }}
+                                disabled={isLoadingSymposiumDetails}
+                              />
+                            </label>
+                          ))
+                        )}
+                      </div>
                     </div>
                   </div>
 

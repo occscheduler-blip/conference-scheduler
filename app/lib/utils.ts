@@ -208,6 +208,7 @@ export const DEFAULT_CONSTRAINTS: ScheduleConstraints = {
 export type ConflictContext = {
   allPresentations: SchedulePresentation[];
   personNames: Map<string, string>;
+  roomNames?: Array<string | null>;
   constraints: ScheduleConstraints;
   symposiumTimeframes: Array<{ start_time: string; end_time: string }>;
   resourceAvailability: Map<string, Array<{ start_time: string; end_time: string }>>;
@@ -245,6 +246,11 @@ export function detectScheduleConflict(
   function addViolation(mode: ConstraintMode, message: string) {
     if (mode === "hard") hardViolations.push(message);
     else if (mode === "soft") softViolations.push(message);
+  }
+
+  function roomLabel(roomIndex: number): string {
+    const roomName = ctx.roomNames?.[roomIndex];
+    return typeof roomName === "string" && roomName.trim() ? roomName.trim() : `Room ${roomIndex + 1}`;
   }
 
   // Slot alignment
@@ -314,7 +320,7 @@ export function detectScheduleConflict(
       if (other.class_id !== target.class_id) continue;
       if (other.room === null) continue;
       if (other.room !== room) {
-        addViolation(constraints.sameClassSameRoom, `Class conflict: "${other.title}" from the same class is in Room ${other.room + 1}.`);
+        addViolation(constraints.sameClassSameRoom, `Class conflict: "${other.title}" from the same class is in ${roomLabel(other.room)}.`);
         break;
       }
     }
@@ -334,7 +340,7 @@ export function detectScheduleConflict(
     if (!overlap) continue;
 
     if (constraints.roomConflicts !== "off" && other.room === room) {
-      addViolation(constraints.roomConflicts, `Room conflict: Room ${room + 1} is already occupied by "${other.title}" (including buffer).`);
+      addViolation(constraints.roomConflicts, `Room conflict: ${roomLabel(room)} is already occupied by "${other.title}" (including buffer).`);
     }
 
     if (constraints.personConflicts !== "off") {

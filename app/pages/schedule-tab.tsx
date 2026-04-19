@@ -45,6 +45,11 @@ const BLOCK_COLORS = [
   { bg: "#00838f", text: "#fff" },
 ];
 
+function getRoomLabel(roomNames: Array<string | null> | null | undefined, roomIndex: number): string {
+  const roomName = roomNames?.[roomIndex];
+  return typeof roomName === "string" && roomName.trim() ? roomName.trim() : `Room ${roomIndex + 1}`;
+}
+
 export default function ScheduleTab({
   token,
 }: {
@@ -61,6 +66,7 @@ export default function ScheduleTab({
   const [presentations, setPresentations] = useState<SchedulePresentation[]>([]);
   const [symposiumTimeframes, setSymposiumTimeframes] = useState<Timeframe[]>([]);
   const [roomsAvailable, setRoomsAvailable] = useState(1);
+  const [roomNames, setRoomNames] = useState<Array<string | null>>([]);
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(false);
   const [selectedDay, setSelectedDay] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -121,6 +127,7 @@ export default function ScheduleTab({
         setPresentations([]);
         setSymposiumTimeframes([]);
         setRoomsAvailable(1);
+        setRoomNames([]);
         setSelectedDay("");
         return;
       }
@@ -136,7 +143,7 @@ export default function ScheduleTab({
         });
         const symposiumPayload = (await symposiumRes.json().catch(() => ({}))) as {
           detail?: string;
-          symposium?: { id: string; name: string; rooms_available?: number | null };
+          symposium?: { id: string; name: string; rooms_available?: number | null; room_names?: Array<string | null> | null };
           timeframes?: Timeframe[];
         };
         if (!symposiumRes.ok) throw new Error(symposiumPayload.detail ?? "Failed to load symposium.");
@@ -147,6 +154,7 @@ export default function ScheduleTab({
         setSymposiumTimeframes(symTimeframes);
         const parsedRooms = Number(symposiumPayload.symposium?.rooms_available ?? 1);
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
+        setRoomNames(symposiumPayload.symposium?.room_names ?? []);
 
         // Fetch departments
         let departmentRows: DepartmentRecord[] = [];
@@ -346,6 +354,7 @@ export default function ScheduleTab({
         setPresentations([]);
         setSymposiumTimeframes([]);
         setRoomsAvailable(1);
+        setRoomNames([]);
       } finally {
         setIsLoadingSchedule(false);
       }
@@ -418,12 +427,13 @@ export default function ScheduleTab({
   const conflictContext: ConflictContext = useMemo(() => ({
     allPresentations: presentations,
     personNames,
+    roomNames,
     constraints,
     symposiumTimeframes,
     resourceAvailability,
     professorIds: allProfessorIds,
     slotMinutes: 1,
-  }), [presentations, personNames, constraints, symposiumTimeframes, resourceAvailability, allProfessorIds]);
+  }), [presentations, personNames, roomNames, constraints, symposiumTimeframes, resourceAvailability, allProfessorIds]);
 
   // Handlers
   const handleRunScheduler = async (skipConfirm: boolean = false) => {
@@ -939,7 +949,7 @@ export default function ScheduleTab({
                 className="whitespace-nowrap border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-center text-xs font-bold uppercase text-[#2d3d7a] last:border-r-0"
                 style={{ gridRow: 1, gridColumn: i + 2 }}
               >
-                Room {i + 1}
+                {getRoomLabel(roomNames, i)}
               </div>
             ))}
 
@@ -1260,7 +1270,7 @@ export default function ScheduleTab({
                 >
                   {Array.from({ length: roomsAvailable }, (_, i) => (
                     <option key={i} value={String(i)}>
-                      Room {i + 1}
+                      {getRoomLabel(roomNames, i)}
                     </option>
                   ))}
                 </select>

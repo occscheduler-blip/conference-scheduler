@@ -27,6 +27,11 @@ type ItineraryDetailItem = {
   end_time: string | null;
 };
 
+function getRoomLabel(roomNames: Array<string | null> | null | undefined, roomIndex: number): string {
+  const roomName = roomNames?.[roomIndex];
+  return typeof roomName === "string" && roomName.trim() ? roomName.trim() : `Room ${roomIndex + 1}`;
+}
+
 function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAttendee?: boolean; attendeeId?: string; authToken?: string; onSignOut?: () => void }) {
   const searchParams = useSearchParams();
 
@@ -37,6 +42,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
   const [classes, setClasses] = useState<ClassRecord[]>([]);
   const [presentations, setPresentations] = useState<PresentationRecord[]>([]);
   const [roomsAvailable, setRoomsAvailable] = useState(1);
+  const [roomNames, setRoomNames] = useState<Array<string | null>>([]);
   const [selectedDay, setSelectedDay] = useState("");
   const [dayPage, setDayPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
@@ -145,6 +151,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
         setClasses([]);
         setPresentations([]);
         setRoomsAvailable(1);
+        setRoomNames([]);
         setSelectedDay("");
         setDayPage(0);
         return;
@@ -171,6 +178,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
         setTimeframes(list);
         const parsedRooms = Number(symposiumPayload.symposium?.rooms_available ?? 1);
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
+        setRoomNames(symposiumPayload.symposium?.room_names ?? []);
 
         let departmentRows: DepartmentRecord[] = [];
         try {
@@ -286,6 +294,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
         setClasses([]);
         setPresentations([]);
         setRoomsAvailable(1);
+        setRoomNames([]);
       }
     }
     void loadSymposiumDetails();
@@ -318,7 +327,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
           if (!department) return null;
           const scheduled = presentation.timeframe != null;
           const tf = presentation.timeframe ?? null;
-          const room = presentation.room != null ? `Room ${presentation.room + 1}` : "Room TBD";
+          const room = presentation.room != null ? getRoomLabel(roomNames, presentation.room) : "Room TBD";
           return {
             department,
             timeframe: tf,
@@ -355,7 +364,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
         presentationId: "",
       }));
     },
-    [classes, departments, presentations]
+    [classes, departments, presentations, roomNames]
   );
 
   const filterOptions = useMemo(() => {
@@ -710,7 +719,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
                       className="whitespace-nowrap border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-center text-xs font-bold uppercase text-[#2d3d7a] last:border-r-0"
                       style={{ gridRow: 1, gridColumn: i + 2 }}
                     >
-                      Room {i + 1}
+                      {getRoomLabel(roomNames, i)}
                     </div>
                   ))}
 

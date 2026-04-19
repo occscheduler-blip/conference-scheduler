@@ -109,6 +109,27 @@ def _load_symposium_windows(symposium_id: UUID) -> tuple[tuple[datetime, datetim
     return tuple(windows)
 
 
+def _load_room_names(symposium_id: UUID) -> list[str]:
+    resp = (
+        supabase.table("symposiums")
+        .select("room_names")
+        .eq("id", str(symposium_id))
+        .limit(1)
+        .execute()
+    )
+    rows = list(getattr(resp, "data", None) or [])
+    room_names = rows[0].get("room_names") if rows else None
+    if not isinstance(room_names, list):
+        return []
+    return [str(name).strip() if name is not None else "" for name in room_names]
+
+
+def _room_label(room_names: list[str], room: int) -> str:
+    if 0 <= room < len(room_names) and room_names[room]:
+        return room_names[room]
+    return f"Room {room + 1}"
+
+
 def _assert_within_symposium_windows(
     symposium_id: UUID,
     start: datetime,
@@ -147,6 +168,7 @@ def add_symposium(
             name=payload.symposium_name,
             created_at=datetime.now(timezone.utc),
             rooms_available=payload.rooms_available,
+            room_names=payload.room_names,
             default_buffer=payload.default_buffer
         )
         symposium_payload = symposium.model_dump()
@@ -240,6 +262,7 @@ def update_symposium(
             exclude_none=True,
             exclude={"symposium_id", "timeframes"},
         )
+        updates["room_names"] = payload.room_names
         if "symposium_name" in updates:
             updates["name"] = updates.pop("symposium_name")
         update_payload = _serialize_update_fields(updates)
@@ -912,6 +935,7 @@ def update_schedule_assignment(
         logger.info("update_schedule_assignment: presentation_id=%s  room=%s  symposium_id=%s", payload.presentation_id, payload.room, payload.symposium_id)
         symposium_id = str(payload.symposium_id)
         presentation_id = str(payload.presentation_id)
+        room_names = _load_room_names(payload.symposium_id)
 
         # Fetch all departments -> classes -> presentations for this symposium
         departments_resp = read.get_departments(symposium_id=payload.symposium_id)
@@ -1008,7 +1032,7 @@ def update_schedule_assignment(
                     other_title = other.get("title", other_id)
                     raise HTTPException(
                         status_code=409,
-                        detail=f"Room conflict: Room {payload.room + 1} is already occupied by \"{other_title}\" at that time.",
+                        detail=f"Room conflict: {_room_label(room_names, payload.room)} is already occupied by \"{other_title}\" at that time.",
                     )
 
                 # Person conflict (professor or presenting student)
@@ -1078,6 +1102,7 @@ def bulk_update_schedule_assignments(
     try:
         logger.info("bulk_update_schedule_assignments: symposium_id=%s  count=%d", payload.symposium_id, len(payload.assignments))
         symposium_id = str(payload.symposium_id)
+        room_names = _load_room_names(payload.symposium_id)
         assignment_map: dict[str, request_schemas.SingleScheduleAssignment] = {
             str(a.presentation_id): a for a in payload.assignments
         }
@@ -1201,7 +1226,7 @@ def bulk_update_schedule_assignments(
                     raise HTTPException(
                         status_code=409,
                         detail=(
-                            f"Room conflict: Room {room_a + 1} is double-booked between "
+                            f"Room conflict: {_room_label(room_names, room_a)} is double-booked between "
                             f"\"{title_a}\" and \"{title_b}\" at that time."
                         ),
                     )

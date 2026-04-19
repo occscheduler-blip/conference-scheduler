@@ -28,6 +28,7 @@ class TimeframeWindow(BaseModel):
 class AddSymposiumRequest(BaseModel):
     symposium_name: str
     rooms_available: int
+    room_names: list[str | None] | None = None
     timeframes: list[TimeframeWindow]
     default_buffer: int
 
@@ -36,6 +37,7 @@ class AddSymposiumRequest(BaseModel):
             "example": {
                 "symposium_name": "Spring Symposium",
                 "rooms_available": 5,
+                "room_names": ["KJ 101", "KJ 102", "KJ 103", "KJ 104", "KJ 105"],
                 "default_buffer": 3,
                 "timeframes": [
                     {
@@ -65,6 +67,18 @@ class AddSymposiumRequest(BaseModel):
         if rooms_available > MAX_ROOMS:
             raise ValueError(f"You may not choose more than {MAX_ROOMS} rooms.")
         return rooms_available
+
+    @model_validator(mode="after")
+    def validate_room_names(self) -> "AddSymposiumRequest":
+        if self.room_names is None:
+            return self
+        if len(self.room_names) > self.rooms_available:
+            raise ValueError("Room names cannot exceed the number of rooms available.")
+        room_names = [name.strip() if isinstance(name, str) and name.strip() else None for name in self.room_names]
+        while room_names and room_names[-1] is None:
+            room_names.pop()
+        self.room_names = room_names
+        return self
 
 
 class AddDepartmentRequest(BaseModel):
@@ -393,6 +407,7 @@ class UpdateSymposiumRequest(BaseModel):
     symposium_id: UUID
     symposium_name: str
     rooms_available: int
+    room_names: list[str | None] | None = None
     default_buffer: int
     timeframes: list[TimeframeWindow]
 
@@ -410,6 +425,18 @@ class UpdateSymposiumRequest(BaseModel):
         if rooms_available > MAX_ROOMS:
             raise ValueError(f"You may not choose more than {MAX_ROOMS} rooms.")
         return rooms_available
+
+    @model_validator(mode="after")
+    def validate_room_names(self) -> "UpdateSymposiumRequest":
+        if self.room_names is None:
+            return self
+        if len(self.room_names) > self.rooms_available:
+            raise ValueError("Room names cannot exceed the number of rooms available.")
+        room_names = [name.strip() if isinstance(name, str) and name.strip() else None for name in self.room_names]
+        while room_names and room_names[-1] is None:
+            room_names.pop()
+        self.room_names = room_names
+        return self
     
     model_config = ConfigDict(
         json_schema_extra={
@@ -417,6 +444,7 @@ class UpdateSymposiumRequest(BaseModel):
                 "symposium_id": "ba16476b-e00e-4eeb-98e6-d78be76bfd41",
                 "symposium_name": "Spring Symposium",
                 "rooms_available": 10,
+                "room_names": ["KJ 101", "KJ 102"],
                 "default_buffer": 3,
                 "timeframes": [
                     {

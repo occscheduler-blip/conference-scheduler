@@ -354,6 +354,15 @@ def get_attendee_itinerary_details(
         if not dept:
             continue
         symposium = symposiums_by_id.get(str(dept.get("symposium_id", "")))
+        room_names = symposium.get("room_names") if symposium else None
+        room_index = p.get("room")
+        room_name = None
+        if isinstance(room_index, int):
+            if isinstance(room_names, list) and room_index < len(room_names):
+                saved_room_name = str(room_names[room_index]).strip() if room_names[room_index] is not None else ""
+                room_name = saved_room_name or f"Room {room_index + 1}"
+            else:
+                room_name = f"Room {room_index + 1}"
         tf = tf_by_presentation.get(p["id"])
         presenter_names = [
             f"{s.get('first_name', '')} {s.get('last_name', '')}".strip()
@@ -363,7 +372,7 @@ def get_attendee_itinerary_details(
         result.append({
             "presentation_id": p["id"],
             "title": (p.get("title") or "").strip() or f"{dept.get('department_name', '')} Presentation",
-            "room": f"Room {p['room'] + 1}" if p.get("room") is not None else None,
+            "room": room_name,
             "presenter_names": presenter_names,
             "department_name": dept.get("department_name", ""),
             "department_head_name": dept.get("department_head_name", ""),

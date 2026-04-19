@@ -3,6 +3,7 @@ create table if not exists public.symposiums (
     created_at      timestamptz not null default now(),
     name            text,
     rooms_available smallint not null,
+    room_names      text[],
     default_buffer  smallint not null default 0
 );
 

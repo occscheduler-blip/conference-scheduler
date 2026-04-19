@@ -9,6 +9,7 @@ class Symposium(BaseModel):
     created_at: datetime
     name: str
     rooms_available: int
+    room_names: list[str | None] | None = None
     default_buffer: int
 
 
