@@ -293,6 +293,6 @@ def seed(data: dict):
 
 
 if __name__ == "__main__":
-    delete_all()
+    # delete_all(),
     data = generate_data()
     seed(data)
