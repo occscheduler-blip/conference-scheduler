@@ -44,6 +44,23 @@ export async function apiPost<T = Record<string, unknown>>(
   return { raw: payload, rows };
 }
 
+export async function apiGet(
+  path: string,
+  authHeaders?: Record<string, string>
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(authHeaders ?? {}),
+    },
+  });
+  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    throw new Error(toMessage(payload.detail, "Request failed"));
+  }
+  return payload;
+}
+
 export async function apiPut(
   path: string,
   body: unknown,

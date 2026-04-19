@@ -38,7 +38,6 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
 
-
   // Shared
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -176,7 +175,7 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
               <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">I am a...</span>
               <select
                 value={otpRole}
-                onChange={(e) => { setOtpRole(e.target.value); setOtpSent(false); setOtpCode(""); setAttendeeName(""); setError(""); }}
+                onChange={(e) => { setOtpRole(e.target.value); setOtpSent(false); setOtpCode(""); setError(""); }}
                 className={fieldClass}
                 disabled={otpSent}
               >

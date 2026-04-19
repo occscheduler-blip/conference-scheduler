@@ -184,7 +184,7 @@ export type ScheduleConstraints = {
   professorAvailability: ConstraintMode;
   studentAvailability: ConstraintMode;
   sameClassSameRoom: ConstraintMode;
-  slotAlignment: ConstraintMode;
+  slotAlignment: 1 | 5 | 10 | 15 | 20;
   minimizeMakespan: ConstraintMode;
   minimizeClassSpan: ConstraintMode;
   minimizeProfessorSpan: ConstraintMode;
@@ -198,7 +198,7 @@ export const DEFAULT_CONSTRAINTS: ScheduleConstraints = {
   professorAvailability: "hard",
   studentAvailability: "hard",
   sameClassSameRoom: "hard",
-  slotAlignment: "off",
+  slotAlignment: 1,
   minimizeMakespan: "soft",
   minimizeClassSpan: "soft",
   minimizeProfessorSpan: "soft",
@@ -248,10 +248,10 @@ export function detectScheduleConflict(
   }
 
   // Slot alignment
-  if (constraints.slotAlignment !== "off") {
-    const m = startTime.getUTCMinutes();
-    if (m % ctx.slotMinutes !== 0) {
-      addViolation(constraints.slotAlignment, `Start time must align to ${ctx.slotMinutes}-minute intervals.`);
+  {
+    const m = startTime.getUTCHours() * 60 + startTime.getUTCMinutes();
+    if (m % constraints.slotAlignment !== 0) {
+      addViolation("hard", `Start time must align to ${constraints.slotAlignment}-minute intervals.`);
     }
   }
 

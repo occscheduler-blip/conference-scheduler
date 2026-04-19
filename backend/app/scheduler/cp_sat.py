@@ -85,38 +85,23 @@ def _objective_weighted_sum(
     class_span_terms: list[cp_model.IntVar],
     professor_span_terms: list[cp_model.IntVar],
     room_imbalance_terms: list[cp_model.IntVar],
-    horizon_slots: int,
+    horizon_slots: int,  # kept for signature compatibility; no longer used for weights
 ) -> cp_model.LinearExpr:
-    max_room_imbalance = max(len(room_imbalance_terms), 1) * horizon_slots
-    max_professor_span = max(len(professor_span_terms), 1) * horizon_slots
-    max_class_span = max(len(class_span_terms), 1) * horizon_slots
-    max_soft_availability = max(len(soft_availability_terms), 1) * max(
-        len(soft_availability_terms), 1
-    )
-
-    room_weight = 1
-    professor_weight = max_room_imbalance + 1
-    class_weight = max_professor_span * professor_weight + max_room_imbalance + 1
-    soft_availability_weight = (
-        max_class_span * class_weight
-        + max_professor_span * professor_weight
-        + max_room_imbalance
-        + 1
-    )
-    makespan_weight = (
-        max_soft_availability * soft_availability_weight
-        + max_class_span * class_weight
-        + max_professor_span * professor_weight
-        + max_room_imbalance
-        + 1
-    )
-
+    # Fixed small weights — no horizon_slots scaling.
+    # Avoids int64 overflow when horizon_slots is large (e.g. 3360 with 1-min slots).
+    # The exact ordering doesn't matter for correctness; the scheduling penalty
+    # term dominates so these weights only act as tie-breakers among feasible schedules.
+    _W_MAKESPAN = 3
+    _W_AVAIL = 3
+    _W_CLASS = 2
+    _W_PROF = 2
+    _W_ROOM = 1
     return (
-        makespan * makespan_weight
-        + sum(soft_availability_terms) * soft_availability_weight
-        + sum(class_span_terms) * class_weight
-        + sum(professor_span_terms) * professor_weight
-        + sum(room_imbalance_terms) * room_weight
+        makespan * _W_MAKESPAN
+        + sum(soft_availability_terms) * _W_AVAIL
+        + sum(class_span_terms) * _W_CLASS
+        + sum(professor_span_terms) * _W_PROF
+        + sum(room_imbalance_terms) * _W_ROOM
     )
 
 
@@ -459,46 +444,121 @@ def solve_schedule(
                                         ])
                                         soft_violation_terms.append(violation)
 
-    all_instants = {
-        instant
-        for instant in all_instants
-        if any(
-            instant >= window.start and instant < window.end
-            for window in symposium_windows
-        )
-    }
+    t_slow = time.perf_counter()
 
-    for instant in sorted(all_instants):
-        if problem.constraints.room_conflicts != "off":
-            for room_index in range(problem.rooms_available):
-                overlapping: list[cp_model.IntVar] = []
-                for presentation in problem.presentations:
-                    for option_index in range(len(eligible_starts[presentation.id])):
-                        key = (presentation.id, option_index, room_index)
-                        start_time, end_time = option_lookup[key]
-                        buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
-                        if start_time <= instant < buffered_end:
-                            overlapping.append(assignment_vars[key])
-                _add_constraint_or_penalty(
-                    overlapping, problem.constraints.room_conflicts, f"room_{room_index}_{instant}"
+    # ── Hard constraints: AddNoOverlap (O(n log n)) ──────────────────────────
+    # Replaces the old per-instant loop which was O(instants × presentations ×
+    # options × rooms) — prohibitively slow with fine-grained slot alignment.
+
+    if problem.constraints.room_conflicts == "hard":
+        for room_index in range(problem.rooms_available):
+            room_ivs: list[cp_model.IntervalVar] = []
+            for presentation in schedulable_presentations:
+                buf_slots = ceil(presentation.buffer_minutes / problem.slot_minutes)
+                dur_with_buf = (
+                    _slot_count(presentation.duration_minutes, problem.slot_minutes)
+                    + buf_slots
                 )
+                for option_index in range(len(eligible_starts[presentation.id])):
+                    key = (presentation.id, option_index, room_index)
+                    start_slot = int(
+                        (eligible_starts[presentation.id][option_index] - base_time) / step
+                    )
+                    iv = model.NewOptionalFixedSizeIntervalVar(
+                        start_slot,
+                        dur_with_buf,
+                        assignment_vars[key],
+                        f"riv_{presentation.id[:8]}_{option_index}_{room_index}",
+                    )
+                    room_ivs.append(iv)
+            model.AddNoOverlap(room_ivs)
 
-        if problem.constraints.person_conflicts != "off":
-            resources_at_time: dict[str, list[cp_model.IntVar]] = defaultdict(list)
-            for presentation in problem.presentations:
-                for resource_id in presentation.resource_ids:
-                    for option_index in range(len(eligible_starts[presentation.id])):
-                        for room_index in range(problem.rooms_available):
+    if problem.constraints.person_conflicts == "hard":
+        # One "option active" bool per (presentation, option): True iff this
+        # presentation is scheduled at this option in any room.
+        # sum(room_vars_for_opt) ∈ {0,1} (guaranteed by global at-most-one),
+        # so `option_active = sum(room_vars_for_opt)` is a valid bool equation.
+        option_active_vars: dict[tuple[str, int], cp_model.IntVar] = {}
+        for presentation in schedulable_presentations:
+            for option_index in range(len(eligible_starts[presentation.id])):
+                room_vars_for_opt = [
+                    assignment_vars[(presentation.id, option_index, r)]
+                    for r in range(problem.rooms_available)
+                ]
+                if problem.rooms_available == 1:
+                    option_active_vars[(presentation.id, option_index)] = room_vars_for_opt[0]
+                else:
+                    oa = model.NewBoolVar(f"oa_{presentation.id[:8]}_{option_index}")
+                    model.Add(sum(room_vars_for_opt) == oa)
+                    option_active_vars[(presentation.id, option_index)] = oa
+
+        for resource_id, resource_presentations in presentations_by_resource.items():
+            person_ivs: list[cp_model.IntervalVar] = []
+            for presentation in resource_presentations:
+                dur_slots = _slot_count(
+                    presentation.duration_minutes, problem.slot_minutes
+                )
+                for option_index in range(len(eligible_starts[presentation.id])):
+                    start_slot = int(
+                        (eligible_starts[presentation.id][option_index] - base_time) / step
+                    )
+                    active = option_active_vars[(presentation.id, option_index)]
+                    iv = model.NewOptionalFixedSizeIntervalVar(
+                        start_slot,
+                        dur_slots,
+                        active,
+                        f"piv_{resource_id[:8]}_{presentation.id[:8]}_{option_index}",
+                    )
+                    person_ivs.append(iv)
+            if len(person_ivs) > 1:
+                model.AddNoOverlap(person_ivs)
+
+    # ── Soft constraints: coarse 15-min sweep ────────────────────────────────
+    # For soft room/person conflicts we fall back to a per-instant penalty
+    # approach, but use 15-minute granularity regardless of slot_minutes to
+    # keep model-build time bounded.
+    if problem.constraints.room_conflicts == "soft" or problem.constraints.person_conflicts == "soft":
+        coarse_step = timedelta(minutes=max(15, problem.slot_minutes))
+        soft_instants: set[datetime] = set()
+        for window in symposium_windows:
+            t = window.start
+            while t < window.end:
+                soft_instants.add(t)
+                t += coarse_step
+
+        for instant in sorted(soft_instants):
+            if problem.constraints.room_conflicts == "soft":
+                for room_index in range(problem.rooms_available):
+                    overlapping: list[cp_model.IntVar] = []
+                    for presentation in schedulable_presentations:
+                        for option_index in range(len(eligible_starts[presentation.id])):
                             key = (presentation.id, option_index, room_index)
                             start_time, end_time = option_lookup[key]
-                            if start_time <= instant < end_time:
-                                resources_at_time[resource_id].append(assignment_vars[key])
+                            buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
+                            if start_time <= instant < buffered_end:
+                                overlapping.append(assignment_vars[key])
+                    _add_constraint_or_penalty(
+                        overlapping, "soft", f"room_{room_index}_{instant}"
+                    )
 
+            if problem.constraints.person_conflicts == "soft":
+                resources_at_time: dict[str, list[cp_model.IntVar]] = defaultdict(list)
+                for presentation in schedulable_presentations:
+                    for resource_id in presentation.resource_ids:
+                        for option_index in range(len(eligible_starts[presentation.id])):
+                            for room_index in range(problem.rooms_available):
+                                key = (presentation.id, option_index, room_index)
+                                start_time, end_time = option_lookup[key]
+                                if start_time <= instant < end_time:
+                                    resources_at_time[resource_id].append(
+                                        assignment_vars[key]
+                                    )
                 for resource_id, overlapping_res in resources_at_time.items():
                     _add_constraint_or_penalty(
                         overlapping_res, "soft", f"person_{resource_id}_{instant}"
                     )
-        logger.info("[solve-timing] soft conflict constraints: %.3fs", time.perf_counter() - t_slow)
+
+    logger.info("[solve-timing] conflict constraints: %.3fs", time.perf_counter() - t_slow)
 
     makespan = model.NewIntVar(0, 1000000, "makespan")
     model.AddMaxEquality(makespan, list(eff_end_for_max.values()))
@@ -618,6 +678,9 @@ def solve_schedule(
     makespan_for_objective = (
         makespan if problem.constraints.minimize_makespan == "soft" else model.NewConstant(0)
     )
+    # Fixed weight for soft constraint violations (same-class-same-room, etc.)
+    # Must be > 0 but kept small so it never exceeds the scheduling penalty.
+    _W_SOFT_VIO = 5
     quality_objective = (
         _objective_weighted_sum(
             makespan=makespan_for_objective,
@@ -627,30 +690,44 @@ def solve_schedule(
             room_imbalance_terms=room_imbalance_terms,
             horizon_slots=horizon_slots,
         )
-        + sum(soft_violation_terms) * (horizon_slots ** 2)
+        + sum(soft_violation_terms) * _W_SOFT_VIO
     )
+
     # Scheduling as many presentations as possible takes top priority.
-    # Compute a strict upper bound on the quality objective so the penalty per
-    # unscheduled presentation always outweighs any gain from skipping it.
-    _mr = max(len(room_imbalance_terms), 1) * horizon_slots
-    _mp = max(len(professor_span_terms), 1) * horizon_slots
-    _mc = max(len(class_span_terms), 1) * horizon_slots
-    _ms = max(len(soft_availability_terms), 1) ** 2
-    _pw = _mr + 1
-    _cw = _mp * _pw + _mr + 1
-    _sw = _mc * _cw + _mp * _pw + _mr + 1
-    _max_mw = _ms * _sw + _mc * _cw + _mp * _pw + _mr + 1
-    scheduling_penalty_weight = (
-        _max_mw * horizon_slots
-        + len(soft_violation_terms) * (horizon_slots ** 2)
-        + 1
-    )
+    # The penalty per unscheduled presentation must exceed any possible gain from
+    # the quality objective.  Because we now use fixed weights (not horizon-based
+    # polynomials), the maximum of quality_objective is straightforward to bound:
+    #   makespan      : ≤ horizon_slots × _W_MAKESPAN (3)
+    #   soft_avail    : ≤ n_schedulable × n_soft_resources × _W_AVAIL (3)
+    #   class_span    : ≤ n_class_terms × horizon_slots × _W_CLASS (2)
+    #   prof_span     : ≤ n_prof_terms  × horizon_slots × _W_PROF  (2)
+    #   room_imbalance: ≤ n_schedulable × _W_ROOM (1)
+    #   soft_violations: ≤ len(soft_violation_terms) × _W_SOFT_VIO (5)
+    _INT64_SAFE = 4_000_000_000_000_000_000  # well under int64 max (≈9.2e18)
     n_schedulable = len(schedulable_presentations)
+    _max_quality = (
+        horizon_slots * 3  # makespan × _W_MAKESPAN
+        + n_schedulable * max(len(soft_resource_windows), 1) * 3  # soft_avail × _W_AVAIL
+        + len(class_span_terms) * horizon_slots * 2  # class_span × _W_CLASS
+        + len(professor_span_terms) * horizon_slots * 2  # prof_span × _W_PROF
+        + n_schedulable * 1  # room_imbalance × _W_ROOM
+        + len(soft_violation_terms) * _W_SOFT_VIO
+    )
+    # Weight must beat the best possible quality improvement from the entire
+    # quality_objective, so that scheduling one more presentation is always
+    # preferred over any quality gain.  Clamped so the total penalty term
+    # n_schedulable × weight stays well within CP-SAT's int64 domain.
+    scheduling_penalty_weight = min(
+        _max_quality + 1,
+        _INT64_SAFE // max(n_schedulable, 1),
+    )
+
     unscheduled_count = n_schedulable - sum(is_scheduled_vars.values())
     model.Minimize(unscheduled_count * scheduling_penalty_weight + quality_objective)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
+    solver.parameters.num_search_workers = 4
 
     logger.info("Starting CP-SAT solver with %d variables", len(assignment_vars))
     status = solver.Solve(model)

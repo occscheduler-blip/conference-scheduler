@@ -528,7 +528,7 @@ class ScheduleConstraintsRequest(BaseModel):
     professor_availability: ConstraintMode = "hard"
     student_availability: ConstraintMode = "hard"
     same_class_same_room: ConstraintMode = "hard"
-    slot_alignment: ConstraintMode = "hard"
+    slot_alignment: int = 1  # slot size in minutes (1, 5, 10, 15, 20)
     minimize_makespan: ConstraintMode = "soft"
     minimize_class_span: ConstraintMode = "soft"
     minimize_professor_span: ConstraintMode = "soft"

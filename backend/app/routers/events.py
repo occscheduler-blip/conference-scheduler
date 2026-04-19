@@ -5,6 +5,8 @@ from typing import Any, cast
 from uuid import uuid4, UUID
 from postgrest.base_request_builder import APIResponse
 
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
@@ -593,6 +595,38 @@ def add_presentation(
         ) from exc
 
 
+def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConstraints, slot_minutes: int) -> None:
+    """Background thread: run the solver and write results back to scheduler_jobs.
+
+    Each thread gets its own supabase connection pool via the thread-local proxy
+    in app.supabase_io.client, so there is no HTTP/2 stream-state sharing with
+    the request-handler threads.
+    """
+    def _update(payload: dict[str, Any]) -> None:
+        try:
+            supabase.table("scheduler_jobs").update({**payload, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).execute()
+        except Exception:
+            logger.exception("schedule job %s: failed to update status to %s", job_id, payload.get("status"))
+
+    try:
+        _update({"status": "running"})
+        result = build_schedule_for_symposium(symposium_id, slot_minutes=slot_minutes, constraints=constraints)
+        logger.info("schedule job %s complete: status=%s  assignments=%d", job_id, result.status, len(result.assignments))
+        result_payload = {
+            "status": result.status,
+            "assignments": [
+                {"presentation_id": a.presentation_id, "room_index": a.room_index, "start": a.start.isoformat(), "end": a.end.isoformat()}
+                for a in result.assignments
+            ],
+            "unscheduled_presentations": list(result.unscheduled_presentations),
+            "diagnostics": list(result.diagnostics),
+        }
+        _update({"status": "completed", "result": result_payload})
+    except Exception as exc:
+        logger.exception("schedule job %s failed", job_id)
+        _update({"status": "failed", "error": str(exc)})
+
+
 @router.post("/schedule")
 def run_schedule(
     body: request_schemas.RunSchedulerRequest,
@@ -613,40 +647,51 @@ def run_schedule(
             minimize_professor_span=body.constraints.minimize_professor_span,
             balance_rooms=body.constraints.balance_rooms,
         )
-        slot_minutes = 15 if body.constraints.slot_alignment != "off" else 1
-        result = build_schedule_for_symposium(
-            body.symposium_id,
-            slot_minutes=slot_minutes,
-            constraints=constraints,
-        )
-        logger.info(
-            "run_schedule complete: status=%s  assignments=%d  unscheduled=%d",
-            result.status, len(result.assignments), len(result.unscheduled_presentations),
-        )
+        slot_minutes = max(1, body.constraints.slot_alignment)
 
-        return {
-            "status": result.status,
-            "assignments": [
-                {
-                    "presentation_id": a.presentation_id,
-                    "room_index": a.room_index,
-                    "start": a.start.isoformat(),
-                    "end": a.end.isoformat(),
-                }
-                for a in result.assignments
-            ],
-            "unscheduled_presentations": list(result.unscheduled_presentations),
-            "diagnostics": list(result.diagnostics),
-        }
+        job_row = (
+            supabase.table("scheduler_jobs")
+            .insert({"symposium_id": str(body.symposium_id), "status": "pending"})
+            .execute()
+        )
+        job_id = cast(dict[str, Any], job_row.data[0])["id"]
+
+        thread = threading.Thread(target=_run_schedule_job, args=(job_id, str(body.symposium_id), constraints, slot_minutes), daemon=True)
+        thread.start()
+
+        return {"job_id": job_id}
     except HTTPException:
         raise
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
     except Exception as exc:
         logger.exception("run_schedule failed: symposium_id=%s", body.symposium_id)
-        raise HTTPException(
-            status_code=500, detail=f"Failed to run scheduler: {exc}"
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"Failed to start scheduler: {exc}") from exc
+
+
+@router.get("/schedule_job/{job_id}")
+def get_schedule_job(
+    job_id: str,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    try:
+        rows = supabase.table("scheduler_jobs").select("*").eq("id", job_id).execute()
+        if not rows.data:
+            raise HTTPException(status_code=404, detail="Job not found")
+        job = cast(dict[str, Any], rows.data[0])
+        return {
+            "job_id": job["id"],
+            "status": job["status"],
+            "result": job.get("result"),
+            "error": job.get("error"),
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("get_schedule_job failed: job_id=%s", job_id)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch job: {exc}") from exc
     
 
 @router.put("/update_class")

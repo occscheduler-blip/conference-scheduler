@@ -22,7 +22,7 @@ import {
   type ScheduleConstraints,
   type ConflictContext,
 } from "../lib/utils";
-import { apiFetch, apiPost, apiPut } from "../lib/api";
+import { apiFetch, apiGet, apiPost, apiPut } from "../lib/api";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
 
 /** Convert a Date to a datetime-local input value (YYYY-MM-DDTHH:MM). */
@@ -431,10 +431,10 @@ export default function ScheduleTab({
     if (!skipConfirm && !window.confirm("This will regenerate the schedule. Existing assignments will be replaced. Continue?")) return;
 
     setIsRunningScheduler(true);
-    setSchedulerMessage(null);
+    setSchedulerMessage("Starting scheduler...");
     setSchedulerFailure(null);
     try {
-      const { raw } = await apiPost("/api/events/schedule", {
+      const { raw: startRaw } = await apiPost("/api/events/schedule", {
         symposium_id: selectedSymposiumId,
         constraints: {
           room_conflicts: constraints.roomConflicts,
@@ -450,6 +450,39 @@ export default function ScheduleTab({
           balance_rooms: constraints.balanceRooms,
         },
       }, authHeaders);
+
+      const jobId = startRaw.job_id as string;
+      setSchedulerMessage("Scheduler running...");
+
+      // Poll until the job completes or fails (5 minute timeout)
+      const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+      const pollStart = Date.now();
+      const raw = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const poll = async () => {
+          if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
+            reject(new Error("Scheduler timed out after 5 minutes."));
+            return;
+          }
+          try {
+            const job = await apiGet(
+              `/api/events/schedule_job/${encodeURIComponent(jobId)}`,
+              authHeaders,
+            );
+            const jobStatus = job.status as string;
+            if (jobStatus === "completed") {
+              resolve(job.result as Record<string, unknown>);
+            } else if (jobStatus === "failed") {
+              reject(new Error((job.error as string) ?? "Scheduler failed"));
+            } else {
+              setTimeout(() => void poll(), 2000);
+            }
+          } catch (err) {
+            reject(err);
+          }
+        };
+        void poll();
+      });
+
       const status = raw.status as string;
       const assignments = (raw.assignments as unknown[]) ?? [];
       const unscheduledIds = (raw.unscheduled_presentations as unknown[]) ?? [];
@@ -707,7 +740,6 @@ export default function ScheduleTab({
                 { key: "professorAvailability" as const, label: "Professor availability", desc: "Must fit professor availability" },
                 { key: "studentAvailability" as const, label: "Student availability", desc: "Must fit student availability" },
                 { key: "sameClassSameRoom" as const, label: "Same class \u2192 same room", desc: "Class presentations share a room" },
-                { key: "slotAlignment" as const, label: "15-min slot alignment", desc: "Start time on 15-min boundary" },
               ]).map(({ key, label, desc }) => (
                 <div key={key} className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition hover:bg-[#f5f8ff]">
                   <div className="min-w-0 flex-1">
@@ -736,6 +768,29 @@ export default function ScheduleTab({
                   </div>
                 </div>
               ))}
+              {/* Slot alignment — numeric selector */}
+              <div className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition hover:bg-[#f5f8ff]">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-[#111]">Slot alignment</div>
+                  <div className="text-[11px] text-[#888]">Snap start times to a fixed interval</div>
+                </div>
+                <div className="flex shrink-0 overflow-hidden rounded-md border border-[#d0d8f0]">
+                  {([1, 5, 10, 15, 20] as const).map((mins) => (
+                    <button
+                      key={mins}
+                      type="button"
+                      onClick={() => setConstraints((prev) => ({ ...prev, slotAlignment: mins }))}
+                      className={`w-[34px] py-0.5 text-[10px] font-semibold transition ${
+                        constraints.slotAlignment === mins
+                          ? "bg-[#1635a7] text-white"
+                          : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
+                      }`}
+                    >
+                      {`${mins}m`}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <hr className="my-2 border-[#e5eaff]" />
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-[11px] font-bold uppercase tracking-wide text-[#888]">
