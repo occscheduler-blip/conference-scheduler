@@ -715,7 +715,85 @@ def get_schedule_job(
     except Exception as exc:
         logger.exception("get_schedule_job failed: job_id=%s", job_id)
         raise HTTPException(status_code=500, detail=f"Failed to fetch job: {exc}") from exc
-    
+
+
+@router.get("/temporary_timeframes")
+def get_temporary_timeframes(linked_id: str | None = None) -> APIResponse:
+    try:
+        return read.get_temporary_timeframes(linked_id=_parse_uuid_list(linked_id))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("get_temporary_timeframes failed")
+        raise HTTPException(status_code=400, detail=f"Failed to get temporary timeframes: {exc}") from exc
+
+
+@router.post("/publish_schedule")
+def publish_schedule(
+    body: request_schemas.PublishScheduleRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    """Copy draft temporary_timeframes/temporary_room → timeframes/room for a symposium."""
+    try:
+        logger.info("publish_schedule: symposium_id=%s", body.symposium_id)
+
+        # Collect all presentation IDs for this symposium
+        departments_resp = read.get_departments(symposium_id=body.symposium_id)
+        departments = cast(list[dict[str, Any]], departments_resp.data or [])
+        department_ids = [UUID(str(d["id"])) for d in departments if d.get("id")]
+
+        presentation_ids: list[UUID] = []
+        all_presentations: list[dict[str, Any]] = []
+        if department_ids:
+            class_ids_list: list[UUID] = []
+            classes_resp = read.get_classes(department_id=department_ids)
+            for c in cast(list[dict[str, Any]], classes_resp.data or []):
+                if c.get("id"):
+                    class_ids_list.append(UUID(str(c["id"])))
+            if class_ids_list:
+                pres_resp = read.get_presentations(class_id=class_ids_list)
+                all_presentations = cast(list[dict[str, Any]], pres_resp.data or [])
+                presentation_ids = [UUID(str(p["id"])) for p in all_presentations if p.get("id")]
+
+        if not presentation_ids:
+            return {"status": "published", "count": 0}
+
+        # Read draft timeframes
+        temp_tf_resp = read.get_temporary_timeframes(linked_id=presentation_ids)
+        temp_tfs = cast(list[dict[str, Any]], temp_tf_resp.data or [])
+
+        # Clear existing published timeframes and copy draft → live
+        delete.delete_timeframes(presentation_ids)
+
+        if temp_tfs:
+            new_tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = [
+                {
+                    "id": uuid4(),
+                    "linked_id": UUID(str(tf["linked_id"])),
+                    "start_time": tf["start_time"],
+                    "end_time": tf["end_time"],
+                }
+                for tf in temp_tfs
+            ]
+            write.insert("timeframes", new_tf_rows)
+
+        # Copy temporary_room → room for all presentations in this symposium
+        room_updates: dict[UUID, str | int | None] = {
+            UUID(str(p["id"])): p.get("temporary_room")
+            for p in all_presentations
+            if p.get("id")
+        }
+        if room_updates:
+            write.update_column_by_ids("presentations", "room", room_updates)
+
+        logger.info("publish_schedule complete: symposium_id=%s  timeframes=%d", body.symposium_id, len(temp_tfs))
+        return {"status": "published", "count": len(temp_tfs)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("publish_schedule failed: symposium_id=%s", body.symposium_id)
+        raise HTTPException(status_code=500, detail=f"Failed to publish schedule: {exc}") from exc
+
 
 @router.put("/update_class")
 def update_class(
@@ -1000,7 +1078,7 @@ def update_schedule_assignment(
         ]
 
         if other_pres_ids:
-            tf_resp = read.get_timeframes(
+            tf_resp = read.get_temporary_timeframes(
                 linked_id=[UUID(pid) for pid in other_pres_ids]
             )
             other_timeframes = list(getattr(tf_resp, "data", None) or [])
@@ -1026,7 +1104,7 @@ def update_schedule_assignment(
                 if not times_overlap:
                     continue
 
-                other_room = other.get("room")
+                other_room = other.get("temporary_room")
                 # Room conflict
                 if other_room is not None and int(other_room) == payload.room:
                     other_title = other.get("title", other_id)
@@ -1063,20 +1141,20 @@ def update_schedule_assignment(
                         ),
                     )
 
-        # No conflicts — save the assignment
+        # No conflicts — save the draft assignment
         supabase.table("presentations").update(
-            {"room": payload.room}
+            {"temporary_room": payload.room}
         ).eq("id", presentation_id).execute()
 
-        delete.delete_timeframes(payload.presentation_id)
+        delete.delete_temporary_timeframes(payload.presentation_id)
 
-        tf_row = supabase_schemas.Timeframe(
-            id=uuid4(),
-            linked_id=payload.presentation_id,
-            start_time=payload.start_time,
-            end_time=payload.end_time,
-        )
-        write.insert("timeframes", [tf_row.model_dump()])
+        write.insert("temporary_timeframes", [{
+            "id": uuid4(),
+            "linked_id": payload.presentation_id,
+            "start_time": payload.start_time,
+            "end_time": payload.end_time,
+            "symposium_id": payload.symposium_id,
+        }])
 
         return {
             "status": "updated",
@@ -1176,7 +1254,7 @@ def bulk_update_schedule_assignments(
         ]
         existing_tf: dict[str, dict[str, Any]] = {}
         if non_batch_ids:
-            tf_resp = read.get_timeframes(linked_id=non_batch_ids)
+            tf_resp = read.get_temporary_timeframes(linked_id=non_batch_ids)
             for tf in list(getattr(tf_resp, "data", None) or []):
                 linked = str(tf.get("linked_id", ""))
                 if linked:
@@ -1192,7 +1270,7 @@ def bulk_update_schedule_assignments(
                 _assert_within_symposium_windows(payload.symposium_id, start, end)
                 effective[pid] = (a.room, start, end + buf)
             elif pid in existing_tf:
-                room_val = p.get("room")
+                room_val = p.get("temporary_room")
                 if room_val is None:
                     continue
                 tf = existing_tf[pid]
@@ -1251,9 +1329,9 @@ def bulk_update_schedule_assignments(
                         ),
                     )
 
-        # No conflicts — save all assignments
+        # No conflicts — save all draft assignments
         batch_pids = [UUID(pid) for pid in assignment_map]
-        delete.delete_timeframes(batch_pids)
+        delete.delete_temporary_timeframes(batch_pids)
 
         tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
         room_by_presentation: dict[UUID, str | int | None] = {}
@@ -1264,15 +1342,16 @@ def bulk_update_schedule_assignments(
                 "linked_id": UUID(pid),
                 "start_time": a.start_time,
                 "end_time": a.end_time,
+                "symposium_id": payload.symposium_id,
             })
 
         if room_by_presentation:
             write.update_column_by_ids(
-                "presentations", "room", room_by_presentation
+                "presentations", "temporary_room", room_by_presentation
             )
 
         if tf_rows:
-            write.insert("timeframes", tf_rows)
+            write.insert("temporary_timeframes", tf_rows)
 
         return {
             "status": "updated",

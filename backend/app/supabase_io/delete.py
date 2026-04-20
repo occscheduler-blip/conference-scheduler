@@ -36,6 +36,28 @@ def _collect_ids(rows: list[dict[str, Any]]) -> list[UUID]:
     return [force_uuid(row["id"]) for row in rows if row.get("id") is not None]
 
 
+def delete_temporary_timeframes(linked_id: UUID | list[UUID]) -> int:
+    logger.info("DELETE temporary_timeframes: linked_id=%s", linked_id)
+    del_query = supabase.table("temporary_timeframes").delete()
+    count_query = supabase.table("temporary_timeframes").select("linked_id", count=CountMethod.exact)
+
+    if isinstance(linked_id, UUID):
+        count_query = count_query.eq("linked_id", str(linked_id))
+        del_query = del_query.eq("linked_id", str(linked_id))
+    else:
+        str_ids = [str(uid) for uid in linked_id]
+        if not str_ids:
+            return 0
+        count_query = count_query.in_("linked_id", str_ids)
+        del_query = del_query.in_("linked_id", str_ids)
+
+    num_deleted = count_query.execute().count
+    if num_deleted is None:
+        num_deleted = 0
+    del_query.execute()
+    return num_deleted
+
+
 def delete_timeframes(linked_id: UUID | list[UUID]) -> int:
     logger.info("DELETE timeframes: linked_id=%s", linked_id)
     del_timeframes_query = supabase.table("timeframes").delete()

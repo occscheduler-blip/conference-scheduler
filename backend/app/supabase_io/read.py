@@ -113,6 +113,20 @@ def get_presenting_students(
     return query.execute()
 
 
+def get_temporary_timeframes(linked_id: UUID | list[UUID] | None = None) -> APIResponse:
+    query = supabase.table("temporary_timeframes").select("*")
+
+    if linked_id:
+        if isinstance(linked_id, UUID):
+            query = query.eq("linked_id", str(linked_id))
+        elif isinstance(linked_id, list):
+            query = query.in_("linked_id", [str(uid) for uid in linked_id])
+        else:
+            raise ValueError("linked_id must be a UUID or list of UUIDs.")
+
+    return query.execute()
+
+
 def get_timeframes(linked_id: UUID | list[UUID] | None = None) -> APIResponse:
     query = supabase.table("timeframes").select("*")
 

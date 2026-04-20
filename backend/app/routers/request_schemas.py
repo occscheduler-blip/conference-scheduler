@@ -578,3 +578,8 @@ class EmailClassesRequest(BaseModel):
 
 class EmailStudentsRequest(BaseModel):
     presentation_id: UUID
+
+
+class PublishScheduleRequest(BaseModel):
+    symposium_id: UUID
+
