@@ -188,6 +188,7 @@ export default function ScheduleTab({
           minutes?: number;
           buffer?: number;
           room?: number | null;
+          temporary_room?: number | null;
           presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
         };
         type RawStudent = { id?: string; name?: string };
@@ -238,7 +239,7 @@ export default function ScheduleTab({
         if (presentationIds.length > 0) {
           try {
             allPresentationTimeframes = await apiFetch<Timeframe>(
-              `/api/events/timeframes?linked_id=${encodeURIComponent(presentationIds.join(","))}`
+              `/api/events/temporary_timeframes?linked_id=${encodeURIComponent(presentationIds.join(","))}`
             );
           } catch {
             allPresentationTimeframes = [];
@@ -290,7 +291,7 @@ export default function ScheduleTab({
               class_id: row.class_id ?? "",
               minutes: row.minutes ?? 0,
               buffer: row.buffer ?? 0,
-              room: row.room ?? null,
+              room: row.temporary_room ?? null,
               timeframe: timeframeByPresentation.get(normalizeId(row.id ?? "")) ?? null,
               presenterNames: Array.from(new Set(presenterNames)),
               departmentName: dept?.department_name ?? "",
@@ -615,6 +616,104 @@ export default function ScheduleTab({
     setEditingPresentation(null);
   };
 
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishMessage, setPublishMessage] = useState<string | null>(null);
+
+  const handlePublishSchedule = async () => {
+    if (!selectedSymposiumId) return;
+    if (!window.confirm("Publish this schedule? This will update the live schedule that attendees see.")) return;
+    setIsPublishing(true);
+    setPublishMessage(null);
+    try {
+      await apiPost("/api/events/publish_schedule", { symposium_id: selectedSymposiumId }, authHeaders);
+      setPublishMessage("Schedule published successfully.");
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      setPublishMessage(`Error: ${msg}`);
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const [exportOpen, setExportOpen] = useState(false);
+
+  const handleExportIcal = () => {
+    const scheduled = presentations.filter((p) => p.room !== null && p.timeframe);
+    if (scheduled.length === 0) return;
+
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const toIcalDate = (d: Date) =>
+      `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
+
+    const events = scheduled.map((p) => {
+      const start = toIcalDate(parseBackendDateTime(p.timeframe!.start_time));
+      const end = toIcalDate(parseBackendDateTime(p.timeframe!.end_time));
+      const room = `Room ${p.room! + 1}`;
+      const presenters = p.presenterNames.join(", ") || "TBD";
+      const desc = `Presenters: ${presenters}\\nDepartment: ${p.departmentName}`;
+      return [
+        "BEGIN:VEVENT",
+        `DTSTART:${start}`,
+        `DTEND:${end}`,
+        `SUMMARY:${p.title}`,
+        `LOCATION:${room}`,
+        `DESCRIPTION:${desc}`,
+        "END:VEVENT",
+      ].join("\r\n");
+    });
+
+    const ical = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Conference Scheduler//EN",
+      "CALSCALE:GREGORIAN",
+      ...events,
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    const blob = new Blob([ical], { type: "text/calendar;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "schedule.ics";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportXlsx = async () => {
+    const scheduled = presentations.filter((p) => p.room !== null && p.timeframe);
+    if (scheduled.length === 0) return;
+
+    const XLSX = await import("xlsx");
+
+    const rows = scheduled
+      .slice()
+      .sort((a, b) => {
+        const ta = parseBackendDateTime(a.timeframe!.start_time).getTime();
+        const tb = parseBackendDateTime(b.timeframe!.start_time).getTime();
+        return ta !== tb ? ta - tb : (a.room ?? 0) - (b.room ?? 0);
+      })
+      .map((p) => {
+        const opts = { hour: "numeric", minute: "2-digit", timeZone: "UTC" } as const;
+        const start = parseBackendDateTime(p.timeframe!.start_time);
+        const end = parseBackendDateTime(p.timeframe!.end_time);
+        return {
+          Day: dayLabel(dayKey(start)),
+          "Start Time": start.toLocaleTimeString([], opts),
+          "End Time": end.toLocaleTimeString([], opts),
+          Room: `Room ${p.room! + 1}`,
+          Title: p.title,
+          Presenters: p.presenterNames.join("; "),
+          Department: p.departmentName,
+        };
+      });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Schedule");
+    XLSX.writeFile(wb, "schedule.xlsx");
+  };
+
   const handleBulkSave = async () => {
     if (pendingChanges.size === 0 || !selectedSymposiumId) return;
 
@@ -684,9 +783,9 @@ export default function ScheduleTab({
         </select>
       </div>
 
-      {/* Generate Schedule button */}
+      {/* Generate / Publish Schedule buttons */}
       {selectedSymposiumId ? (
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <button
             type="button"
             onClick={() => handleRunScheduler()}
@@ -695,9 +794,56 @@ export default function ScheduleTab({
           >
             {isRunningScheduler ? "Generating..." : "Generate Schedule"}
           </button>
+          <button
+            type="button"
+            onClick={() => void handlePublishSchedule()}
+            disabled={isPublishing}
+            className="rounded-lg bg-[#1635a7] px-6 py-2.5 text-base font-semibold text-white transition hover:bg-[#0b2a8d] disabled:opacity-50"
+          >
+            {isPublishing ? "Publishing..." : "Publish Schedule"}
+          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setExportOpen((v) => !v)}
+              disabled={presentations.filter((p) => p.room !== null && p.timeframe).length === 0}
+              className="flex items-center gap-2 rounded-lg border border-[#1635a7] bg-white px-6 py-2.5 text-base font-semibold text-[#1635a7] transition hover:bg-[#eef2ff] disabled:opacity-50"
+            >
+              Export
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`h-4 w-4 transition ${exportOpen ? "rotate-180" : ""}`}>
+                <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+              </svg>
+            </button>
+            {exportOpen ? (
+              <>
+                <div className="fixed inset-0 z-20" onClick={() => setExportOpen(false)} />
+                <div className="absolute left-0 top-full z-30 mt-1 w-40 overflow-hidden rounded-lg border border-[#d8e2ff] bg-white shadow-lg">
+                  <button
+                    type="button"
+                    onClick={() => { setExportOpen(false); void handleExportXlsx(); }}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-[#111] hover:bg-[#eef2ff]"
+                  >
+                    Export as XLSX
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setExportOpen(false); handleExportIcal(); }}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-[#111] hover:bg-[#eef2ff]"
+                  >
+                    Export as iCal
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
           {schedulerMessage ? (
             <p className={`text-sm font-medium ${schedulerMessage.startsWith("Error") ? "text-[#9a1f1f]" : "text-[#1b6e2b]"}`}>
               {schedulerMessage}
+            </p>
+          ) : null}
+          {publishMessage ? (
+            <p className={`text-sm font-medium ${publishMessage.startsWith("Error") ? "text-[#9a1f1f]" : "text-[#1b6e2b]"}`}>
+              {publishMessage}
             </p>
           ) : null}
         </div>
