@@ -658,7 +658,7 @@ export default function ScheduleTab({
     const events = scheduled.map((p) => {
       const start = toIcalDate(parseBackendDateTime(p.timeframe!.start_time));
       const end = toIcalDate(parseBackendDateTime(p.timeframe!.end_time));
-      const room = `Room ${p.room! + 1}`;
+      const room = getRoomLabel(roomNames, p.room!);
       const presenters = p.presenterNames.join(", ") || "TBD";
       const desc = `Presenters: ${presenters}\\nDepartment: ${p.departmentName}`;
       return [
@@ -711,7 +711,7 @@ export default function ScheduleTab({
           Day: dayLabel(dayKey(start)),
           "Start Time": start.toLocaleTimeString([], opts),
           "End Time": end.toLocaleTimeString([], opts),
-          Room: `Room ${p.room! + 1}`,
+          Room: getRoomLabel(roomNames, p.room!),
           Title: p.title,
           Presenters: p.presenterNames.join("; "),
           Department: p.departmentName,
