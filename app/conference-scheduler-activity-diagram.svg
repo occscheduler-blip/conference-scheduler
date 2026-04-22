@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="2500" viewBox="0 0 1200 2500">
+  <defs>
+    <style>
+      .title { font: 700 42px Arial, sans-serif; fill: #111827; }
+      .label { font: 500 23px Arial, sans-serif; fill: #111827; }
+      .small { font: 500 20px Arial, sans-serif; fill: #7f1d1d; }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#111827" />
+    </marker>
+    <marker id="arrowRed" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#7f1d1d" />
+    </marker>
+  </defs>
+
+  <rect width="1200" height="2500" fill="#ffffff" />
+  <text x="600" y="65" text-anchor="middle" class="title">Conference Scheduler Activity Diagram</text>
+
+  <!-- Boxes -->
+  <g id="boxes" class="label">
+    <rect x="180" y="120" width="840" height="92" rx="16" fill="#f3f4f6" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="176" text-anchor="middle">Start</text>
+
+    <rect x="180" y="245" width="840" height="92" rx="16" fill="#dbeafe" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="286" text-anchor="middle">Admin: Create/Load Symposium</text>
+    <text x="600" y="314" text-anchor="middle">Set Rooms + Timeframes</text>
+
+    <rect x="180" y="370" width="840" height="92" rx="16" fill="#e0f2fe" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="426" text-anchor="middle">API: Validate add_symposium</text>
+
+    <rect x="180" y="495" width="840" height="92" rx="16" fill="#fde68a" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="551" text-anchor="middle">Decision: Payload valid?</text>
+
+    <rect x="180" y="620" width="840" height="92" rx="16" fill="#dcfce7" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="661" text-anchor="middle">API/DB: Upsert symposium</text>
+    <text x="600" y="689" text-anchor="middle">Replace timeframes</text>
+
+    <rect x="180" y="745" width="840" height="92" rx="16" fill="#dbeafe" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="786" text-anchor="middle">Admin: Add departments</text>
+    <text x="600" y="814" text-anchor="middle">head names + emails</text>
+
+    <rect x="180" y="870" width="840" height="92" rx="16" fill="#dcfce7" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="926" text-anchor="middle">API/DB: add_department</text>
+
+    <rect x="180" y="995" width="840" height="92" rx="16" fill="#ede9fe" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="1036" text-anchor="middle">Department Head: Add classes</text>
+    <text x="600" y="1064" text-anchor="middle">and professors</text>
+
+    <rect x="180" y="1120" width="840" height="92" rx="16" fill="#dcfce7" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="1176" text-anchor="middle">API/DB: add_class</text>
+
+    <rect x="180" y="1245" width="840" height="92" rx="16" fill="#fee2e2" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="1301" text-anchor="middle">Faculty: Set availability</text>
+
+    <rect x="180" y="1370" width="840" height="92" rx="16" fill="#dcfce7" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="1426" text-anchor="middle">API/DB: update_timeframes</text>
+
+    <rect x="180" y="1495" width="840" height="92" rx="16" fill="#fee2e2" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="1536" text-anchor="middle">Faculty: Upload/add students</text>
+    <text x="600" y="1564" text-anchor="middle">Create presentation groups</text>
+
+    <rect x="180" y="1620" width="840" height="92" rx="16" fill="#dcfce7" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="1661" text-anchor="middle">API/DB: add_students + add_presentation</text>
+
+    <rect x="180" y="1745" width="840" height="92" rx="16" fill="#fef3c7" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="1786" text-anchor="middle">Student: Update preferences</text>
+    <text x="600" y="1814" text-anchor="middle">(optional) professor requests</text>
+
+    <rect x="180" y="1870" width="840" height="92" rx="16" fill="#dcfce7" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="1926" text-anchor="middle">API/DB: add_prof_req (optional)</text>
+
+    <rect x="180" y="1995" width="840" height="92" rx="16" fill="#dbeafe" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="2036" text-anchor="middle">Admin: Review + edit/delete</text>
+    <text x="600" y="2064" text-anchor="middle">entities as needed</text>
+
+    <rect x="180" y="2120" width="840" height="92" rx="16" fill="#dcfce7" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="2176" text-anchor="middle">API/DB: update_* / delete_*</text>
+
+    <rect x="180" y="2245" width="840" height="92" rx="16" fill="#f3f4f6" stroke="#111827" stroke-width="2"/>
+    <text x="600" y="2301" text-anchor="middle">End</text>
+  </g>
+
+  <!-- Vertical arrows -->
+  <g stroke="#111827" stroke-width="3" fill="none" marker-end="url(#arrow)">
+    <line x1="600" y1="212" x2="600" y2="245"/>
+    <line x1="600" y1="337" x2="600" y2="370"/>
+    <line x1="600" y1="462" x2="600" y2="495"/>
+    <line x1="600" y1="587" x2="600" y2="620"/>
+    <line x1="600" y1="712" x2="600" y2="745"/>
+    <line x1="600" y1="837" x2="600" y2="870"/>
+    <line x1="600" y1="962" x2="600" y2="995"/>
+    <line x1="600" y1="1087" x2="600" y2="1120"/>
+    <line x1="600" y1="1212" x2="600" y2="1245"/>
+    <line x1="600" y1="1337" x2="600" y2="1370"/>
+    <line x1="600" y1="1462" x2="600" y2="1495"/>
+    <line x1="600" y1="1587" x2="600" y2="1620"/>
+    <line x1="600" y1="1712" x2="600" y2="1745"/>
+    <line x1="600" y1="1837" x2="600" y2="1870"/>
+    <line x1="600" y1="1962" x2="600" y2="1995"/>
+    <line x1="600" y1="2087" x2="600" y2="2120"/>
+    <line x1="600" y1="2212" x2="600" y2="2245"/>
+  </g>
+
+  <!-- Invalid branch -->
+  <rect x="1040" y="500" width="130" height="82" rx="14" fill="#fecaca" stroke="#7f1d1d" stroke-width="2"/>
+  <text x="1105" y="538" text-anchor="middle" class="small">422/400</text>
+  <text x="1105" y="565" text-anchor="middle" class="small">Error</text>
+  <line x1="1020" y1="541" x2="1040" y2="541" stroke="#7f1d1d" stroke-width="3" marker-end="url(#arrowRed)"/>
+  <text x="915" y="520" class="small">No</text>
+  <text x="625" y="608" style="font: 500 20px Arial, sans-serif; fill: #065f46;">Yes</text>
+</svg>
