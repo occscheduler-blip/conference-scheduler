@@ -31,49 +31,15 @@ function toDatetimeLocal(d: Date): string {
 }
 
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
+import {
+  DEPARTMENT_BASE_COLORS,
+  COLOR_SHADES,
+  rgbToHex,
+  getTextColor,
+  buildPresentationColorMap,
+} from "../lib/scheduleColors";
 
 const SLOT_HEIGHT = 24;
-
-// Department base colors (15 distinct colors for up to 44 departments with cycling)
-const DEPARTMENT_BASE_COLORS = [
-  { r: 31, g: 119, b: 180 },     // Blue
-  { r: 255, g: 127, b: 14 },     // Orange
-  { r: 44, g: 160, b: 44 },      // Green
-  { r: 214, g: 39, b: 40 },      // Red
-  { r: 148, g: 103, b: 189 },    // Purple
-  { r: 140, g: 86, b: 75 },      // Brown
-  { r: 227, g: 119, b: 194 },    // Pink
-  { r: 127, g: 201, b: 127 },    // Light Green
-  { r: 188, g: 143, b: 143 },    // Rosy Brown
-  { r: 23, g: 190, b: 207 },     // Cyan
-  { r: 158, g: 154, b: 36 },     // Olive
-  { r: 0, g: 172, b: 193 },      // Teal
-  { r: 255, g: 99, b: 71 },      // Tomato
-  { r: 75, g: 0, b: 130 },       // Indigo
-  { r: 220, g: 20, b: 60 },      // Crimson
-];
-
-// Shade variations per base color (light to dark)
-const COLOR_SHADES = DEPARTMENT_BASE_COLORS.map(({ r, g, b }) => {
-  const shades = [];
-  for (let i = 0; i < 7; i++) {
-    const factor = 0.3 + (i * 0.1); // 0.3 to 0.9
-    const sr = Math.round(r + (255 - r) * (1 - factor));
-    const sg = Math.round(g + (255 - g) * (1 - factor));
-    const sb = Math.round(b + (255 - b) * (1 - factor));
-    shades.push({ r: sr, g: sg, b: sb });
-  }
-  return shades;
-});
-
-function rgbToHex(r: number, g: number, b: number): string {
-  return `#${[r, g, b].map(x => Math.round(x).toString(16).padStart(2, '0')).join('')}`;
-}
-
-function getTextColor(color: { r: number; g: number; b: number }): string {
-  const luminance = (color.r * 299 + color.g * 587 + color.b * 114) / 1000;
-  return luminance > 128 ? "#000" : "#fff";
-}
 
 function getRoomLabel(roomNames: Array<string | null> | null | undefined, roomIndex: number): string {
   const roomName = roomNames?.[roomIndex];
@@ -375,45 +341,7 @@ export default function ScheduleTab({
   }, [presentations]);
 
   // Color map by presentation id (department-based, consistent colors)
-  const colorMap = useMemo(() => {
-    const map = new Map<string, { bg: string; text: string }>();
-
-    // Build department → classes mapping
-    const deptToClasses = new Map<string, Set<string>>();
-    presentations.forEach((p) => {
-      if (!deptToClasses.has(p.departmentName)) {
-        deptToClasses.set(p.departmentName, new Set());
-      }
-      deptToClasses.get(p.departmentName)!.add(p.class_id);
-    });
-
-    // Sort departments alphabetically
-    const deptsSorted = Array.from(deptToClasses.keys()).sort();
-
-    // Build classes per department (sorted)
-    const classesByDept = new Map<string, string[]>();
-    deptsSorted.forEach((dept) => {
-      const classes = Array.from(deptToClasses.get(dept)!).sort();
-      classesByDept.set(dept, classes);
-    });
-
-    // Assign colors: dept → base color, class → shade
-    presentations.forEach((p) => {
-      const deptIndex = deptsSorted.indexOf(p.departmentName);
-      const baseColorIndex = deptIndex % DEPARTMENT_BASE_COLORS.length;
-      const classes = classesByDept.get(p.departmentName) || [];
-      const classIndex = classes.indexOf(p.class_id);
-      const shadeIndex = classIndex < 7 ? classIndex : classIndex % 7;
-
-      const color = COLOR_SHADES[baseColorIndex][shadeIndex];
-      map.set(p.id, {
-        bg: rgbToHex(color.r, color.g, color.b),
-        text: getTextColor(color),
-      });
-    });
-
-    return map;
-  }, [presentations]);
+  const colorMap = useMemo(() => buildPresentationColorMap(presentations), [presentations]);
 
   // Grid ref for drag-and-drop coordinate calculations
   const gridRef = useRef<HTMLDivElement | null>(null);
