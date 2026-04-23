@@ -113,7 +113,7 @@ def build_conflict_index(entities: SymposiumEntities) -> ConflictIndex:
             if name:
                 person_name_by_id[pid] = name
 
-    # Eagerly collect student names from every presentation's presenting_students
+    # Collect student names from every presentation's presenting_students
     # join rows. The handlers used to do this lazily inside the scan loop, which
     # meant the error message could say "Someone" if the student happened to be
     # on the target presentation but not yet seen during iteration.
