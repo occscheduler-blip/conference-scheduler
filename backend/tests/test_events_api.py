@@ -8,13 +8,8 @@ These complement test_api.py by focusing on:
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi.testclient import TestClient
 
-
-# ── Shared helpers ─────────────────────────────────────────────────────────
-
-TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
-TF_2 = {"start_time": "2026-04-21T13:00:00Z", "end_time": "2026-04-21T16:00:00Z"}
+from tests.builders import TF_1, TF_2, seed_chain as _seed_chain
 
 
 def _is_uuid(s: object) -> bool:
@@ -30,61 +25,6 @@ def _assert_counts(d: dict) -> None:
     for key, val in d.items():
         assert isinstance(val, int), f"{key} count is not int: {val!r}"
         assert val >= 0, f"{key} count is negative: {val}"
-
-
-def _seed_chain(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
-    """Create symposium → department → class (+ professor) → students."""
-    resp = client.post(
-        "/api/events/add_symposium",
-        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
-        headers=h,
-    )
-    sym_id = resp.json()["symposium_id"]
-
-    resp = client.post(
-        "/api/events/add_department",
-        json={
-            "symposium_id": sym_id,
-            "department_name": "CS",
-            "department_head_name": "Dr. Head",
-            "email": "head@hamilton.edu",
-        },
-        headers=h,
-    )
-    dept_id = resp.json()["department_id"]
-
-    resp = client.post(
-        "/api/events/add_class",
-        json={
-            "name": "CS101",
-            "department_id": dept_id,
-            "professors": [{"name": "Prof A", "email": "profa@hamilton.edu"}],
-        },
-        headers=h,
-    )
-    class_id = resp.json()["class_id"]
-    prof_ids = resp.json()["professor_ids"]
-
-    client.post(
-        "/api/events/add_students",
-        json={
-            "class_id": class_id,
-            "students": [
-                {"name": "Alice", "email": "alice@hamilton.edu"},
-                {"name": "Bob", "email": "bob@hamilton.edu"},
-            ],
-        },
-        headers=h,
-    )
-    student_ids = [str(r["id"]) for r in db.rows("students")]
-
-    return {
-        "symposium_id": sym_id,
-        "department_id": dept_id,
-        "class_id": class_id,
-        "professor_id": prof_ids[0],
-        "student_ids": student_ids,
-    }
 
 
 # ── Validation error tests (422) ──────────────────────────────────────────

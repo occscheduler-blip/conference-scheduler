@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
-  ClassRecord,
-  DepartmentRecord,
   SchedulePresentation,
   SymposiumOption,
   Timeframe,
@@ -24,6 +22,7 @@ import {
 } from "../lib/utils";
 import { apiFetch, apiGet, apiPost, apiPut } from "../lib/api";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
+import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 
 /** Convert a Date to a datetime-local input value (YYYY-MM-DDTHH:MM). */
 function toDatetimeLocal(d: Date): string {
@@ -32,49 +31,15 @@ function toDatetimeLocal(d: Date): string {
 }
 
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
+import {
+  DEPARTMENT_BASE_COLORS,
+  COLOR_SHADES,
+  rgbToHex,
+  getTextColor,
+  buildPresentationColorMap,
+} from "../lib/scheduleColors";
 
 const SLOT_HEIGHT = 24;
-
-// Department base colors (15 distinct colors for up to 44 departments with cycling)
-const DEPARTMENT_BASE_COLORS = [
-  { r: 31, g: 119, b: 180 },     // Blue
-  { r: 255, g: 127, b: 14 },     // Orange
-  { r: 44, g: 160, b: 44 },      // Green
-  { r: 214, g: 39, b: 40 },      // Red
-  { r: 148, g: 103, b: 189 },    // Purple
-  { r: 140, g: 86, b: 75 },      // Brown
-  { r: 227, g: 119, b: 194 },    // Pink
-  { r: 127, g: 201, b: 127 },    // Light Green
-  { r: 188, g: 143, b: 143 },    // Rosy Brown
-  { r: 23, g: 190, b: 207 },     // Cyan
-  { r: 158, g: 154, b: 36 },     // Olive
-  { r: 0, g: 172, b: 193 },      // Teal
-  { r: 255, g: 99, b: 71 },      // Tomato
-  { r: 75, g: 0, b: 130 },       // Indigo
-  { r: 220, g: 20, b: 60 },      // Crimson
-];
-
-// Shade variations per base color (light to dark)
-const COLOR_SHADES = DEPARTMENT_BASE_COLORS.map(({ r, g, b }) => {
-  const shades = [];
-  for (let i = 0; i < 7; i++) {
-    const factor = 0.3 + (i * 0.1); // 0.3 to 0.9
-    const sr = Math.round(r + (255 - r) * (1 - factor));
-    const sg = Math.round(g + (255 - g) * (1 - factor));
-    const sb = Math.round(b + (255 - b) * (1 - factor));
-    shades.push({ r: sr, g: sg, b: sb });
-  }
-  return shades;
-});
-
-function rgbToHex(r: number, g: number, b: number): string {
-  return `#${[r, g, b].map(x => Math.round(x).toString(16).padStart(2, '0')).join('')}`;
-}
-
-function getTextColor(color: { r: number; g: number; b: number }): string {
-  const luminance = (color.r * 299 + color.g * 587 + color.b * 114) / 1000;
-  return luminance > 128 ? "#000" : "#fff";
-}
 
 function getRoomLabel(roomNames: Array<string | null> | null | undefined, roomIndex: number): string {
   const roomName = roomNames?.[roomIndex];
@@ -168,91 +133,34 @@ export default function ScheduleTab({
       setSchedulerMessage(null);
 
       try {
-        // Fetch symposium detail
-        const symposiumRes = await fetch(`/api/backend/api/events/symposiums/${symposiumId}`, {
-          headers: { "Content-Type": "application/json", ...authHeaders },
+        const schedule = await fetchSymposiumSchedule(symposiumId, {
+          mode: "draft",
+          includeProfessors: true,
+          authHeaders,
         });
-        const symposiumPayload = (await symposiumRes.json().catch(() => ({}))) as {
-          detail?: string;
-          symposium?: { id: string; name: string; rooms_available?: number | null; room_names?: Array<string | null> | null };
-          timeframes?: Timeframe[];
-        };
-        if (!symposiumRes.ok) throw new Error(symposiumPayload.detail ?? "Failed to load symposium.");
 
-        const symTimeframes = (symposiumPayload.timeframes ?? []).slice().sort((a, b) => {
-          return parseBackendDateTime(a.start_time).getTime() - parseBackendDateTime(b.start_time).getTime();
-        });
-        setSymposiumTimeframes(symTimeframes);
-        const parsedRooms = Number(symposiumPayload.symposium?.rooms_available ?? 1);
+        setSymposiumTimeframes(schedule.symposiumTimeframes);
+        const parsedRooms = Number(schedule.symposium?.rooms_available ?? 1);
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
-        setRoomNames(symposiumPayload.symposium?.room_names ?? []);
+        setRoomNames(schedule.symposium?.room_names ?? []);
 
-        // Fetch departments
-        let departmentRows: DepartmentRecord[] = [];
-        try {
-          departmentRows = await apiFetch<DepartmentRecord>(
-            `/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`
-          );
-        } catch {
-          // continue with empty
-        }
-
-        if (departmentRows.length === 0) {
+        if (schedule.departments.length === 0) {
           setPresentations([]);
-          const days = Array.from(new Set(symTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time)))));
+          const days = Array.from(
+            new Set(schedule.symposiumTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time))))
+          );
           setSelectedDay(days[0] ?? "");
           return;
         }
 
-        // Bulk-fetch classes for all departments in one call
-        const departmentIdParam = departmentRows.map((d) => d.id).join(",");
-        let classRows: ClassRecord[] = [];
-        try {
-          classRows = await apiFetch<ClassRecord>(
-            `/api/events/classes?department_id=${encodeURIComponent(departmentIdParam)}`
-          );
-        } catch {
-          classRows = [];
-        }
-
         // Department lookup
-        const deptById = new Map(departmentRows.map((d) => [d.id, d]));
-        const deptIdByClassId = new Map(classRows.map((c) => [c.id, c.department_id]));
-
-        // Fetch presentations, students, and professors for all classes in parallel (3 calls total)
-        type RawPresentation = {
-          id?: string;
-          class_id?: string;
-          title?: string;
-          minutes?: number;
-          buffer?: number;
-          room?: number | null;
-          temporary_room?: number | null;
-          presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
-        };
-        type RawStudent = { id?: string; name?: string };
-
-        type RawProfessor = { id?: string; name?: string; class_id?: string };
-
-        const classIdParam = classRows.map((row) => row.id).join(",");
-        const [rawPresentations, rawStudents, rawProfessors] = classIdParam
-          ? await Promise.all([
-              apiFetch<RawPresentation>(
-                `/api/events/presentations?class_id=${encodeURIComponent(classIdParam)}`
-              ).catch(() => [] as RawPresentation[]),
-              apiFetch<RawStudent>(
-                `/api/events/students?class_id=${encodeURIComponent(classIdParam)}`
-              ).catch(() => [] as RawStudent[]),
-              apiFetch<RawProfessor>(
-                `/api/events/professors?class_id=${encodeURIComponent(classIdParam)}`
-              ).catch(() => [] as RawProfessor[]),
-            ])
-          : [[] as RawPresentation[], [] as RawStudent[], [] as RawProfessor[]];
+        const deptById = new Map(schedule.departments.map((d) => [d.id, d]));
+        const deptIdByClassId = new Map(schedule.classes.map((c) => [c.id, c.department_id]));
 
         // Professor IDs grouped by class_id (all professors in a class are resources for all its presentations)
         const professorIdsByClass = new Map<string, string[]>();
         const personNameById = new Map<string, string>();
-        for (const prof of rawProfessors) {
+        for (const prof of schedule.professors) {
           const cid = prof.class_id ?? "";
           const pid = prof.id ?? "";
           if (cid && pid) {
@@ -265,27 +173,14 @@ export default function ScheduleTab({
         }
 
         const studentNameById = new Map(
-          rawStudents
+          schedule.students
             .filter((r): r is { id: string; name: string } => Boolean(r.id && r.name?.trim()))
             .map((r) => [normalizeId(r.id), r.name.trim()])
         );
 
-        // Bulk-fetch timeframes for all presentations in one call
-        const presentationIds = rawPresentations
-          .map((row) => row.id ?? "")
-          .filter((id) => id.length > 0);
-        let allPresentationTimeframes: Timeframe[] = [];
-        if (presentationIds.length > 0) {
-          try {
-            allPresentationTimeframes = await apiFetch<Timeframe>(
-              `/api/events/temporary_timeframes?linked_id=${encodeURIComponent(presentationIds.join(","))}`
-            );
-          } catch {
-            allPresentationTimeframes = [];
-          }
-        }
+        // Earliest timeframe wins per presentation
         const timeframeByPresentation = new Map<string, Timeframe>();
-        for (const tf of allPresentationTimeframes) {
+        for (const tf of schedule.presentationTimeframes) {
           const key = normalizeId(tf.linked_id ?? "");
           if (!key) continue;
           const existing = timeframeByPresentation.get(key);
@@ -298,7 +193,7 @@ export default function ScheduleTab({
           }
         }
 
-        const presentationRows: SchedulePresentation[] = rawPresentations
+        const presentationRows: SchedulePresentation[] = schedule.presentations
           .map((row) => {
             const presenterNames = (row.presenting_students ?? [])
               .map((s) => {
@@ -345,7 +240,7 @@ export default function ScheduleTab({
           for (const pid of ids) profIdSet.add(pid);
         }
         const allResourceIds = new Set(profIdSet);
-        for (const row of rawStudents) {
+        for (const row of schedule.students) {
           const sid = normalizeId(row.id ?? "");
           if (sid) allResourceIds.add(sid);
         }
@@ -378,7 +273,9 @@ export default function ScheduleTab({
         setAllProfessorIds(profIdSet);
         setResourceAvailability(resAvailMap);
 
-        const days = Array.from(new Set(symTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time)))));
+        const days = Array.from(
+          new Set(schedule.symposiumTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time))))
+        );
         setSelectedDay((prev) => (days.includes(prev) ? prev : days[0] ?? ""));
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Unknown error";
@@ -444,45 +341,7 @@ export default function ScheduleTab({
   }, [presentations]);
 
   // Color map by presentation id (department-based, consistent colors)
-  const colorMap = useMemo(() => {
-    const map = new Map<string, { bg: string; text: string }>();
-
-    // Build department → classes mapping
-    const deptToClasses = new Map<string, Set<string>>();
-    presentations.forEach((p) => {
-      if (!deptToClasses.has(p.departmentName)) {
-        deptToClasses.set(p.departmentName, new Set());
-      }
-      deptToClasses.get(p.departmentName)!.add(p.class_id);
-    });
-
-    // Sort departments alphabetically
-    const deptsSorted = Array.from(deptToClasses.keys()).sort();
-
-    // Build classes per department (sorted)
-    const classesByDept = new Map<string, string[]>();
-    deptsSorted.forEach((dept) => {
-      const classes = Array.from(deptToClasses.get(dept)!).sort();
-      classesByDept.set(dept, classes);
-    });
-
-    // Assign colors: dept → base color, class → shade
-    presentations.forEach((p) => {
-      const deptIndex = deptsSorted.indexOf(p.departmentName);
-      const baseColorIndex = deptIndex % DEPARTMENT_BASE_COLORS.length;
-      const classes = classesByDept.get(p.departmentName) || [];
-      const classIndex = classes.indexOf(p.class_id);
-      const shadeIndex = classIndex < 7 ? classIndex : classIndex % 7;
-
-      const color = COLOR_SHADES[baseColorIndex][shadeIndex];
-      map.set(p.id, {
-        bg: rgbToHex(color.r, color.g, color.b),
-        text: getTextColor(color),
-      });
-    });
-
-    return map;
-  }, [presentations]);
+  const colorMap = useMemo(() => buildPresentationColorMap(presentations), [presentations]);
 
   // Grid ref for drag-and-drop coordinate calculations
   const gridRef = useRef<HTMLDivElement | null>(null);

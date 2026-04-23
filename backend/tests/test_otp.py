@@ -3,14 +3,17 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.builders import TF_1
 from tests.db_helper import DbHelper
 
 # Fixed OTP used across all tests (patched into generate_otp)
 _TEST_OTP = "123456"
 
 # ── Helpers ────────────────────────────────────────────────────────────────
-
-TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
+#
+# OTP tests need specific email addresses (prof@hamilton.edu / stu@hamilton.edu)
+# to exercise the OTP flow, so they keep bespoke seeders below rather than
+# using tests.builders.seed_chain.
 
 
 def _seed_professor(client: TestClient, h: dict[str, str]) -> dict[str, str]:

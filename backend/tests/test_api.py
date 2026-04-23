@@ -1,82 +1,14 @@
 """Integration tests — all requests hit the real local Supabase Docker instance."""
 
-# ── Shared test data ────────────────────────────────────────────────────────
-
-TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
-TF_2 = {"start_time": "2026-04-21T13:00:00Z", "end_time": "2026-04-21T16:00:00Z"}
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
-
-def _add_symposium(client, h, name="Spring Symposium", rooms=5, timeframes=None):
-    if timeframes is None:
-        timeframes = [TF_1, TF_2]
-    resp = client.post(
-        "/api/events/add_symposium",
-        json={"symposium_name": name, "rooms_available": rooms, "default_buffer": 0, "timeframes": timeframes},
-        headers=h,
-    )
-    assert resp.status_code == 200, resp.text
-    return resp.json()
-
-
-def _add_department(client, h, symposium_id, name="Computer Science"):
-    resp = client.post(
-        "/api/events/add_department",
-        json={
-            "symposium_id": symposium_id,
-            "department_name": name,
-            "department_head_name": "Dr. Head",
-            "email": "head@hamilton.edu",
-        },
-        headers=h,
-    )
-    assert resp.status_code == 200, resp.text
-    return resp.json()
-
-
-def _add_class(client, h, department_id, name="CS101"):
-    resp = client.post(
-        "/api/events/add_class",
-        json={
-            "name": name,
-            "department_id": department_id,
-            "professors": [{"name": "Prof. Smith", "email": "psmith@hamilton.edu"}],
-        },
-        headers=h,
-    )
-    assert resp.status_code == 200, resp.text
-    return resp.json()
-
-
-def _add_students(client, h, class_id, count=2):
-    students = [
-        {"name": f"Student {i}", "email": f"student{i}@hamilton.edu"}
-        for i in range(count)
-    ]
-    resp = client.post(
-        "/api/events/add_students",
-        json={"class_id": class_id, "students": students},
-        headers=h,
-    )
-    assert resp.status_code == 200, resp.text
-    return resp.json()
-
-
-def _add_presentation(client, h, class_id, student_ids):
-    resp = client.post(
-        "/api/events/add_presentation",
-        json={
-            "title": "Test Presentation",
-            "class_id": class_id,
-            "minutes": 20,
-            "buffer": 0,
-            "presenting_students": student_ids,
-        },
-        headers=h,
-    )
-    assert resp.status_code == 200, resp.text
-    return resp.json()
+from tests.builders import (
+    TF_1,
+    TF_2,
+    add_class as _add_class,
+    add_department as _add_department,
+    add_presentation as _add_presentation,
+    add_students as _add_students,
+    add_symposium as _add_symposium,
+)
 
 
 # ── TestHealth ───────────────────────────────────────────────────────────────
