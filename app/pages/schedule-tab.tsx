@@ -8,7 +8,6 @@ import type {
 } from "./types";
 import {
   totalSlots,
-  formatTimeLabel,
   parseBackendDateTime,
   toBackendDateTime,
   dayKey,
@@ -38,13 +37,7 @@ import {
   getTextColor,
   buildPresentationColorMap,
 } from "../lib/scheduleColors";
-
-const SLOT_HEIGHT = 24;
-
-function getRoomLabel(roomNames: Array<string | null> | null | undefined, roomIndex: number): string {
-  const roomName = roomNames?.[roomIndex];
-  return typeof roomName === "string" && roomName.trim() ? roomName.trim() : `Room ${roomIndex + 1}`;
-}
+import { ScheduleGrid, getRoomLabel, SLOT_HEIGHT, type GridBlock } from "../lib/ScheduleGrid";
 
 export default function ScheduleTab({
   token,
@@ -325,8 +318,6 @@ export default function ScheduleTab({
 
   const minSlot = useMemo(() => (activeSlots.size > 0 ? Math.min(...activeSlots) : 0), [activeSlots]);
   const maxSlot = useMemo(() => (activeSlots.size > 0 ? Math.max(...activeSlots) + 1 : totalSlots), [activeSlots]);
-  const visibleSlotCount = maxSlot - minSlot;
-
   // Scheduled presentations for the selected day
   const scheduledForDay = useMemo(() => {
     return presentations.filter((p) => {
@@ -342,6 +333,24 @@ export default function ScheduleTab({
 
   // Color map by presentation id (department-based, consistent colors)
   const colorMap = useMemo(() => buildPresentationColorMap(presentations), [presentations]);
+
+  // Blocks shaped for ScheduleGrid
+  const gridBlocks = useMemo<GridBlock[]>(() => {
+    const defaultColor = COLOR_SHADES[0][0];
+    return scheduledForDay
+      .filter((p): p is typeof p & { room: number; timeframe: NonNullable<typeof p.timeframe> } =>
+        p.room !== null && p.timeframe !== null
+      )
+      .map((p) => ({
+        id: p.id,
+        timeframe: p.timeframe,
+        roomIndex: p.room,
+        title: p.title,
+        presenterNames: p.presenterNames,
+        color: colorMap.get(p.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) },
+        durationMinutes: p.minutes,
+      }));
+  }, [scheduledForDay, colorMap]);
 
   // Grid ref for drag-and-drop coordinate calculations
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -995,207 +1004,72 @@ export default function ScheduleTab({
       {/* Schedule grid + unscheduled side panel */}
       {!isLoadingSchedule && selectedDay && selectedDay !== "unscheduled" && activeSlots.size > 0 ? (
         <div className="flex gap-3">
-        <div className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
-          <div
-            ref={gridRef}
-            className="grid"
-            style={{
-              gridTemplateColumns: `72px repeat(${roomsAvailable}, minmax(140px, 1fr))`,
-              gridTemplateRows: `auto repeat(${visibleSlotCount}, ${SLOT_HEIGHT}px)`,
-            }}
-          >
-            {/* Header row */}
-            <div
-              className="border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-xs font-bold uppercase text-[#2d3d7a]"
-              style={{ gridRow: 1, gridColumn: 1 }}
-            >
-              Time
-            </div>
-            {Array.from({ length: roomsAvailable }, (_, i) => (
-              <div
-                key={i}
-                className="whitespace-nowrap border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-center text-xs font-bold uppercase text-[#2d3d7a] last:border-r-0"
-                style={{ gridRow: 1, gridColumn: i + 2 }}
-              >
-                {getRoomLabel(roomNames, i)}
-              </div>
-            ))}
-
-            {/* Time slot rows (background cells) */}
-            {Array.from({ length: visibleSlotCount }, (_, i) => {
-              const slotIndex = minSlot + i;
-              const showLabel = slotIndex % 2 === 0;
-              const gridRow = i + 2; // +2 because header is row 1
-              return (
-                <div key={`time-${slotIndex}`} className="contents">
-                  <div
-                    className={`flex items-center justify-end border-b border-r border-[#e5e7eb] px-1 text-[11px] leading-none text-[#888] ${
-                      slotIndex % 4 === 0 ? "bg-[#f9fafb]" : "bg-white"
-                    }`}
-                    style={{ gridRow, gridColumn: 1 }}
-                  >
-                    {showLabel ? formatTimeLabel(slotIndex) : ""}
-                  </div>
-                  {Array.from({ length: roomsAvailable }, (_, roomIdx) => (
-                    <div
-                      key={roomIdx}
-                      className={`border-b border-r border-[#e5e7eb] last:border-r-0 ${
-                        slotIndex % 4 === 0 ? "bg-[#f9fafb]" : "bg-white"
-                      }`}
-                      style={{ gridRow, gridColumn: roomIdx + 2 }}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-
-            {/* Presentation blocks (placed via grid-row/grid-column) */}
-            {scheduledForDay.map((pres) => {
-              if (pres.room === null || !pres.timeframe) return null;
-              const start = parseBackendDateTime(pres.timeframe.start_time);
-              const end = parseBackendDateTime(pres.timeframe.end_time);
-              const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
-              const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
-              const startSlotRaw = (startMinutes - 9 * 60) / 15;
-              const endSlotRaw = (endMinutes - 9 * 60) / 15;
-
-              // Convert to grid row (1-indexed, +2 for header row offset)
-              const gridRowStart = Math.floor(startSlotRaw - minSlot) + 2;
-              const gridRowEnd = Math.ceil(endSlotRaw - minSlot) + 2;
-              const gridCol = pres.room + 2; // +2 for time column offset (col 1)
-
-              // Sub-slot positioning for non-15-minute-aligned times
-              const fracStart = (startSlotRaw - minSlot) - Math.floor(startSlotRaw - minSlot);
-              const verticalInset = 1;
-              const topOffset = fracStart * SLOT_HEIGHT + verticalInset;
-              const blockHeight = Math.max(8, (endSlotRaw - startSlotRaw) * SLOT_HEIGHT - verticalInset * 2);
-              const durationSlots = endSlotRaw - startSlotRaw;
-
-              const defaultColor = COLOR_SHADES[0][0];
-              const color = colorMap.get(pres.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) };
-
-              const isBeingDragged = dragState?.presentation.id === pres.id;
-
-              return (
-                <div
-                  key={pres.id}
-                  onPointerDown={(e) => handleBlockPointerDown(e, pres)}
-                  className={`z-10 mx-[1px] overflow-hidden rounded-md px-1.5 py-0.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md ${isBeingDragged ? "opacity-30" : ""}`}
-                  style={{
-                    gridRow: `${gridRowStart} / ${gridRowEnd}`,
-                    gridColumn: gridCol,
-                    backgroundColor: color.bg,
-                    color: color.text,
-                    position: "relative",
-                    top: `${topOffset}px`,
-                    height: `${blockHeight}px`,
-                    alignSelf: "start",
-                    touchAction: "none",
-                    cursor: isDragging ? "grabbing" : "grab",
-                  }}
-                  title={`${pres.title} (${pres.minutes} min)\n${pres.presenterNames.join(", ")}`}
-                >
-                  <div className="truncate text-xs font-semibold leading-tight">{pres.title}</div>
-                  {durationSlots > 1 ? (
-                    <div className="truncate text-[10px] leading-tight opacity-80">
-                      {pres.presenterNames.join(", ") || "No presenters"}
-                    </div>
-                  ) : null}
-                  {durationSlots > 2 ? (
-                    <div className="truncate text-[10px] leading-tight opacity-60">
-                      {pres.minutes} min
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-
-            {/* Snap-target highlight during drag */}
-            {isDragging && dragState?.snapTarget ? (() => {
-              const { room, minuteInDay } = dragState.snapTarget;
-              const minuteFromDayStart = minuteInDay - 9 * 60;
-              const slotFloat = minuteFromDayStart / 15;
-              const relativeSlot = slotFloat - minSlot;
-              const durationSlots = dragState.presentation.minutes / 15;
-              const gridRowStart = Math.floor(relativeSlot) + 2;
-              const gridRowEnd = Math.ceil(relativeSlot + durationSlots) + 2;
-              const gridCol = room + 2;
-              const fracStart = relativeSlot - Math.floor(relativeSlot);
-              const topOffset = fracStart * SLOT_HEIGHT;
-              const blockHeight = durationSlots * SLOT_HEIGHT;
-              const conflict = dragState.conflict;
-              const isBlocked = conflict?.blocked === true;
-              const isWarning = conflict !== null && !conflict.blocked;
-
-              return (
-                <div
-                  style={{
-                    gridRow: `${gridRowStart} / ${gridRowEnd}`,
-                    gridColumn: gridCol,
-                    position: "relative",
-                    top: `${topOffset}px`,
-                    height: `${blockHeight}px`,
-                    alignSelf: "start",
-                    pointerEvents: "none",
-                  }}
-                  className={`z-20 m-[1px] rounded-md border-2 border-dashed ${
-                    isBlocked
-                      ? "border-[#c62828] bg-[#c62828]/10"
-                      : isWarning
-                        ? "border-[#e68a00] bg-[#e68a00]/10"
-                        : "border-[#2e7d32] bg-[#2e7d32]/10"
-                  }`}
-                >
-                  {conflict ? (
-                    <div className={`truncate px-1.5 py-0.5 text-[10px] font-semibold ${isBlocked ? "text-[#c62828]" : "text-[#b36b00]"}`}>
-                      {isWarning ? "Warning: " : ""}{conflict.message}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })() : null}
+          <div className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
+            <ScheduleGrid
+              roomsAvailable={roomsAvailable}
+              roomNames={roomNames}
+              minSlot={minSlot}
+              maxSlot={maxSlot}
+              blocks={gridBlocks}
+              gridRef={gridRef}
+              onBlockPointerDown={(e, id) => {
+                const pres = scheduledForDay.find((p) => p.id === id);
+                if (pres) handleBlockPointerDown(e, pres);
+              }}
+              draggingId={dragState?.presentation.id ?? null}
+              isDragging={isDragging}
+              snapTarget={
+                isDragging && dragState?.snapTarget
+                  ? {
+                      room: dragState.snapTarget.room,
+                      minuteInDay: dragState.snapTarget.minuteInDay,
+                      durationMinutes: dragState.presentation.minutes,
+                      conflict: dragState.conflict,
+                    }
+                  : null
+              }
+            />
           </div>
-        </div>
 
-        {/* Unscheduled side panel */}
-        {unscheduled.length > 0 ? (
-          <div className="max-h-[calc(100vh-180px)] w-56 shrink-0 overflow-hidden rounded-lg border border-[#d8e2ff] bg-white">
-            <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-              Unscheduled ({unscheduled.length})
-            </div>
-            <div className="h-full overflow-y-auto p-2">
-              <div className="space-y-1.5">
-                {unscheduled.map((pres) => {
-                  const defaultColor = COLOR_SHADES[0][0];
-              const color = colorMap.get(pres.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) };
-                  return (
-                    <div
-                      key={pres.id}
-                      onPointerDown={(e) => handleUnscheduledPointerDown(e, pres)}
-                      className="rounded-md px-2 py-1.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md"
-                      style={{
-                        backgroundColor: color.bg,
-                        color: color.text,
-                        touchAction: "none",
-                        cursor: isDragging ? "grabbing" : "grab",
-                      }}
-                    >
-                      <div className="truncate text-xs font-semibold leading-tight">{pres.title}</div>
-                      <div className="truncate text-[10px] leading-tight opacity-80">
-                        {pres.minutes} min &mdash; {pres.departmentName || "No dept"}
-                      </div>
-                      {pres.presenterNames.length > 0 ? (
-                        <div className="truncate text-[10px] leading-tight opacity-60">
-                          {pres.presenterNames.join(", ")}
+          {/* Unscheduled side panel */}
+          {unscheduled.length > 0 ? (
+            <div className="max-h-[calc(100vh-180px)] w-56 shrink-0 overflow-hidden rounded-lg border border-[#d8e2ff] bg-white">
+              <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                Unscheduled ({unscheduled.length})
+              </div>
+              <div className="h-full overflow-y-auto p-2">
+                <div className="space-y-1.5">
+                  {unscheduled.map((pres) => {
+                    const defaultColor = COLOR_SHADES[0][0];
+                    const color = colorMap.get(pres.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) };
+                    return (
+                      <div
+                        key={pres.id}
+                        onPointerDown={(e) => handleUnscheduledPointerDown(e, pres)}
+                        className="rounded-md px-2 py-1.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md"
+                        style={{
+                          backgroundColor: color.bg,
+                          color: color.text,
+                          touchAction: "none",
+                          cursor: isDragging ? "grabbing" : "grab",
+                        }}
+                      >
+                        <div className="truncate text-xs font-semibold leading-tight">{pres.title}</div>
+                        <div className="truncate text-[10px] leading-tight opacity-80">
+                          {pres.minutes} min &mdash; {pres.departmentName || "No dept"}
                         </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                        {pres.presenterNames.length > 0 ? (
+                          <div className="truncate text-[10px] leading-tight opacity-60">
+                            {pres.presenterNames.join(", ")}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
         </div>
       ) : null}
 
