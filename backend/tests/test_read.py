@@ -8,76 +8,22 @@ from fastapi.testclient import TestClient
 from app.supabase_io import read
 
 
-# ── Shared helpers ─────────────────────────────────────────────────────────
-
-TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
+from tests.builders import TF_1, seed_chain
 
 
-def _seed_chain(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
-    """Create symposium → department → class (+ professor) → students → presentation."""
-    resp = client.post(
-        "/api/events/add_symposium",
-        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
-        headers=h,
+def _seed_chain(client, h, db):
+    """test_read variant: 1 student, with presentation + request. Returns `student_id`."""
+    result = seed_chain(
+        client, h, db,
+        student_count=1,
+        with_presentation=True,
+        with_request=True,
     )
-    sym_id = resp.json()["symposium_id"]
-
-    resp = client.post(
-        "/api/events/add_department",
-        json={
-            "symposium_id": sym_id,
-            "department_name": "CS",
-            "department_head_name": "Dr. Head",
-            "email": "head@hamilton.edu",
-        },
-        headers=h,
-    )
-    dept_id = resp.json()["department_id"]
-
-    resp = client.post(
-        "/api/events/add_class",
-        json={
-            "name": "CS101",
-            "department_id": dept_id,
-            "professors": [{"name": "Prof. A", "email": "profa@hamilton.edu"}],
-        },
-        headers=h,
-    )
-    class_id = resp.json()["class_id"]
-
-    client.post(
-        "/api/events/add_students",
-        json={
-            "class_id": class_id,
-            "students": [{"name": "Alice", "email": "alice@hamilton.edu"}],
-        },
-        headers=h,
-    )
-    student_id = str(db.rows("students")[0]["id"])
-
-    resp = client.post(
-        "/api/events/add_presentation",
-        json={
-            "title": "My Talk",
-            "class_id": class_id,
-            "minutes": 15,
-            "buffer": 0,
-            "presenting_students": [student_id],
-        },
-        headers=h,
-    )
-
-    client.post(
-        "/api/events/add_request",
-        json={"name": "Prof. Pref", "email": "pref@hamilton.edu", "student_id": student_id},
-        headers=h,
-    )
-
     return {
-        "symposium_id": sym_id,
-        "department_id": dept_id,
-        "class_id": class_id,
-        "student_id": student_id,
+        "symposium_id": result["symposium_id"],
+        "department_id": result["department_id"],
+        "class_id": result["class_id"],
+        "student_id": result["student_ids"][0],
     }
 
 
@@ -166,7 +112,7 @@ class TestGetStudents:
         ids = _seed_chain(client, h, db)
         result = read.get_students()
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "Alice"
+        assert result.data[0]["name"] == "Student 0"
 
 
 class TestGetProfessors:
@@ -174,7 +120,7 @@ class TestGetProfessors:
         _seed_chain(client, h, db)
         result = read.get_professors()
         assert len(result.data) == 1
-        assert result.data[0]["name"] == "Prof. A"
+        assert result.data[0]["name"] == "Prof. Smith"
 
 
 class TestGetTimeframes:
@@ -215,7 +161,7 @@ class TestGetPresentations:
         assert len(result.data) == 1
         assert "presenting_students" in result.data[0]
         assert len(result.data[0]["presenting_students"]) == 1
-        assert result.data[0]["presenting_students"][0]["name"] == "Alice"
+        assert result.data[0]["presenting_students"][0]["name"] == "Student 0"
 
     def test_empty_presentations(self, client, h, db):
         result = read.get_presentations()
