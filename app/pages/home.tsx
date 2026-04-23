@@ -7,12 +7,12 @@ import type {
   ClassRecord,
   DepartmentRecord,
   PresentationRecord,
-  SymposiumDetails,
   SymposiumOption,
   Timeframe,
 } from "./types";
 import { parseBackendDateTime, normalizeId, dayKey, dayLabel, timeLabel } from "../lib/utils";
 import { apiFetch } from "../lib/api";
+import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 
 type ItineraryDetailItem = {
   presentation_id: string;
@@ -160,102 +160,32 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
       try {
         setMessage(null);
 
-        // Symposium detail returns { symposium, timeframes } — non-standard shape, so use apiFetch
-        // for the departments call and a raw fetch for the symposium detail.
-        const symposiumRes = await fetch(`/api/backend/api/events/symposiums/${selectedSymposiumId}`);
-        const symposiumPayload = (await symposiumRes.json().catch(() => ({}))) as {
-          detail?: string;
-          symposium?: SymposiumDetails;
-          timeframes?: Timeframe[];
-        };
-        if (!symposiumRes.ok) throw new Error(symposiumPayload.detail ?? "Failed to load symposium schedule.");
+        const schedule = await fetchSymposiumSchedule(selectedSymposiumId, { mode: "published" });
 
-        const list = (symposiumPayload.timeframes ?? []).slice().sort((a, b) => {
-          const ta = parseBackendDateTime(a.start_time).getTime();
-          const tb = parseBackendDateTime(b.start_time).getTime();
-          return ta - tb;
-        });
-        setTimeframes(list);
-        const parsedRooms = Number(symposiumPayload.symposium?.rooms_available ?? 1);
+        setTimeframes(schedule.symposiumTimeframes);
+        const parsedRooms = Number(schedule.symposium?.rooms_available ?? 1);
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
-        setRoomNames(symposiumPayload.symposium?.room_names ?? []);
+        setRoomNames(schedule.symposium?.room_names ?? []);
 
-        let departmentRows: DepartmentRecord[] = [];
-        try {
-          departmentRows = await apiFetch<DepartmentRecord>(
-            `/api/events/departments?symposium_id=${encodeURIComponent(selectedSymposiumId)}`
+        if (schedule.departments.length > 0) {
+          setDepartments(schedule.departments);
+          setClasses(schedule.classes);
+
+          const studentNameById = new Map(
+            schedule.students
+              .map((row) => [normalizeId(row.id ?? ""), row.name?.trim() ?? ""] as const)
+              .filter(([id, name]) => id.length > 0 && name.length > 0)
           );
-        } catch {
-          // Departments endpoint failed gracefully — continue with empty list
-        }
 
-        if (departmentRows.length > 0) {
-          setDepartments(departmentRows);
-
-          const departmentIdParam = departmentRows.map((d) => d.id).join(",");
-          let classRows: ClassRecord[] = [];
-          try {
-            classRows = await apiFetch<ClassRecord>(
-              `/api/events/classes?department_id=${encodeURIComponent(departmentIdParam)}`
-            );
-          } catch {
-            classRows = [];
-          }
-          setClasses(classRows);
-
-          type RawPresentation = {
-            id?: string;
-            class_id?: string;
-            title?: string;
-            room?: number | null;
-            presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
-          };
-          type RawStudent = { id?: string; name?: string; class_id?: string };
-
-          const classIdParam = classRows.map((c) => c.id).join(",");
-          const [rawPresentations, rawStudents] = classIdParam
-            ? await Promise.all([
-                apiFetch<RawPresentation>(
-                  `/api/events/presentations?class_id=${encodeURIComponent(classIdParam)}`
-                ).catch(() => [] as RawPresentation[]),
-                apiFetch<RawStudent>(
-                  `/api/events/students?class_id=${encodeURIComponent(classIdParam)}`
-                ).catch(() => [] as RawStudent[]),
-              ])
-            : [[] as RawPresentation[], [] as RawStudent[]];
-
-          const studentRows = rawStudents
-            .map((row) => ({
-              id: row.id ?? "",
-              name: row.name?.trim() ?? "",
-            }))
-            .filter((row): row is { id: string; name: string } => Boolean(row.id && row.name));
-          const studentNameById = new Map(studentRows.map((row) => [normalizeId(row.id), row.name]));
-
-          // Bulk-fetch scheduled timeframes for all presentations in a single call
-          const presentationIdParam = rawPresentations
-            .map((p) => p.id ?? "")
-            .filter((id) => id.length > 0)
-            .join(",");
-          let allPresentationTimeframes: Timeframe[] = [];
-          if (presentationIdParam) {
-            try {
-              allPresentationTimeframes = await apiFetch<Timeframe>(
-                `/api/events/timeframes?linked_id=${encodeURIComponent(presentationIdParam)}`
-              );
-            } catch {
-              allPresentationTimeframes = [];
-            }
-          }
           const timeframeByLinkedId = new Map<string, Timeframe>();
-          for (const tf of allPresentationTimeframes) {
+          for (const tf of schedule.presentationTimeframes) {
             const key = normalizeId(tf.linked_id ?? "");
             if (key && !timeframeByLinkedId.has(key)) {
               timeframeByLinkedId.set(key, tf);
             }
           }
 
-          const presentationRows = rawPresentations
+          const presentationRows = schedule.presentations
             .map((row) => {
               const presenterNames = (row.presenting_students ?? [])
                 .map((student) => {
@@ -282,10 +212,14 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
           setPresentations([]);
         }
 
-        const days = Array.from(new Set(list.map((item) => dayKey(parseBackendDateTime(item.start_time)))));
+        const days = Array.from(
+          new Set(schedule.symposiumTimeframes.map((item) => dayKey(parseBackendDateTime(item.start_time))))
+        );
         setSelectedDay(days[0] ?? "");
         setDayPage(0);
-        if (list.length === 0) setMessage("No presentation times posted for this symposium yet.");
+        if (schedule.symposiumTimeframes.length === 0) {
+          setMessage("No presentation times posted for this symposium yet.");
+        }
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         setMessage(msg);
