@@ -145,6 +145,41 @@ def get_students(class_id: str | None = None) -> APIResponse:
 
 # ── Professors ────────────────────────────────────────────────────────────
 
+@router.post("/add_professor")
+def add_professor(
+    payload: request_schemas.AddProfessorRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+) -> dict[str, str | int | UUID | dict[str, int]]:
+    try:
+        logger.info("add_professor: name=%s  class_id=%s", payload.name, payload.class_id)
+        professor = supabase_schemas.Professor(
+            id=uuid4(),
+            name=payload.name,
+            email=payload.email,
+            class_id=payload.class_id,
+        )
+        response = write.insert("professors", [professor.model_dump()])
+        records_inserted = {"professors": _rows_affected(response, fallback=1)}
+
+        return {
+            "status": "inserted",
+            "professor_id": professor.id,
+            "class_id": professor.class_id,
+            "records_inserted": records_inserted,
+            "lines_edited": _sum_counts(records_inserted),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        logger.warning("add_professor validation error: %s", exc)
+        raise HTTPException(status_code=422, detail=f"Validation error: {exc}") from exc
+    except Exception as exc:
+        logger.exception("add_professor failed")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate professor payload: {exc}"
+        ) from exc
+
+
 @router.put("/update_professor")
 def update_professor(
     payload: request_schemas.UpdateProfessorRequest,
