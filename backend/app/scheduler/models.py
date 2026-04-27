@@ -20,6 +20,7 @@ class PresentationInput:
     duration_minutes: int
     buffer_minutes: int = 0
     class_id: str = ""
+    department_id: str = ""
     resource_ids: tuple[str, ...] = ()
 
 
@@ -33,6 +34,7 @@ class ScheduleConstraints:
     same_class_same_room: ConstraintMode = "hard"
     slot_alignment: int = 1  # slot size in minutes (1, 5, 10, 15, 20)
     minimize_makespan: ConstraintMode = "soft"
+    minimize_department_span: ConstraintMode = "soft"
     minimize_class_span: ConstraintMode = "soft"
     minimize_professor_span: ConstraintMode = "soft"
     balance_rooms: ConstraintMode = "soft"
