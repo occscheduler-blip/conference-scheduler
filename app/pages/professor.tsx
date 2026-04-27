@@ -18,6 +18,7 @@ import {
   toBackendDateTime,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
+import { confirmDialog } from "../lib/dialog";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
 
@@ -501,7 +502,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
   // Deletes a student after confirmation and updates the local list.
   const deleteUploadedStudent = async (studentId: string, studentName: string) => {
-    const confirmed = window.confirm(`Delete ${studentName}?`);
+    const confirmed = await confirmDialog(`Delete ${studentName}?`, "Delete student");
     if (!confirmed) return;
     const previousStudents = uploadedStudents;
     const previousSelectedKeys = selectedUploadedStudentKeys;
@@ -609,7 +610,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     group: PresentationGroup,
     source: "draft" | "deployed" = "draft"
   ) => {
-    const confirmed = window.confirm(`Delete presentation "${group.presentationName || "Untitled"}"?`);
+    const confirmed = await confirmDialog(`Delete presentation "${group.presentationName || "Untitled"}"?`, "Delete presentation");
     if (!confirmed) return;
 
     if (source === "draft" && !isUuid(group.id)) {

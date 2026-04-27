@@ -17,7 +17,8 @@ import {
   buildTimeframesFromGrid,
   gridFromTimeframes,
 } from "../lib/utils";
-import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
+import { apiFetch, apiPost, apiPut, apiDelete, BACKEND_URL } from "../lib/api";
+import { confirmDialog } from "../lib/dialog";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
 import ScheduleTab from "./schedule-tab";
@@ -184,7 +185,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         // This endpoint returns {symposium, timeframes} — a non-standard shape
         // incompatible with apiFetch (which expects an array or {data:[]}), so
         // we use a direct fetch here.
-        const response = await fetch(`/api/backend/api/events/symposiums/${symposiumId}`, {
+        const response = await fetch(`${BACKEND_URL}/api/events/symposiums/${symposiumId}`, {
           headers: { "Content-Type": "application/json", ...authHeaders },
         });
         const payload = (await response.json()) as {
@@ -391,7 +392,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   const handleDeleteEvent = async () => {
     if (!selectedSymposiumId) return;
     const selectedEvent = symposiumOptions.find((option) => option.id === selectedSymposiumId);
-    if (!window.confirm(`Delete event "${selectedEvent?.name ?? selectedSymposiumId}"?`)) return;
+    if (!(await confirmDialog(`Delete event "${selectedEvent?.name ?? selectedSymposiumId}"?`, "Delete event"))) return;
 
     setIsDeletingSymposium(true);
     setSymposiumEditMessage(null);
@@ -491,7 +492,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   };
 
   const handleDeleteDepartment = async (department: DepartmentRecord) => {
-    const confirmed = window.confirm(`Delete department "${department.department_name}"?`);
+    const confirmed = await confirmDialog(`Delete department "${department.department_name}"?`, "Delete department");
     if (!confirmed) return;
 
     setDeletingDepartmentId(department.id);

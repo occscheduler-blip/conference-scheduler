@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { apiFetch } from "./api";
+import { apiFetch, BACKEND_URL } from "./api";
 import type {
   ClassRecord,
   DepartmentRecord,
@@ -96,7 +96,7 @@ export async function fetchSymposiumSchedule(
 
   // 1. Symposium detail — non-standard shape ({ symposium, timeframes }) so
   //    we use raw fetch rather than apiFetch's list normalization.
-  const symRes = await fetch(`/api/backend/api/events/symposiums/${symposiumId}`, { headers });
+  const symRes = await fetch(`${BACKEND_URL}/api/events/symposiums/${symposiumId}`, { headers });
   const symPayload = (await symRes.json().catch(() => ({}))) as {
     detail?: string;
     symposium?: SymposiumDetails;
