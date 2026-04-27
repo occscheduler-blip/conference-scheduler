@@ -82,3 +82,4 @@ def send_professor_notification(to_email: str, name: str, symposium_name: str, l
 
 def send_student_notification(to_email: str, name: str, symposium_name: str, login_url: str) -> None:
     _send(to_email, _STUDENT_SUBJECT, _STUDENT_BODY.format(name=name, symposium_name=symposium_name, login_url=login_url))
+

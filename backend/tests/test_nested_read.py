@@ -20,60 +20,7 @@ from app.supabase_io.nested_read import (
 )
 
 
-# ── Shared helpers ─────────────────────────────────────────────────────────
-
-TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
-
-
-def _seed_chain(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
-    """Create symposium → department → class (+ professor) → students."""
-    resp = client.post(
-        "/api/events/add_symposium",
-        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
-        headers=h,
-    )
-    sym_id = resp.json()["symposium_id"]
-
-    resp = client.post(
-        "/api/events/add_department",
-        json={
-            "symposium_id": sym_id,
-            "department_name": "CS",
-            "department_head_name": "Dr. Head",
-            "email": "head@hamilton.edu",
-        },
-        headers=h,
-    )
-    dept_id = resp.json()["department_id"]
-
-    resp = client.post(
-        "/api/events/add_class",
-        json={
-            "name": "CS101",
-            "department_id": dept_id,
-            "professors": [{"name": "Prof. Smith", "email": "smith@hamilton.edu"}],
-        },
-        headers=h,
-    )
-    class_id = resp.json()["class_id"]
-
-    client.post(
-        "/api/events/add_students",
-        json={
-            "class_id": class_id,
-            "students": [
-                {"name": "Alice", "email": "alice@hamilton.edu"},
-                {"name": "Bob", "email": "bob@hamilton.edu"},
-            ],
-        },
-        headers=h,
-    )
-
-    return {
-        "symposium_id": sym_id,
-        "department_id": dept_id,
-        "class_id": class_id,
-    }
+from tests.builders import TF_1, seed_chain as _seed_chain
 
 
 # ── parse_include (pure, no DB needed) ────────────────────────────────────

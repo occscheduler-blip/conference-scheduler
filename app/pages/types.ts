@@ -1,4 +1,4 @@
-export type AdminTab = "create" | "edit" | "records" | "admins" | "schedule";
+export type AdminTab = "create" | "edit" | "admins" | "schedule";
 export type DepartmentAction = "add" | "edit";
 // Tab state for the faculty/professor page
 export type FacultyTab = "availability" | "students";
@@ -42,7 +42,6 @@ export type DepartmentRecord = {
 // A class (course) linked to a department
 export type ClassRecord = {
   id: string;
-  name: string;
   department_id: string;
 };
 
@@ -51,11 +50,7 @@ export type PresentationRecord = {
   id: string;
   class_id: string;
   title: string;
-  minutes?: number;
-  buffer?: number;
   presenterNames: string[];
-  presenting_students?: StudentRecord[];
-  assigned_professors?: ProfessorRecord[];
   room: number | null;
   timeframe: Timeframe | null;
 };
@@ -149,19 +144,4 @@ export type SchedulePresentation = {
 export type StudentOption = {
   id: string;
   name: string;
-};
-
-export type StudentRecord = {
-  id: string;
-  name: string;
-  email: string;
-  class_id: string;
-  presentation_id?: string | null;
-};
-
-export type ProfessorRecord = {
-  id: string;
-  name: string;
-  email: string;
-  class_id: string;
 };

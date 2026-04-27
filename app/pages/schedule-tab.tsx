@@ -2,15 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
-  ClassRecord,
-  DepartmentRecord,
   SchedulePresentation,
   SymposiumOption,
   Timeframe,
 } from "./types";
 import {
   totalSlots,
-  formatTimeLabel,
   parseBackendDateTime,
   toBackendDateTime,
   dayKey,
@@ -24,6 +21,7 @@ import {
 } from "../lib/utils";
 import { apiFetch, apiGet, apiPost, apiPut } from "../lib/api";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
+import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 
 /** Convert a Date to a datetime-local input value (YYYY-MM-DDTHH:MM). */
 function toDatetimeLocal(d: Date): string {
@@ -32,23 +30,14 @@ function toDatetimeLocal(d: Date): string {
 }
 
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
-
-const SLOT_HEIGHT = 24;
-
-// Color palette for presentation blocks (cycles through)
-const BLOCK_COLORS = [
-  { bg: "#1635a7", text: "#fff" },
-  { bg: "#2e7d32", text: "#fff" },
-  { bg: "#c62828", text: "#fff" },
-  { bg: "#6a1b9a", text: "#fff" },
-  { bg: "#ef6c00", text: "#fff" },
-  { bg: "#00838f", text: "#fff" },
-];
-
-function getRoomLabel(roomNames: Array<string | null> | null | undefined, roomIndex: number): string {
-  const roomName = roomNames?.[roomIndex];
-  return typeof roomName === "string" && roomName.trim() ? roomName.trim() : `Room ${roomIndex + 1}`;
-}
+import {
+  DEPARTMENT_BASE_COLORS,
+  COLOR_SHADES,
+  rgbToHex,
+  getTextColor,
+  buildPresentationColorMap,
+} from "../lib/scheduleColors";
+import { ScheduleGrid, getRoomLabel, SLOT_HEIGHT, type GridBlock } from "../lib/ScheduleGrid";
 
 export default function ScheduleTab({
   token,
@@ -137,91 +126,34 @@ export default function ScheduleTab({
       setSchedulerMessage(null);
 
       try {
-        // Fetch symposium detail
-        const symposiumRes = await fetch(`/api/backend/api/events/symposiums/${symposiumId}`, {
-          headers: { "Content-Type": "application/json", ...authHeaders },
+        const schedule = await fetchSymposiumSchedule(symposiumId, {
+          mode: "draft",
+          includeProfessors: true,
+          authHeaders,
         });
-        const symposiumPayload = (await symposiumRes.json().catch(() => ({}))) as {
-          detail?: string;
-          symposium?: { id: string; name: string; rooms_available?: number | null; room_names?: Array<string | null> | null };
-          timeframes?: Timeframe[];
-        };
-        if (!symposiumRes.ok) throw new Error(symposiumPayload.detail ?? "Failed to load symposium.");
 
-        const symTimeframes = (symposiumPayload.timeframes ?? []).slice().sort((a, b) => {
-          return parseBackendDateTime(a.start_time).getTime() - parseBackendDateTime(b.start_time).getTime();
-        });
-        setSymposiumTimeframes(symTimeframes);
-        const parsedRooms = Number(symposiumPayload.symposium?.rooms_available ?? 1);
+        setSymposiumTimeframes(schedule.symposiumTimeframes);
+        const parsedRooms = Number(schedule.symposium?.rooms_available ?? 1);
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
-        setRoomNames(symposiumPayload.symposium?.room_names ?? []);
+        setRoomNames(schedule.symposium?.room_names ?? []);
 
-        // Fetch departments
-        let departmentRows: DepartmentRecord[] = [];
-        try {
-          departmentRows = await apiFetch<DepartmentRecord>(
-            `/api/events/departments?symposium_id=${encodeURIComponent(symposiumId)}`
-          );
-        } catch {
-          // continue with empty
-        }
-
-        if (departmentRows.length === 0) {
+        if (schedule.departments.length === 0) {
           setPresentations([]);
-          const days = Array.from(new Set(symTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time)))));
+          const days = Array.from(
+            new Set(schedule.symposiumTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time))))
+          );
           setSelectedDay(days[0] ?? "");
           return;
         }
 
-        // Bulk-fetch classes for all departments in one call
-        const departmentIdParam = departmentRows.map((d) => d.id).join(",");
-        let classRows: ClassRecord[] = [];
-        try {
-          classRows = await apiFetch<ClassRecord>(
-            `/api/events/classes?department_id=${encodeURIComponent(departmentIdParam)}`
-          );
-        } catch {
-          classRows = [];
-        }
-
         // Department lookup
-        const deptById = new Map(departmentRows.map((d) => [d.id, d]));
-        const deptIdByClassId = new Map(classRows.map((c) => [c.id, c.department_id]));
-
-        // Fetch presentations, students, and professors for all classes in parallel (3 calls total)
-        type RawPresentation = {
-          id?: string;
-          class_id?: string;
-          title?: string;
-          minutes?: number;
-          buffer?: number;
-          room?: number | null;
-          presenting_students?: Array<{ id?: string; student_id?: string; name?: string }>;
-          assigned_professors?: Array<{ id?: string; professor_id?: string; name?: string }>;
-        };
-        type RawStudent = { id?: string; name?: string };
-
-        type RawProfessor = { id?: string; name?: string; class_id?: string };
-
-        const classIdParam = classRows.map((row) => row.id).join(",");
-        const [rawPresentations, rawStudents, rawProfessors] = classIdParam
-          ? await Promise.all([
-              apiFetch<RawPresentation>(
-                `/api/events/presentations?class_id=${encodeURIComponent(classIdParam)}`
-              ).catch(() => [] as RawPresentation[]),
-              apiFetch<RawStudent>(
-                `/api/events/students?class_id=${encodeURIComponent(classIdParam)}`
-              ).catch(() => [] as RawStudent[]),
-              apiFetch<RawProfessor>(
-                `/api/events/professors?class_id=${encodeURIComponent(classIdParam)}`
-              ).catch(() => [] as RawProfessor[]),
-            ])
-          : [[] as RawPresentation[], [] as RawStudent[], [] as RawProfessor[]];
+        const deptById = new Map(schedule.departments.map((d) => [d.id, d]));
+        const deptIdByClassId = new Map(schedule.classes.map((c) => [c.id, c.department_id]));
 
         // Professor IDs grouped by class_id (all professors in a class are resources for all its presentations)
         const professorIdsByClass = new Map<string, string[]>();
         const personNameById = new Map<string, string>();
-        for (const prof of rawProfessors) {
+        for (const prof of schedule.professors) {
           const cid = prof.class_id ?? "";
           const pid = prof.id ?? "";
           if (cid && pid) {
@@ -234,27 +166,14 @@ export default function ScheduleTab({
         }
 
         const studentNameById = new Map(
-          rawStudents
+          schedule.students
             .filter((r): r is { id: string; name: string } => Boolean(r.id && r.name?.trim()))
             .map((r) => [normalizeId(r.id), r.name.trim()])
         );
 
-        // Bulk-fetch timeframes for all presentations in one call
-        const presentationIds = rawPresentations
-          .map((row) => row.id ?? "")
-          .filter((id) => id.length > 0);
-        let allPresentationTimeframes: Timeframe[] = [];
-        if (presentationIds.length > 0) {
-          try {
-            allPresentationTimeframes = await apiFetch<Timeframe>(
-              `/api/events/timeframes?linked_id=${encodeURIComponent(presentationIds.join(","))}`
-            );
-          } catch {
-            allPresentationTimeframes = [];
-          }
-        }
+        // Earliest timeframe wins per presentation
         const timeframeByPresentation = new Map<string, Timeframe>();
-        for (const tf of allPresentationTimeframes) {
+        for (const tf of schedule.presentationTimeframes) {
           const key = normalizeId(tf.linked_id ?? "");
           if (!key) continue;
           const existing = timeframeByPresentation.get(key);
@@ -267,7 +186,7 @@ export default function ScheduleTab({
           }
         }
 
-        const presentationRows: SchedulePresentation[] = rawPresentations
+        const presentationRows: SchedulePresentation[] = schedule.presentations
           .map((row) => {
             const presenterNames = (row.presenting_students ?? [])
               .map((s) => {
@@ -281,17 +200,9 @@ export default function ScheduleTab({
             const deptId = deptIdByClassId.get(row.class_id ?? "");
             const dept = deptId ? deptById.get(deptId) : undefined;
 
-            // Build resource IDs: assigned professors if present, otherwise class professors, plus presenting students.
+            // Build resource IDs: professors (via class) + presenting students
             const classId = row.class_id ?? "";
-            const assignedProfessorIds = (row.assigned_professors ?? [])
-              .map((prof) => {
-                const pid = normalizeId(prof.id ?? prof.professor_id ?? "");
-                const name = prof.name?.trim() ?? "";
-                if (pid && name) personNameById.set(pid, name);
-                return pid;
-              })
-              .filter((pid) => pid.length > 0);
-            const resourceIds = new Set<string>(assignedProfessorIds.length > 0 ? assignedProfessorIds : professorIdsByClass.get(classId) ?? []);
+            const resourceIds = new Set<string>(professorIdsByClass.get(classId) ?? []);
             for (const s of row.presenting_students ?? []) {
               const sid = normalizeId(s.id ?? s.student_id ?? "");
               if (sid) {
@@ -307,7 +218,7 @@ export default function ScheduleTab({
               class_id: row.class_id ?? "",
               minutes: row.minutes ?? 0,
               buffer: row.buffer ?? 0,
-              room: row.room ?? null,
+              room: row.temporary_room ?? null,
               timeframe: timeframeByPresentation.get(normalizeId(row.id ?? "")) ?? null,
               presenterNames: Array.from(new Set(presenterNames)),
               departmentName: dept?.department_name ?? "",
@@ -321,14 +232,8 @@ export default function ScheduleTab({
         for (const ids of professorIdsByClass.values()) {
           for (const pid of ids) profIdSet.add(pid);
         }
-        for (const row of rawPresentations) {
-          for (const prof of row.assigned_professors ?? []) {
-            const pid = normalizeId(prof.id ?? prof.professor_id ?? "");
-            if (pid) profIdSet.add(pid);
-          }
-        }
         const allResourceIds = new Set(profIdSet);
-        for (const row of rawStudents) {
+        for (const row of schedule.students) {
           const sid = normalizeId(row.id ?? "");
           if (sid) allResourceIds.add(sid);
         }
@@ -361,7 +266,9 @@ export default function ScheduleTab({
         setAllProfessorIds(profIdSet);
         setResourceAvailability(resAvailMap);
 
-        const days = Array.from(new Set(symTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time)))));
+        const days = Array.from(
+          new Set(schedule.symposiumTimeframes.map((tf) => dayKey(parseBackendDateTime(tf.start_time))))
+        );
         setSelectedDay((prev) => (days.includes(prev) ? prev : days[0] ?? ""));
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Unknown error";
@@ -411,8 +318,6 @@ export default function ScheduleTab({
 
   const minSlot = useMemo(() => (activeSlots.size > 0 ? Math.min(...activeSlots) : 0), [activeSlots]);
   const maxSlot = useMemo(() => (activeSlots.size > 0 ? Math.max(...activeSlots) + 1 : totalSlots), [activeSlots]);
-  const visibleSlotCount = maxSlot - minSlot;
-
   // Scheduled presentations for the selected day
   const scheduledForDay = useMemo(() => {
     return presentations.filter((p) => {
@@ -426,14 +331,26 @@ export default function ScheduleTab({
     return presentations.filter((p) => p.room === null || !p.timeframe);
   }, [presentations]);
 
-  // Color map by presentation id (consistent colors)
-  const colorMap = useMemo(() => {
-    const map = new Map<string, { bg: string; text: string }>();
-    presentations.forEach((p, i) => {
-      map.set(p.id, BLOCK_COLORS[i % BLOCK_COLORS.length]);
-    });
-    return map;
-  }, [presentations]);
+  // Color map by presentation id (department-based, consistent colors)
+  const colorMap = useMemo(() => buildPresentationColorMap(presentations), [presentations]);
+
+  // Blocks shaped for ScheduleGrid
+  const gridBlocks = useMemo<GridBlock[]>(() => {
+    const defaultColor = COLOR_SHADES[0][0];
+    return scheduledForDay
+      .filter((p): p is typeof p & { room: number; timeframe: NonNullable<typeof p.timeframe> } =>
+        p.room !== null && p.timeframe !== null
+      )
+      .map((p) => ({
+        id: p.id,
+        timeframe: p.timeframe,
+        roomIndex: p.room,
+        title: p.title,
+        presenterNames: p.presenterNames,
+        color: colorMap.get(p.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) },
+        durationMinutes: p.minutes,
+      }));
+  }, [scheduledForDay, colorMap]);
 
   // Grid ref for drag-and-drop coordinate calculations
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -640,6 +557,104 @@ export default function ScheduleTab({
     setEditingPresentation(null);
   };
 
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishMessage, setPublishMessage] = useState<string | null>(null);
+
+  const handlePublishSchedule = async () => {
+    if (!selectedSymposiumId) return;
+    if (!window.confirm("Publish this schedule? This will update the live schedule that attendees see.")) return;
+    setIsPublishing(true);
+    setPublishMessage(null);
+    try {
+      await apiPost("/api/events/publish_schedule", { symposium_id: selectedSymposiumId }, authHeaders);
+      setPublishMessage("Schedule published successfully.");
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      setPublishMessage(`Error: ${msg}`);
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const [exportOpen, setExportOpen] = useState(false);
+
+  const handleExportIcal = () => {
+    const scheduled = presentations.filter((p) => p.room !== null && p.timeframe);
+    if (scheduled.length === 0) return;
+
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const toIcalDate = (d: Date) =>
+      `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
+
+    const events = scheduled.map((p) => {
+      const start = toIcalDate(parseBackendDateTime(p.timeframe!.start_time));
+      const end = toIcalDate(parseBackendDateTime(p.timeframe!.end_time));
+      const room = getRoomLabel(roomNames, p.room!);
+      const presenters = p.presenterNames.join(", ") || "TBD";
+      const desc = `Presenters: ${presenters}\\nDepartment: ${p.departmentName}`;
+      return [
+        "BEGIN:VEVENT",
+        `DTSTART:${start}`,
+        `DTEND:${end}`,
+        `SUMMARY:${p.title}`,
+        `LOCATION:${room}`,
+        `DESCRIPTION:${desc}`,
+        "END:VEVENT",
+      ].join("\r\n");
+    });
+
+    const ical = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Conference Scheduler//EN",
+      "CALSCALE:GREGORIAN",
+      ...events,
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    const blob = new Blob([ical], { type: "text/calendar;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "schedule.ics";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportXlsx = async () => {
+    const scheduled = presentations.filter((p) => p.room !== null && p.timeframe);
+    if (scheduled.length === 0) return;
+
+    const XLSX = await import("xlsx");
+
+    const rows = scheduled
+      .slice()
+      .sort((a, b) => {
+        const ta = parseBackendDateTime(a.timeframe!.start_time).getTime();
+        const tb = parseBackendDateTime(b.timeframe!.start_time).getTime();
+        return ta !== tb ? ta - tb : (a.room ?? 0) - (b.room ?? 0);
+      })
+      .map((p) => {
+        const opts = { hour: "numeric", minute: "2-digit", timeZone: "UTC" } as const;
+        const start = parseBackendDateTime(p.timeframe!.start_time);
+        const end = parseBackendDateTime(p.timeframe!.end_time);
+        return {
+          Day: dayLabel(dayKey(start)),
+          "Start Time": start.toLocaleTimeString([], opts),
+          "End Time": end.toLocaleTimeString([], opts),
+          Room: getRoomLabel(roomNames, p.room!),
+          Title: p.title,
+          Presenters: p.presenterNames.join("; "),
+          Department: p.departmentName,
+        };
+      });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Schedule");
+    XLSX.writeFile(wb, "schedule.xlsx");
+  };
+
   const handleBulkSave = async () => {
     if (pendingChanges.size === 0 || !selectedSymposiumId) return;
 
@@ -709,9 +724,9 @@ export default function ScheduleTab({
         </select>
       </div>
 
-      {/* Generate Schedule button */}
+      {/* Generate / Publish Schedule buttons */}
       {selectedSymposiumId ? (
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <button
             type="button"
             onClick={() => handleRunScheduler()}
@@ -720,9 +735,56 @@ export default function ScheduleTab({
           >
             {isRunningScheduler ? "Generating..." : "Generate Schedule"}
           </button>
+          <button
+            type="button"
+            onClick={() => void handlePublishSchedule()}
+            disabled={isPublishing}
+            className="rounded-lg bg-[#1635a7] px-6 py-2.5 text-base font-semibold text-white transition hover:bg-[#0b2a8d] disabled:opacity-50"
+          >
+            {isPublishing ? "Publishing..." : "Publish Schedule"}
+          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setExportOpen((v) => !v)}
+              disabled={presentations.filter((p) => p.room !== null && p.timeframe).length === 0}
+              className="flex items-center gap-2 rounded-lg border border-[#1635a7] bg-white px-6 py-2.5 text-base font-semibold text-[#1635a7] transition hover:bg-[#eef2ff] disabled:opacity-50"
+            >
+              Export
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`h-4 w-4 transition ${exportOpen ? "rotate-180" : ""}`}>
+                <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+              </svg>
+            </button>
+            {exportOpen ? (
+              <>
+                <div className="fixed inset-0 z-20" onClick={() => setExportOpen(false)} />
+                <div className="absolute left-0 top-full z-30 mt-1 w-40 overflow-hidden rounded-lg border border-[#d8e2ff] bg-white shadow-lg">
+                  <button
+                    type="button"
+                    onClick={() => { setExportOpen(false); void handleExportXlsx(); }}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-[#111] hover:bg-[#eef2ff]"
+                  >
+                    Export as XLSX
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setExportOpen(false); handleExportIcal(); }}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-[#111] hover:bg-[#eef2ff]"
+                  >
+                    Export as iCal
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
           {schedulerMessage ? (
             <p className={`text-sm font-medium ${schedulerMessage.startsWith("Error") ? "text-[#9a1f1f]" : "text-[#1b6e2b]"}`}>
               {schedulerMessage}
+            </p>
+          ) : null}
+          {publishMessage ? (
+            <p className={`text-sm font-medium ${publishMessage.startsWith("Error") ? "text-[#9a1f1f]" : "text-[#1b6e2b]"}`}>
+              {publishMessage}
             </p>
           ) : null}
         </div>
@@ -942,211 +1004,79 @@ export default function ScheduleTab({
       {/* Schedule grid + unscheduled side panel */}
       {!isLoadingSchedule && selectedDay && selectedDay !== "unscheduled" && activeSlots.size > 0 ? (
         <div className="flex gap-3">
-        <div className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
-          <div
-            ref={gridRef}
-            className="grid"
-            style={{
-              gridTemplateColumns: `72px repeat(${roomsAvailable}, minmax(140px, 1fr))`,
-              gridTemplateRows: `auto repeat(${visibleSlotCount}, ${SLOT_HEIGHT}px)`,
-            }}
-          >
-            {/* Header row */}
-            <div
-              className="border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-xs font-bold uppercase text-[#2d3d7a]"
-              style={{ gridRow: 1, gridColumn: 1 }}
-            >
-              Time
-            </div>
-            {Array.from({ length: roomsAvailable }, (_, i) => (
-              <div
-                key={i}
-                className="whitespace-nowrap border-b border-r border-[#d8e2ff] bg-[#f0f4ff] px-2 py-2 text-center text-xs font-bold uppercase text-[#2d3d7a] last:border-r-0"
-                style={{ gridRow: 1, gridColumn: i + 2 }}
-              >
-                {getRoomLabel(roomNames, i)}
-              </div>
-            ))}
-
-            {/* Time slot rows (background cells) */}
-            {Array.from({ length: visibleSlotCount }, (_, i) => {
-              const slotIndex = minSlot + i;
-              const showLabel = slotIndex % 2 === 0;
-              const gridRow = i + 2; // +2 because header is row 1
-              return (
-                <div key={`time-${slotIndex}`} className="contents">
-                  <div
-                    className={`flex items-center justify-end border-b border-r border-[#e5e7eb] px-1 text-[11px] leading-none text-[#888] ${
-                      slotIndex % 4 === 0 ? "bg-[#f9fafb]" : "bg-white"
-                    }`}
-                    style={{ gridRow, gridColumn: 1 }}
-                  >
-                    {showLabel ? formatTimeLabel(slotIndex) : ""}
-                  </div>
-                  {Array.from({ length: roomsAvailable }, (_, roomIdx) => (
-                    <div
-                      key={roomIdx}
-                      className={`border-b border-r border-[#e5e7eb] last:border-r-0 ${
-                        slotIndex % 4 === 0 ? "bg-[#f9fafb]" : "bg-white"
-                      }`}
-                      style={{ gridRow, gridColumn: roomIdx + 2 }}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-
-            {/* Presentation blocks (placed via grid-row/grid-column) */}
-            {scheduledForDay.map((pres) => {
-              if (pres.room === null || !pres.timeframe) return null;
-              const start = parseBackendDateTime(pres.timeframe.start_time);
-              const end = parseBackendDateTime(pres.timeframe.end_time);
-              const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
-              const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
-              const startSlotRaw = (startMinutes - 9 * 60) / 15;
-              const endSlotRaw = (endMinutes - 9 * 60) / 15;
-
-              // Convert to grid row (1-indexed, +2 for header row offset)
-              const gridRowStart = Math.floor(startSlotRaw - minSlot) + 2;
-              const gridRowEnd = Math.ceil(endSlotRaw - minSlot) + 2;
-              const gridCol = pres.room + 2; // +2 for time column offset (col 1)
-
-              // Sub-slot positioning for non-15-minute-aligned times
-              const fracStart = (startSlotRaw - minSlot) - Math.floor(startSlotRaw - minSlot);
-              const verticalInset = 1;
-              const topOffset = fracStart * SLOT_HEIGHT + verticalInset;
-              const blockHeight = Math.max(8, (endSlotRaw - startSlotRaw) * SLOT_HEIGHT - verticalInset * 2);
-              const durationSlots = endSlotRaw - startSlotRaw;
-
-              const color = colorMap.get(pres.id) ?? BLOCK_COLORS[0];
-
-              const isBeingDragged = dragState?.presentation.id === pres.id;
-
-              return (
-                <div
-                  key={pres.id}
-                  onPointerDown={(e) => handleBlockPointerDown(e, pres)}
-                  className={`z-10 mx-[1px] overflow-hidden rounded-md px-1.5 py-0.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md ${isBeingDragged ? "opacity-30" : ""}`}
-                  style={{
-                    gridRow: `${gridRowStart} / ${gridRowEnd}`,
-                    gridColumn: gridCol,
-                    backgroundColor: color.bg,
-                    color: color.text,
-                    position: "relative",
-                    top: `${topOffset}px`,
-                    height: `${blockHeight}px`,
-                    alignSelf: "start",
-                    touchAction: "none",
-                    cursor: isDragging ? "grabbing" : "grab",
-                  }}
-                  title={`${pres.title} (${pres.minutes} min)\n${pres.presenterNames.join(", ")}`}
-                >
-                  <div className="truncate text-xs font-semibold leading-tight">{pres.title}</div>
-                  {durationSlots > 1 ? (
-                    <div className="truncate text-[10px] leading-tight opacity-80">
-                      {pres.presenterNames.join(", ") || "No presenters"}
-                    </div>
-                  ) : null}
-                  {durationSlots > 2 ? (
-                    <div className="truncate text-[10px] leading-tight opacity-60">
-                      {pres.minutes} min
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-
-            {/* Snap-target highlight during drag */}
-            {isDragging && dragState?.snapTarget ? (() => {
-              const { room, minuteInDay } = dragState.snapTarget;
-              const minuteFromDayStart = minuteInDay - 9 * 60;
-              const slotFloat = minuteFromDayStart / 15;
-              const relativeSlot = slotFloat - minSlot;
-              const durationSlots = dragState.presentation.minutes / 15;
-              const gridRowStart = Math.floor(relativeSlot) + 2;
-              const gridRowEnd = Math.ceil(relativeSlot + durationSlots) + 2;
-              const gridCol = room + 2;
-              const fracStart = relativeSlot - Math.floor(relativeSlot);
-              const topOffset = fracStart * SLOT_HEIGHT;
-              const blockHeight = durationSlots * SLOT_HEIGHT;
-              const conflict = dragState.conflict;
-              const isBlocked = conflict?.blocked === true;
-              const isWarning = conflict !== null && !conflict.blocked;
-
-              return (
-                <div
-                  style={{
-                    gridRow: `${gridRowStart} / ${gridRowEnd}`,
-                    gridColumn: gridCol,
-                    position: "relative",
-                    top: `${topOffset}px`,
-                    height: `${blockHeight}px`,
-                    alignSelf: "start",
-                    pointerEvents: "none",
-                  }}
-                  className={`z-20 m-[1px] rounded-md border-2 border-dashed ${
-                    isBlocked
-                      ? "border-[#c62828] bg-[#c62828]/10"
-                      : isWarning
-                        ? "border-[#e68a00] bg-[#e68a00]/10"
-                        : "border-[#2e7d32] bg-[#2e7d32]/10"
-                  }`}
-                >
-                  {conflict ? (
-                    <div className={`truncate px-1.5 py-0.5 text-[10px] font-semibold ${isBlocked ? "text-[#c62828]" : "text-[#b36b00]"}`}>
-                      {isWarning ? "Warning: " : ""}{conflict.message}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })() : null}
+          <div className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
+            <ScheduleGrid
+              roomsAvailable={roomsAvailable}
+              roomNames={roomNames}
+              minSlot={minSlot}
+              maxSlot={maxSlot}
+              blocks={gridBlocks}
+              gridRef={gridRef}
+              onBlockPointerDown={(e, id) => {
+                const pres = scheduledForDay.find((p) => p.id === id);
+                if (pres) handleBlockPointerDown(e, pres);
+              }}
+              draggingId={dragState?.presentation.id ?? null}
+              isDragging={isDragging}
+              snapTarget={
+                isDragging && dragState?.snapTarget
+                  ? {
+                      room: dragState.snapTarget.room,
+                      minuteInDay: dragState.snapTarget.minuteInDay,
+                      durationMinutes: dragState.presentation.minutes,
+                      conflict: dragState.conflict,
+                    }
+                  : null
+              }
+            />
           </div>
-        </div>
 
-        {/* Unscheduled side panel */}
-        {unscheduled.length > 0 ? (
-          <div className="max-h-[calc(100vh-180px)] w-56 shrink-0 overflow-hidden rounded-lg border border-[#d8e2ff] bg-white">
-            <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-              Unscheduled ({unscheduled.length})
-            </div>
-            <div className="h-full overflow-y-auto p-2">
-              <div className="space-y-1.5">
-                {unscheduled.map((pres) => {
-                  const color = colorMap.get(pres.id) ?? BLOCK_COLORS[0];
-                  return (
-                    <div
-                      key={pres.id}
-                      onPointerDown={(e) => handleUnscheduledPointerDown(e, pres)}
-                      className="rounded-md px-2 py-1.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md"
-                      style={{
-                        backgroundColor: color.bg,
-                        color: color.text,
-                        touchAction: "none",
-                        cursor: isDragging ? "grabbing" : "grab",
-                      }}
-                    >
-                      <div className="truncate text-xs font-semibold leading-tight">{pres.title}</div>
-                      <div className="truncate text-[10px] leading-tight opacity-80">
-                        {pres.minutes} min &mdash; {pres.departmentName || "No dept"}
-                      </div>
-                      {pres.presenterNames.length > 0 ? (
-                        <div className="truncate text-[10px] leading-tight opacity-60">
-                          {pres.presenterNames.join(", ")}
+          {/* Unscheduled side panel */}
+          {unscheduled.length > 0 ? (
+            <div className="max-h-[calc(100vh-180px)] w-56 shrink-0 overflow-hidden rounded-lg border border-[#d8e2ff] bg-white">
+              <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                Unscheduled ({unscheduled.length})
+              </div>
+              <div className="h-full overflow-y-auto p-2">
+                <div className="space-y-1.5">
+                  {unscheduled.map((pres) => {
+                    const defaultColor = COLOR_SHADES[0][0];
+                    const color = colorMap.get(pres.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) };
+                    return (
+                      <div
+                        key={pres.id}
+                        onPointerDown={(e) => handleUnscheduledPointerDown(e, pres)}
+                        className="rounded-md px-2 py-1.5 text-left shadow-sm transition hover:brightness-110 hover:shadow-md"
+                        style={{
+                          backgroundColor: color.bg,
+                          color: color.text,
+                          touchAction: "none",
+                          cursor: isDragging ? "grabbing" : "grab",
+                        }}
+                      >
+                        <div className="truncate text-xs font-semibold leading-tight">{pres.title}</div>
+                        <div className="truncate text-[10px] leading-tight opacity-80">
+                          {pres.minutes} min &mdash; {pres.departmentName || "No dept"}
                         </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                        {pres.presenterNames.length > 0 ? (
+                          <div className="truncate text-[10px] leading-tight opacity-60">
+                            {pres.presenterNames.join(", ")}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
         </div>
       ) : null}
 
       {/* Ghost block following cursor during drag */}
       {isDragging && dragState ? (() => {
-        const color = colorMap.get(dragState.presentation.id) ?? BLOCK_COLORS[0];
+        const defaultColor = COLOR_SHADES[0][0];
+        const color = colorMap.get(dragState.presentation.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) };
         const durationSlots = Math.ceil(dragState.presentation.minutes / 15);
         const blockHeight = durationSlots * SLOT_HEIGHT;
         const snap = dragState.snapTarget;

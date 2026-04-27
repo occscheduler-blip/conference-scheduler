@@ -143,15 +143,7 @@ def build_problem_from_symposium(
         title = str(presentation.get("title") or presentation_id)
         duration_minutes = int(presentation.get("minutes") or 0)
         class_id = str(presentation["class_id"])
-        assigned_professor_ids = [
-            str(professor["id"])
-            for professor in presentation.get("assigned_professors", [])
-            if professor.get("id")
-        ]
-        resource_ids: list[str] = assigned_professor_ids or list(professors_by_class.get(class_id, []))
-        for professor_id in assigned_professor_ids:
-            person_ids.add(professor_id)
-            professor_ids.add(professor_id)
+        resource_ids: list[str] = list(professors_by_class.get(class_id, []))
 
         for student in presentation.get("presenting_students", []):
             student_id = str(student["id"])
@@ -230,17 +222,18 @@ def build_problem_from_symposium(
 def _save_assignments(
     result: ScheduleResult,
     presentation_ids_to_reset: tuple[str, ...],
+    symposium_id: str,
 ) -> None:
     from app.supabase_io import delete, write
 
-    logger.info("Saving %d schedule assignments", len(result.assignments))
-    # Clear existing assignments for every presentation in the symposium so
+    logger.info("Saving %d schedule assignments to temporary tables", len(result.assignments))
+    # Clear existing draft assignments for every presentation in the symposium so
     # anything the solver leaves unscheduled is reflected in the DB/UI.
     presentation_ids = [UUID(pid) for pid in presentation_ids_to_reset]
     if presentation_ids:
-        delete.delete_timeframes(presentation_ids)
+        delete.delete_temporary_timeframes(presentation_ids)
         write.update_column_by_ids(
-            "presentations", "room", {pid: None for pid in presentation_ids}
+            "presentations", "temporary_room", {pid: None for pid in presentation_ids}
         )
 
     timeframe_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
@@ -251,15 +244,16 @@ def _save_assignments(
             "linked_id": UUID(assignment.presentation_id),
             "start_time": assignment.start.isoformat(),
             "end_time": assignment.end.isoformat(),
+            "symposium_id": UUID(symposium_id),
         })
         room_by_presentation[UUID(assignment.presentation_id)] = assignment.room_index
 
     if room_by_presentation:
-        write.update_column_by_ids("presentations", "room", room_by_presentation)
+        write.update_column_by_ids("presentations", "temporary_room", room_by_presentation)
 
     if timeframe_rows:
-        write.insert("timeframes", timeframe_rows)
-    logger.info("Schedule assignments saved successfully")
+        write.insert("temporary_timeframes", timeframe_rows)
+    logger.info("Draft schedule assignments saved successfully")
 
 
 def build_schedule_for_symposium(
@@ -286,6 +280,7 @@ def build_schedule_for_symposium(
         _save_assignments(
             result,
             tuple(p.id for p in problem.presentations),
+            str(symposium_id),
         )
     else:
         logger.warning("Scheduler did not find a solution: status=%s", result.status)

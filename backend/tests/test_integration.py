@@ -12,9 +12,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-
-TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
-TF_2 = {"start_time": "2026-04-21T13:00:00Z", "end_time": "2026-04-21T16:00:00Z"}
+from tests.builders import TF_1, TF_2
 
 
 # ── Symposium lifecycle ───────────────────────────────────────────────────

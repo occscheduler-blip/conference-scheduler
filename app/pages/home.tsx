@@ -13,6 +13,9 @@ import type {
 } from "./types";
 import { parseBackendDateTime, normalizeId, dayKey, dayLabel, timeLabel } from "../lib/utils";
 import { apiFetch } from "../lib/api";
+import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
+import { buildPresentationColorMap, COLOR_SHADES, rgbToHex, getTextColor } from "../lib/scheduleColors";
+import { ScheduleGrid, getRoomLabel, type GridBlock } from "../lib/ScheduleGrid";
 
 type ItineraryDetailItem = {
   presentation_id: string;
@@ -249,6 +252,25 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
           }
           const timeframeByLinkedId = new Map<string, Timeframe>();
           for (const tf of allPresentationTimeframes) {
+        const schedule = await fetchSymposiumSchedule(selectedSymposiumId, { mode: "published" });
+
+        setTimeframes(schedule.symposiumTimeframes);
+        const parsedRooms = Number(schedule.symposium?.rooms_available ?? 1);
+        setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
+        setRoomNames(schedule.symposium?.room_names ?? []);
+
+        if (schedule.departments.length > 0) {
+          setDepartments(schedule.departments);
+          setClasses(schedule.classes);
+
+          const studentNameById = new Map(
+            schedule.students
+              .map((row) => [normalizeId(row.id ?? ""), row.name?.trim() ?? ""] as const)
+              .filter(([id, name]) => id.length > 0 && name.length > 0)
+          );
+
+          const timeframeByLinkedId = new Map<string, Timeframe>();
+          for (const tf of schedule.presentationTimeframes) {
             const key = normalizeId(tf.linked_id ?? "");
             if (key && !timeframeByLinkedId.has(key)) {
               timeframeByLinkedId.set(key, tf);
@@ -256,6 +278,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
           }
 
           const presentationRows = rawPresentations
+          const presentationRows = schedule.presentations
             .map((row) => {
               const presenterNames = (row.presenting_students ?? [])
                 .map((student) => {
@@ -286,6 +309,14 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
         setSelectedDay(days[0] ?? "");
         setDayPage(0);
         if (list.length === 0) setMessage("No presentation times posted for this symposium yet.");
+        const days = Array.from(
+          new Set(schedule.symposiumTimeframes.map((item) => dayKey(parseBackendDateTime(item.start_time))))
+        );
+        setSelectedDay(days[0] ?? "");
+        setDayPage(0);
+        if (schedule.symposiumTimeframes.length === 0) {
+          setMessage("No presentation times posted for this symposium yet.");
+        }
       } catch (error) {
         const msg = error instanceof Error ? error.message : "Unknown error";
         setMessage(msg);
@@ -332,6 +363,8 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
             department,
             timeframe: tf,
             room,
+            roomIndex: presentation.room ?? null,
+            class_id: presentation.class_id,
             title: presentation.title || `${department.department_name} Presentation`,
             presenterNames: Array.isArray(presentation.presenterNames) ? presentation.presenterNames : [],
             scheduled,
@@ -345,6 +378,8 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
             department: DepartmentRecord;
             timeframe: Timeframe | null;
             room: string;
+            roomIndex: number | null;
+            class_id: string;
             title: string;
             presenterNames: string[];
             scheduled: boolean;
@@ -358,6 +393,8 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
         department,
         timeframe: null as Timeframe | null,
         room: "Room TBD",
+        roomIndex: null,
+        class_id: "",
         title: `${department.department_name} Presentation`,
         presenterNames: [],
         scheduled: false,
@@ -401,6 +438,54 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
     });
   }, [cards, departmentFilter, locationFilter, professorFilter, searchQuery, selectedDay]);
 
+  const colorMap = useMemo(
+    () =>
+      buildPresentationColorMap(
+        cards.map((card) => ({
+          id: card.presentationId,
+          departmentName: card.department.department_name,
+          class_id: card.class_id,
+        }))
+      ),
+    [cards]
+  );
+
+  // Calendar view: slot bounds derived from the selected day's symposium timeframes
+  const { calendarMinSlot, calendarMaxSlot } = useMemo(() => {
+    const activeSlots = new Set<number>();
+    for (const tf of visibleRows) {
+      const s = parseBackendDateTime(tf.start_time);
+      const e = parseBackendDateTime(tf.end_time);
+      const startSlot = Math.floor((s.getUTCHours() * 60 + s.getUTCMinutes() - 9 * 60) / 15);
+      const endSlot = Math.ceil((e.getUTCHours() * 60 + e.getUTCMinutes() - 9 * 60) / 15);
+      for (let i = startSlot; i < endSlot; i++) activeSlots.add(i);
+    }
+    return {
+      calendarMinSlot: activeSlots.size > 0 ? Math.min(...activeSlots) : 0,
+      calendarMaxSlot: activeSlots.size > 0 ? Math.max(...activeSlots) + 1 : 36,
+    };
+  }, [visibleRows]);
+
+  // Calendar view: scheduled cards shaped as GridBlocks
+  const calendarBlocks = useMemo<GridBlock[]>(() => {
+    const defaultColor = COLOR_SHADES[0][0];
+    return filteredCards
+      .filter(
+        (c): c is typeof c & { timeframe: NonNullable<typeof c.timeframe>; roomIndex: number } =>
+          c.timeframe !== null && c.roomIndex !== null && c.roomIndex >= 0 && c.roomIndex < roomsAvailable
+      )
+      .map((c) => ({
+        id: c.presentationId,
+        timeframe: c.timeframe,
+        roomIndex: c.roomIndex,
+        title: c.title,
+        presenterNames: c.presenterNames ?? [],
+        color: colorMap.get(c.presentationId) ?? {
+          bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b),
+          text: getTextColor(defaultColor),
+        },
+      }));
+  }, [filteredCards, colorMap, roomsAvailable]);
 
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-4 py-6">
@@ -808,6 +893,21 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
               </div>
             );
           })() : null}
+          {viewMode === "calendar" && selectedDay && visibleRows.length > 0 ? (
+            <div className="overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
+              <ScheduleGrid
+                roomsAvailable={roomsAvailable}
+                roomNames={roomNames}
+                minSlot={calendarMinSlot}
+                maxSlot={calendarMaxSlot}
+                blocks={calendarBlocks}
+                onBlockClick={(id) => {
+                  const card = filteredCards.find((c) => c.presentationId === id);
+                  if (card) setPopupCard({ title: card.title, timeframe: card.timeframe, room: card.room, presenterNames: card.presenterNames ?? [], department: card.department, presentationId: card.presentationId });
+                }}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
 

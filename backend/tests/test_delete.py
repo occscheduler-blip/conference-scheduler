@@ -9,85 +9,12 @@ from fastapi.testclient import TestClient
 from app.supabase_io import delete
 
 
-# ── Shared helpers ─────────────────────────────────────────────────────────
-
-TF_1 = {"start_time": "2026-04-20T09:00:00Z", "end_time": "2026-04-20T12:00:00Z"}
+from tests.builders import TF_1, seed_chain
 
 
-def _seed_full(client: TestClient, h: dict[str, str], db) -> dict[str, str]:
-    """Build: symposium → department → class (+ professor) → students → presentation + request."""
-    resp = client.post(
-        "/api/events/add_symposium",
-        json={"symposium_name": "Symp", "rooms_available": 1, "default_buffer": 0, "timeframes": [TF_1]},
-        headers=h,
-    )
-    sym_id = resp.json()["symposium_id"]
-
-    resp = client.post(
-        "/api/events/add_department",
-        json={
-            "symposium_id": sym_id,
-            "department_name": "CS",
-            "department_head_name": "Dr. H",
-            "email": "h@hamilton.edu",
-        },
-        headers=h,
-    )
-    dept_id = resp.json()["department_id"]
-
-    resp = client.post(
-        "/api/events/add_class",
-        json={
-            "name": "CS101",
-            "department_id": dept_id,
-            "professors": [{"name": "Prof A", "email": "a@hamilton.edu"}],
-        },
-        headers=h,
-    )
-    class_id = resp.json()["class_id"]
-
-    client.post(
-        "/api/events/add_students",
-        json={
-            "class_id": class_id,
-            "students": [
-                {"name": "Stu 1", "email": "s1@hamilton.edu"},
-                {"name": "Stu 2", "email": "s2@hamilton.edu"},
-            ],
-        },
-        headers=h,
-    )
-    student_ids = [str(r["id"]) for r in db.rows("students")]
-
-    resp = client.post(
-        "/api/events/add_presentation",
-        json={
-            "title": "Talk",
-            "class_id": class_id,
-            "minutes": 15,
-            "buffer": 0,
-            "presenting_students": student_ids,
-        },
-        headers=h,
-    )
-    pres_id = resp.json()["presentation_id"]
-
-    client.post(
-        "/api/events/add_request",
-        json={"name": "Prof P", "email": "p@hamilton.edu", "student_id": student_ids[0]},
-        headers=h,
-    )
-
-    prof_id = str(db.rows("professors")[0]["id"])
-
-    return {
-        "symposium_id": sym_id,
-        "department_id": dept_id,
-        "class_id": class_id,
-        "professor_id": prof_id,
-        "student_ids": student_ids,
-        "presentation_id": pres_id,
-    }
+def _seed_full(client, h, db):
+    """test_delete variant: full chain with presentation + request."""
+    return seed_chain(client, h, db, with_presentation=True, with_request=True)
 
 
 # ── Pure unit tests (no DB needed) ────────────────────────────────────────

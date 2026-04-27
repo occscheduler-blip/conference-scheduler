@@ -91,3 +91,64 @@ def h():
     from app.auth.jwt_utils import encode_jwt
     token = encode_jwt("00000000-0000-0000-0000-000000000001", "admin@hamilton.edu", "admin")
     return {"Authorization": f"Bearer {token}"}
+
+
+# ── Entity fixtures ────────────────────────────────────────────────────────
+# Thin wrappers over tests.builders for common hierarchies. Each fixture
+# returns the dict from the /api/events/add_* response plus any ids its
+# children need. Compose them by depending on the next level up.
+
+
+@pytest.fixture()
+def symposium(client, h):
+    from tests import builders
+    return builders.add_symposium(client, h)
+
+
+@pytest.fixture()
+def department(client, h, symposium):
+    from tests import builders
+    body = builders.add_department(client, h, symposium["symposium_id"])
+    return {**body, "symposium_id": symposium["symposium_id"]}
+
+
+@pytest.fixture()
+def classroom(client, h, department):
+    """A class (named `classroom` to avoid the Python builtin)."""
+    from tests import builders
+    body = builders.add_class(client, h, department["department_id"])
+    return {
+        **body,
+        "symposium_id": department["symposium_id"],
+        "department_id": department["department_id"],
+    }
+
+
+@pytest.fixture()
+def class_with_students(client, h, db, classroom):
+    from tests import builders
+    builders.add_students(client, h, classroom["class_id"], count=2)
+    student_ids = [str(r["id"]) for r in db.rows("students")]
+    return {**classroom, "student_ids": student_ids}
+
+
+@pytest.fixture()
+def presentation(client, h, class_with_students):
+    from tests import builders
+    body = builders.add_presentation(
+        client, h,
+        class_with_students["class_id"],
+        class_with_students["student_ids"],
+    )
+    return {**class_with_students, "presentation_id": body["presentation_id"]}
+
+
+@pytest.fixture()
+def full_chain(client, h, db):
+    """Everything: symposium → department → class → students → presentation → request."""
+    from tests import builders
+    return builders.seed_chain(
+        client, h, db,
+        with_presentation=True,
+        with_request=True,
+    )
