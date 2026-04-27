@@ -21,6 +21,7 @@ import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
 import ScheduleTab from "./schedule-tab";
+import ManageRecordsTab from "./manage-records-tab";
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
 
 function normalizeRoomNames(roomNames: Array<string | null> | null | undefined, roomCount: number): string[] {
@@ -108,6 +109,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
   const isCreateTab = activeTab === "create";
   const isEditTab = activeTab === "edit";
+  const isRecordsTab = activeTab === "records";
   const hasSelectedSymposium = Boolean(selectedSymposiumId.trim());
 
   const createCalendarDates = useMemo(
@@ -675,7 +677,6 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
         </header>
 
         <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-5">
-        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
           <button
             type="button"
             onClick={() => handleTabSwitch("create")}
