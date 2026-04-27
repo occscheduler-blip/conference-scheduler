@@ -82,6 +82,7 @@ def _eligible_starts(
 def _objective_weighted_sum(
     makespan: cp_model.IntVar,
     soft_availability_terms: list[cp_model.IntVar],
+    department_span_terms: list[cp_model.IntVar],
     class_span_terms: list[cp_model.IntVar],
     professor_span_terms: list[cp_model.IntVar],
     room_imbalance_terms: list[cp_model.IntVar],
@@ -89,16 +90,18 @@ def _objective_weighted_sum(
 ) -> cp_model.LinearExpr:
     # Fixed small weights — no horizon_slots scaling.
     # Avoids int64 overflow when horizon_slots is large (e.g. 3360 with 1-min slots).
-    # The exact ordering doesn't matter for correctness; the scheduling penalty
-    # term dominates so these weights only act as tie-breakers among feasible schedules.
+    # Department span weighted highest among grouping objectives so same-department
+    # presentations cluster first, then same-class presentations cluster within.
     _W_MAKESPAN = 3
     _W_AVAIL = 3
+    _W_DEPT = 4
     _W_CLASS = 2
     _W_PROF = 2
     _W_ROOM = 1
     return (
         makespan * _W_MAKESPAN
         + sum(soft_availability_terms) * _W_AVAIL
+        + sum(department_span_terms) * _W_DEPT
         + sum(class_span_terms) * _W_CLASS
         + sum(professor_span_terms) * _W_PROF
         + sum(room_imbalance_terms) * _W_ROOM
@@ -377,10 +380,13 @@ def solve_schedule(
         model.Add(eff_emax >= end_index - horizon_slots + horizon_slots * is_sched)
         eff_end_for_max[presentation.id] = eff_emax
 
-    # Group presentations by class and enforce same-room constraint.
+    # Group presentations by department, class, and resource.
+    presentations_by_department: dict[str, list[PresentationInput]] = defaultdict(list)
     presentations_by_class: dict[str, list[PresentationInput]] = defaultdict(list)
     presentations_by_resource: dict[str, list[PresentationInput]] = defaultdict(list)
     for presentation in schedulable_presentations:
+        if presentation.department_id:
+            presentations_by_department[presentation.department_id].append(presentation)
         if presentation.class_id:
             presentations_by_class[presentation.class_id].append(presentation)
         for resource_id in presentation.resource_ids:
@@ -580,6 +586,32 @@ def solve_schedule(
         )
         soft_availability_terms.append(total_soft_penalty)
 
+    department_span_terms: list[cp_model.IntVar] = []
+    if problem.constraints.minimize_department_span != "off":
+        for dept_id, dept_presentations in presentations_by_department.items():
+            if len(dept_presentations) < 2:
+                continue
+            dept_start = model.NewIntVar(0, horizon_slots, f"dept_start_{dept_id}")
+            dept_end = model.NewIntVar(0, horizon_slots, f"dept_end_{dept_id}")
+            dept_span = model.NewIntVar(0, horizon_slots, f"dept_span_{dept_id}")
+            model.AddMinEquality(
+                dept_start,
+                [eff_start_for_min[p.id] for p in dept_presentations],
+            )
+            model.AddMaxEquality(
+                dept_end,
+                [eff_end_for_max[p.id] for p in dept_presentations],
+            )
+            model.Add(dept_span >= dept_end - dept_start)
+            if problem.constraints.minimize_department_span == "hard":
+                total_duration_slots = sum(
+                    _slot_count(p.duration_minutes, problem.slot_minutes)
+                    for p in dept_presentations
+                )
+                model.Add(dept_span <= total_duration_slots)
+            else:
+                department_span_terms.append(dept_span)
+
     class_span_terms: list[cp_model.IntVar] = []
     if problem.constraints.minimize_class_span != "off":
         for class_id, class_presentations in presentations_by_class.items():
@@ -685,6 +717,7 @@ def solve_schedule(
         _objective_weighted_sum(
             makespan=makespan_for_objective,
             soft_availability_terms=soft_availability_terms,
+            department_span_terms=department_span_terms,
             class_span_terms=class_span_terms,
             professor_span_terms=professor_span_terms,
             room_imbalance_terms=room_imbalance_terms,
@@ -708,6 +741,7 @@ def solve_schedule(
     _max_quality = (
         horizon_slots * 3  # makespan × _W_MAKESPAN
         + n_schedulable * max(len(soft_resource_windows), 1) * 3  # soft_avail × _W_AVAIL
+        + len(department_span_terms) * horizon_slots * 4  # dept_span × _W_DEPT
         + len(class_span_terms) * horizon_slots * 2  # class_span × _W_CLASS
         + len(professor_span_terms) * horizon_slots * 2  # prof_span × _W_PROF
         + n_schedulable * 1  # room_imbalance × _W_ROOM

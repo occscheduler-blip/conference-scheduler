@@ -113,6 +113,11 @@ def build_problem_from_symposium(
         logger.info("[setup-timing] get_classes: %.3fs", time.perf_counter() - t)
         classes = list(getattr(classes_resp, "data", None) or [])
     class_ids = [UUID(str(row["id"])) for row in classes if row.get("id")]
+    class_to_department: dict[str, str] = {
+        str(row["id"]): str(row["department_id"])
+        for row in classes
+        if row.get("id") and row.get("department_id")
+    }
 
     professors = []
     presentations = []
@@ -158,6 +163,7 @@ def build_problem_from_symposium(
                 duration_minutes=duration_minutes,
                 buffer_minutes=int(presentation["buffer"] if presentation.get("buffer") is not None else symposium_default_buffer),
                 class_id=class_id,
+                department_id=class_to_department.get(class_id, ""),
                 resource_ids=tuple(dict.fromkeys(resource_ids)),
             )
         )
