@@ -1,6 +1,8 @@
 import { toMessage } from "./utils";
 
-const BACKEND_URL = "/api/backend";
+export const BACKEND_URL = (
+  process.env.NEXT_PUBLIC_BACKEND_URL ?? "/api/backend"
+).replace(/\/+$/, "");
 
 type ApiPayload<T> = { detail?: unknown; data?: T[] } | T[];
 

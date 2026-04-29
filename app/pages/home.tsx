@@ -11,7 +11,7 @@ import type {
   Timeframe,
 } from "./types";
 import { parseBackendDateTime, normalizeId, dayKey, dayLabel, timeLabel } from "../lib/utils";
-import { apiFetch } from "../lib/api";
+import { apiFetch, BACKEND_URL } from "../lib/api";
 import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 import { buildPresentationColorMap, COLOR_SHADES, rgbToHex, getTextColor } from "../lib/scheduleColors";
 import { ScheduleGrid, getRoomLabel, type GridBlock } from "../lib/ScheduleGrid";
@@ -58,7 +58,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
   // Load itinerary from DB on mount
   useEffect(() => {
     if (!attendeeId || !authToken) return;
-    fetch(`/api/backend/api/auth/attendee/itinerary`, {
+    fetch(`${BACKEND_URL}/api/auth/attendee/itinerary`, {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
     })
       .then((r) => r.json())
@@ -79,7 +79,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
     });
     // Persist to DB
     const method = isBookmarked ? "DELETE" : "POST";
-    fetch(`/api/backend/api/auth/attendee/itinerary/${presentationId}`, {
+    fetch(`${BACKEND_URL}/api/auth/attendee/itinerary/${presentationId}`, {
       method,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
     }).catch(() => {
@@ -97,7 +97,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
     setShowItinerary(true);
     setItineraryLoading(true);
     setItineraryDetails(null);
-    fetch(`/api/backend/api/auth/attendee/itinerary/details`, {
+    fetch(`${BACKEND_URL}/api/auth/attendee/itinerary/details`, {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
     })
       .then((r) => r.json())

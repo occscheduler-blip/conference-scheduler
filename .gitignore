@@ -43,4 +43,16 @@ yarn-error.log*
 next-env.d.ts
 
 .venv/
+
+# Tauri / desktop build artifacts
+/src-tauri/target/
+/src-tauri/binaries/
+/src-tauri/gen/
+
+# PyInstaller output
+/backend/build/
+/backend/dist/
+
+# build-script scratch dir (used to hide app/api during static export)
+/.desktop-build/
 node_modules

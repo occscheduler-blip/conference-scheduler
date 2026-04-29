@@ -49,6 +49,7 @@ type UseScheduleDragConfig = {
   gridRef: React.RefObject<HTMLDivElement | null>;
   onDrop: (presentationId: string, room: number, startTime: Date, endTime: Date) => void;
   onClickBlock: (pres: SchedulePresentation) => void;
+  onDropBlocked?: (message: string) => void;
 };
 
 function viewportToGridPosition(
@@ -108,7 +109,12 @@ export function formatMinuteTime(minuteInDay: number): string {
 export function useScheduleDrag(config: UseScheduleDragConfig) {
   const [dragState, setDragState] = useState<DragState | null>(null);
   const pendingRef = useRef<PendingDrag | null>(null);
+  const dragStateRef = useRef<DragState | null>(null);
   const isDragging = dragState !== null;
+
+  useEffect(() => {
+    dragStateRef.current = dragState;
+  }, [dragState]);
 
   // Stable refs for latest values (avoids re-attaching listeners)
   const configRef = useRef(config);
@@ -181,15 +187,18 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
         return;
       }
 
-      // Active drag — attempt drop
-      setDragState((prev) => {
-        if (!prev) return null;
-        if (prev.snapTarget && !prev.conflict?.blocked) {
+      // Active drag — attempt drop. Read state via flushSync-free pattern:
+      // capture current dragState before clearing, then run side-effects.
+      const prev = dragStateRef.current;
+      setDragState(null);
+      if (prev?.snapTarget) {
+        if (!prev.conflict?.blocked) {
           const endTime = new Date(prev.snapTarget.startTime.getTime() + prev.presentation.minutes * 60 * 1000);
           configRef.current.onDrop(prev.presentation.id, prev.snapTarget.room, prev.snapTarget.startTime, endTime);
+        } else if (prev.conflict?.blocked) {
+          configRef.current.onDropBlocked?.(prev.conflict.message);
         }
-        return null;
-      });
+      }
 
       pendingRef.current = null;
       document.body.style.userSelect = "";

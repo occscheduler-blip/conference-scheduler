@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Loading… — Conference Scheduler</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: linear-gradient(180deg, #f7f9ff 0%, #f4f4f4 55%, #f1f1f1 100%);
+        color: #0f33a8;
+      }
+      .wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        gap: 18px;
+        padding: 24px;
+        text-align: center;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        color: #0f33a8;
+        margin: 0;
+      }
+      p {
+        margin: 0;
+        font-size: 14px;
+        color: #2d3d7a;
+        max-width: 360px;
+      }
+      .spinner {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        border: 4px solid #d8e2ff;
+        border-top-color: #0f33a8;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .err {
+        color: #9a1f1f;
+        font-size: 13px;
+        max-width: 380px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="spinner" id="spinner"></div>
+      <h1>Starting Conference Scheduler</h1>
+      <p id="status">Initializing local services…</p>
+      <p class="err" id="err" style="display:none"></p>
+    </div>
+    <script>
+      const BACKEND = "http://127.0.0.1:17850";
+      const APP_URL = "/pages/?view=login";
+      const status = document.getElementById("status");
+      const err = document.getElementById("err");
+      const start = Date.now();
+      const TIMEOUT_MS = 60_000;
+
+      async function ping() {
+        try {
+          const res = await fetch(BACKEND + "/health", { cache: "no-store" });
+          if (res.ok) return true;
+        } catch (_) { /* not up yet */ }
+        return false;
+      }
+
+      function elapsed() {
+        return ((Date.now() - start) / 1000).toFixed(0);
+      }
+
+      (async function poll() {
+        while (Date.now() - start < TIMEOUT_MS) {
+          if (await ping()) {
+            status.textContent = "Ready. Loading interface…";
+            window.location.replace(APP_URL);
+            return;
+          }
+          status.textContent = "Initializing local services… (" + elapsed() + "s)";
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        document.getElementById("spinner").style.display = "none";
+        status.style.display = "none";
+        err.style.display = "block";
+        err.textContent =
+          "The backend didn't start within 60 seconds. Try quitting and reopening the app. " +
+          "If the problem persists, contact the developer.";
+      })();
+    </script>
+  </body>
+</html>

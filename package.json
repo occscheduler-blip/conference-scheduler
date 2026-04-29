@@ -7,9 +7,16 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "desktop:frontend:dev": "BUILD_TARGET=desktop NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:17850 next dev",
+    "desktop:frontend:build": "node scripts/build-desktop-frontend.mjs",
+    "desktop:backend:build": "cd backend && .venv/bin/pyinstaller --noconfirm desktop.spec && node ../scripts/copy-sidecar.mjs",
+    "desktop:dev": "npm run desktop:backend:build && tauri dev",
+    "desktop:build": "npm run desktop:backend:build && tauri build",
+    "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/plugin-dialog": "^2.7.0",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -17,6 +24,8 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/cli": "^2.10.1",
     "@testing-library/jest-dom": "^6",
     "@testing-library/react": "^16",
     "@types/node": "^20",

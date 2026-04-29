@@ -20,6 +20,7 @@ import {
   type ConflictContext,
 } from "../lib/utils";
 import { apiFetch, apiGet, apiPost, apiPut } from "../lib/api";
+import { confirmDialog, alertDialog } from "../lib/dialog";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
 import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 
@@ -370,7 +371,7 @@ export default function ScheduleTab({
   // Handlers
   const handleRunScheduler = async (skipConfirm: boolean = false) => {
     if (!selectedSymposiumId) return;
-    if (!skipConfirm && !window.confirm("This will regenerate the schedule. Existing assignments will be replaced. Continue?")) return;
+    if (!skipConfirm && !(await confirmDialog("This will regenerate the schedule. Existing assignments will be replaced. Continue?", "Regenerate schedule"))) return;
 
     setIsRunningScheduler(true);
     setSchedulerMessage("Starting scheduler...");
@@ -504,6 +505,9 @@ export default function ScheduleTab({
       gridRef,
       onDrop: handleDrop,
       onClickBlock: handleOpenEditModal,
+      onDropBlocked: (message) => {
+        void alertDialog(message, "Cannot move presentation");
+      },
     });
 
   const handleSaveAssignment = () => {
@@ -562,7 +566,7 @@ export default function ScheduleTab({
 
   const handlePublishSchedule = async () => {
     if (!selectedSymposiumId) return;
-    if (!window.confirm("Publish this schedule? This will update the live schedule that attendees see.")) return;
+    if (!(await confirmDialog("Publish this schedule? This will update the live schedule that attendees see.", "Publish schedule"))) return;
     setIsPublishing(true);
     setPublishMessage(null);
     try {
