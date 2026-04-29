@@ -251,6 +251,30 @@ class AddStudentsRequest(BaseModel):
     )
 
 
+class AddProfessorRequest(BaseModel):
+    class_id: UUID
+    name: str
+    email: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str) -> str:
+        name = name.strip()
+        if not name:
+            raise ValueError("Professor name cannot be empty")
+        return name
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, email: str) -> str:
+        email = email.strip().lower()
+        if not email:
+            raise ValueError("Email cannot be blank.")
+        if not email.endswith("@hamilton.edu"):
+            raise ValueError("Email must be a @hamilton.edu address.")
+        return email
+
+
 class AddPresentationRequest(BaseModel):
     title: str
     class_id: UUID
@@ -582,4 +606,3 @@ class EmailStudentsRequest(BaseModel):
 
 class PublishScheduleRequest(BaseModel):
     symposium_id: UUID
-

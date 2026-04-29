@@ -55,3 +55,4 @@ next-env.d.ts
 
 # build-script scratch dir (used to hide app/api during static export)
 /.desktop-build/
+node_modules

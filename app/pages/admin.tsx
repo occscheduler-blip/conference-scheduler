@@ -22,6 +22,7 @@ import { confirmDialog } from "../lib/dialog";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
 import ScheduleTab from "./schedule-tab";
+import ManageRecordsTab from "./manage-records-tab";
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
 
 function normalizeRoomNames(roomNames: Array<string | null> | null | undefined, roomCount: number): string[] {
@@ -109,6 +110,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
 
   const isCreateTab = activeTab === "create";
   const isEditTab = activeTab === "edit";
+  const isRecordsTab = activeTab === "records";
   const hasSelectedSymposium = Boolean(selectedSymposiumId.trim());
 
   const createCalendarDates = useMemo(
@@ -647,6 +649,9 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       resetAdminsTabState();
       return;
     }
+    if (tab === "records") {
+      return;
+    }
     if (tab === "schedule") {
       return;
     }
@@ -672,7 +677,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           </h1>
         </header>
 
-        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-5">
           <button
             type="button"
             onClick={() => handleTabSwitch("create")}
@@ -708,6 +713,17 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           </button>
           <button
             type="button"
+            onClick={() => handleTabSwitch("records")}
+            className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
+              isRecordsTab
+                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
+            }`}
+          >
+            Manage Records
+          </button>
+          <button
+            type="button"
             onClick={() => handleTabSwitch("admins")}
             className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
               activeTab === "admins"
@@ -723,6 +739,13 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
             <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Schedule Editor</h2>
             <ScheduleTab token={token} />
+          </section>
+        ) : null}
+
+        {isRecordsTab ? (
+          <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+            <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Manage Records</h2>
+            <ManageRecordsTab token={token} />
           </section>
         ) : null}
 

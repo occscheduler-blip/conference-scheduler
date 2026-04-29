@@ -9,8 +9,8 @@ class Symposium(BaseModel):
     created_at: datetime
     name: str
     rooms_available: int
-    room_names: list[str | None] | None = None
     default_buffer: int
+    room_names: list[str | None] | None = None
 
 
 class Department(BaseModel):
@@ -47,8 +47,9 @@ class Presentation(BaseModel):
     title: str
     class_id: UUID
     minutes: int
-    buffer: int | None
-    room: int | None = None
+    buffer: int
+    start_time: datetime | None
+    end_time: datetime | None
 
 
 class Timeframe(BaseModel):

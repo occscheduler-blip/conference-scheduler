@@ -1,0 +1,3 @@
+module.exports=[30902,a=>{"use strict";var b=a.i(7997);function c({children:a}){return(0,b.jsx)("html",{lang:"en",children:(0,b.jsx)("body",{className:"antialiased",children:a})})}a.s(["default",()=>c,"metadata",0,{title:"Conference Scheduler",description:"Hamilton College conference and symposium scheduling application"}])},33290,a=>{"use strict";var b=a.i(30902);a.s([],20370),a.i(20370),a.s(["default",()=>b.default,"metadata",()=>b.metadata],33290)}];
+
+//# sourceMappingURL=app_6957c682._.js.map
