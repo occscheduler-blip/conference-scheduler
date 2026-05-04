@@ -86,9 +86,9 @@ export default function ScheduleTab({
   >(new Map());
   const [allProfessorIds, setAllProfessorIds] = useState<Set<string>>(new Set());
 
-  // Pending changes (batched saves)
+  // Pending changes (batched saves). null entry = pending unschedule.
   const [pendingChanges, setPendingChanges] = useState<
-    Map<string, { room: number; start_time: string; end_time: string }>
+    Map<string, { room: number; start_time: string; end_time: string } | null>
   >(new Map());
   const [isBulkSaving, setIsBulkSaving] = useState(false);
   const [bulkSaveMessage, setBulkSaveMessage] = useState<string | null>(null);
@@ -355,6 +355,8 @@ export default function ScheduleTab({
 
   // Grid ref for drag-and-drop coordinate calculations
   const gridRef = useRef<HTMLDivElement | null>(null);
+  // Unscheduled panel ref — drop target for unscheduling presentations
+  const unscheduledPanelRef = useRef<HTMLDivElement | null>(null);
 
   // Conflict context for constraint checking (shared by drag hook + edit modal)
   const conflictContext: ConflictContext = useMemo(() => ({
@@ -495,6 +497,26 @@ export default function ScheduleTab({
     [],
   );
 
+  const handleDropUnscheduled = useCallback(
+    (presId: string) => {
+      setPendingChanges((prev) => {
+        const next = new Map(prev);
+        next.set(presId, null);
+        return next;
+      });
+
+      setPresentations((prev) =>
+        prev.map((p) =>
+          p.id === presId
+            ? { ...p, room: null, timeframe: null }
+            : p
+        )
+      );
+      setBulkSaveMessage(null);
+    },
+    [],
+  );
+
   const { dragState, isDragging, handleBlockPointerDown, handleUnscheduledPointerDown } =
     useScheduleDrag({
       roomsAvailable,
@@ -503,7 +525,9 @@ export default function ScheduleTab({
       selectedDay,
       conflictContext,
       gridRef,
+      unscheduledPanelRef,
       onDrop: handleDrop,
+      onDropUnscheduled: handleDropUnscheduled,
       onClickBlock: handleOpenEditModal,
       onDropBlocked: (message) => {
         void alertDialog(message, "Cannot move presentation");
@@ -665,21 +689,35 @@ export default function ScheduleTab({
     setIsBulkSaving(true);
     setBulkSaveMessage(null);
     try {
-      const assignments = Array.from(pendingChanges.entries()).map(([presId, change]) => ({
-        presentation_id: presId,
-        room: change.room,
-        start_time: change.start_time,
-        end_time: change.end_time,
-      }));
+      const assignments: Array<{
+        presentation_id: string;
+        room: number;
+        start_time: string;
+        end_time: string;
+      }> = [];
+      const unscheduled_presentation_ids: string[] = [];
+      for (const [presId, change] of pendingChanges.entries()) {
+        if (change === null) {
+          unscheduled_presentation_ids.push(presId);
+        } else {
+          assignments.push({
+            presentation_id: presId,
+            room: change.room,
+            start_time: change.start_time,
+            end_time: change.end_time,
+          });
+        }
+      }
 
       await apiPut(
         "/api/events/bulk_update_schedule_assignments",
-        { symposium_id: selectedSymposiumId, assignments },
+        { symposium_id: selectedSymposiumId, assignments, unscheduled_presentation_ids },
         authHeaders
       );
 
+      const total = assignments.length + unscheduled_presentation_ids.length;
       setPendingChanges(new Map());
-      setBulkSaveMessage(`Saved ${assignments.length} assignment(s).`);
+      setBulkSaveMessage(`Saved ${total} change${total !== 1 ? "s" : ""}.`);
       await fetchScheduleData(selectedSymposiumId);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
@@ -1035,13 +1073,23 @@ export default function ScheduleTab({
             />
           </div>
 
-          {/* Unscheduled side panel */}
-          {unscheduled.length > 0 ? (
-            <div className="max-h-[calc(100vh-180px)] w-56 shrink-0 overflow-hidden rounded-lg border border-[#d8e2ff] bg-white">
-              <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                Unscheduled ({unscheduled.length})
-              </div>
-              <div className="h-full overflow-y-auto p-2">
+          {/* Unscheduled side panel — always rendered so admins can drag presentations
+              into it to switch days. */}
+          <div
+            ref={unscheduledPanelRef}
+            className={`max-h-[calc(100vh-180px)] w-56 shrink-0 overflow-hidden rounded-lg border bg-white transition ${
+              isDragging && dragState && !dragState.fromUnscheduled
+                ? dragState.overUnscheduled
+                  ? "border-[#1635a7] ring-2 ring-[#1635a7]"
+                  : "border-dashed border-[#1635a7]"
+                : "border-[#d8e2ff]"
+            }`}
+          >
+            <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+              Unscheduled ({unscheduled.length})
+            </div>
+            <div className="h-full overflow-y-auto p-2">
+              {unscheduled.length > 0 ? (
                 <div className="space-y-1.5">
                   {unscheduled.map((pres) => {
                     const defaultColor = COLOR_SHADES[0][0];
@@ -1071,9 +1119,13 @@ export default function ScheduleTab({
                     );
                   })}
                 </div>
-              </div>
+              ) : (
+                <p className="px-1 py-2 text-center text-[11px] leading-tight text-[#888]">
+                  Drag a presentation here to unschedule it.
+                </p>
+              )}
             </div>
-          ) : null}
+          </div>
         </div>
       ) : null}
 

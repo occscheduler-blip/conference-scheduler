@@ -12,9 +12,15 @@ import type {
   StudentRecord,
   SymposiumOption,
 } from "./types";
+import AvailabilityEditor from "./availability-editor";
 
 type RecordSection = "classes" | "professors" | "students" | "presentations";
 type FormMode = "add" | "edit";
+type AvailabilityTarget = {
+  linkedId: string;
+  entityName: string;
+  entityKind: "Professor" | "Student";
+};
 
 const buttonClass =
   "rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60";
@@ -78,12 +84,22 @@ export default function ManageRecordsTab({ token }: { token: string }) {
   const [presentationProfessorIdsState, setPresentationProfessorIdsState] = useState<string[]>([]);
   const [emailStudentsAfterPresentationAdd, setEmailStudentsAfterPresentationAdd] = useState(true);
 
+  const [availabilityTarget, setAvailabilityTarget] = useState<AvailabilityTarget | null>(null);
+
   const selectedDepartment = departments.find((department) => department.id === selectedDepartmentId);
   const selectedClass = classes.find((classRecord) => classRecord.id === selectedClassId);
 
   const showMessage = (text: string, kind: "success" | "error") => {
     setMessage(text);
     setMessageKind(kind);
+  };
+
+  const openAvailability = (target: AvailabilityTarget) => {
+    if (!selectedSymposiumId) {
+      showMessage("Select a symposium first.", "error");
+      return;
+    }
+    setAvailabilityTarget(target);
   };
 
   const resetClassForm = () => {
@@ -553,6 +569,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
                   <p className="text-xs text-[#555]">{professor.email}</p>
                 </div>
                 <div className="flex gap-2">
+                  <button type="button" className={secondaryButtonClass} onClick={() => openAvailability({ linkedId: professor.id, entityName: professor.name, entityKind: "Professor" })}>Availability</button>
                   <button type="button" className={secondaryButtonClass} onClick={() => {
                     setProfessorMode("edit");
                     setProfessorId(professor.id);
@@ -594,6 +611,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
                   <p className="text-xs text-[#555]">{student.email}</p>
                 </div>
                 <div className="flex gap-2">
+                  <button type="button" className={secondaryButtonClass} onClick={() => openAvailability({ linkedId: student.id, entityName: student.name, entityKind: "Student" })}>Availability</button>
                   <button type="button" className={secondaryButtonClass} onClick={() => {
                     setStudentMode("edit");
                     setStudentId(student.id);
@@ -699,6 +717,17 @@ export default function ManageRecordsTab({ token }: { token: string }) {
             ))}
           </div>
         </section>
+      ) : null}
+
+      {availabilityTarget ? (
+        <AvailabilityEditor
+          token={token}
+          symposiumId={selectedSymposiumId}
+          linkedId={availabilityTarget.linkedId}
+          entityName={availabilityTarget.entityName}
+          entityKind={availabilityTarget.entityKind}
+          onClose={() => setAvailabilityTarget(null)}
+        />
       ) : null}
     </div>
   );
