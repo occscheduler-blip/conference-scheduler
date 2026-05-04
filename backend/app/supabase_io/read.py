@@ -141,6 +141,75 @@ def get_timeframes(linked_id: UUID | list[UUID] | None = None) -> APIResponse:
     return query.execute()
 
 
+def _first_row(resp: APIResponse) -> dict[str, Any] | None:
+    rows = cast(list[dict[str, Any]], resp.data or [])
+    return rows[0] if rows else None
+
+
+def resolve_symposium_for_linked(linked_id: str | UUID) -> str | None:
+    """Resolve a polymorphic linked_id to its owning symposium id.
+
+    Accepts the id of a symposium, department, class, professor, student,
+    or presentation and walks the FK chain back to the symposium so the
+    caller can take a per-symposium advisory lock.
+    """
+    s = str(linked_id)
+    if _first_row(supabase.table("symposiums").select("id").eq("id", s).limit(1).execute()):
+        return s
+    row = _first_row(
+        supabase.table("departments").select("symposium_id").eq("id", s).limit(1).execute()
+    )
+    if row is not None:
+        sym = row.get("symposium_id")
+        return str(sym) if sym else None
+    row = _first_row(
+        supabase.table("classes").select("department_id").eq("id", s).limit(1).execute()
+    )
+    if row is not None:
+        dept_id = row.get("department_id")
+        return _symposium_for_department(str(dept_id)) if dept_id else None
+    for table in ("professors", "students", "presentations"):
+        row = _first_row(
+            supabase.table(table).select("class_id").eq("id", s).limit(1).execute()
+        )
+        if row is not None:
+            class_id = row.get("class_id")
+            if not class_id:
+                return None
+            return _symposium_for_class(str(class_id))
+    return None
+
+
+def _symposium_for_department(department_id: str) -> str | None:
+    row = _first_row(
+        supabase.table("departments")
+        .select("symposium_id")
+        .eq("id", department_id)
+        .limit(1)
+        .execute()
+    )
+    if row is None:
+        return None
+    sym = row.get("symposium_id")
+    return str(sym) if sym else None
+
+
+def _symposium_for_class(class_id: str) -> str | None:
+    row = _first_row(
+        supabase.table("classes")
+        .select("department_id")
+        .eq("id", class_id)
+        .limit(1)
+        .execute()
+    )
+    if row is None:
+        return None
+    dept_id = row.get("department_id")
+    if not dept_id:
+        return None
+    return _symposium_for_department(str(dept_id))
+
+
 def get_requests(student_id: UUID | list[UUID] | None = None) -> APIResponse:
     query = supabase.table("requests").select("*")
 

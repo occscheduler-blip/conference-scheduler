@@ -144,6 +144,7 @@ class UpdateDepartmentRequest(BaseModel):
     department_name: str
     department_head_name: str
     email: str
+    expected_updated_at: datetime | None = None
 
     @field_validator("department_name")
     @classmethod
@@ -368,6 +369,7 @@ class UpdateStudentRequest(BaseModel):
     email: str
     class_id: UUID
     presentation_id: UUID
+    expected_updated_at: datetime | None = None
 
     @field_validator("name")
     @classmethod
@@ -393,6 +395,7 @@ class UpdateProfessorRequest(BaseModel):
     name: str
     email: str
     class_id: UUID
+    expected_updated_at: datetime | None = None
 
     @field_validator("name")
     @classmethod
@@ -417,6 +420,7 @@ class UpdateClassRequest(BaseModel):
     class_id: UUID
     name: str
     department_id: UUID
+    expected_updated_at: datetime | None = None
 
     @field_validator("name")
     @classmethod
@@ -434,6 +438,7 @@ class UpdateSymposiumRequest(BaseModel):
     room_names: list[str | None] | None = None
     default_buffer: int
     timeframes: list[TimeframeWindow]
+    expected_updated_at: datetime | None = None
 
     @field_validator("symposium_name")
     @classmethod
@@ -560,6 +565,7 @@ class UpdatePresentationRequest(BaseModel):
     buffer: int
     room: int | None = None
     presenting_students: list[UUID]
+    expected_updated_at: datetime | None = None
 
     @field_validator("title")
     @classmethod

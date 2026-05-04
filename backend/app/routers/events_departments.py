@@ -10,12 +10,14 @@ import app.supabase_io.supabase_schemas as supabase_schemas
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
 from app.routers.events_helpers import (
+    _checked_update,
     _normalize_counts,
     _parse_uuid_list,
     _sum_counts,
 )
 from app.supabase_io import delete, read, write
 from app.supabase_io.client import supabase
+from app.supabase_io.locks import maybe_symposium_lock
 from app.supabase_io.nested_read import (
     CLASS_CHILDREN,
     DEPARTMENT_ALLOWS,
@@ -69,7 +71,7 @@ def add_department(
 @router.put("/update_department")
 def update_department(
     payload: request_schemas.UpdateDepartmentRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         logger.info("update_department: department_id=%s", payload.department_id)
@@ -78,15 +80,13 @@ def update_department(
             "department_head_name": payload.department_head_name,
             "email": payload.email,
         }
-        update_resp = (
-            supabase.table("departments")
-            .update(update_payload)
-            .eq("id", str(payload.department_id))
-            .execute()
-        )
         records_updated = {
-            "departments": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
+            "departments": _checked_update(
+                "departments",
+                str(payload.department_id),
+                update_payload,
+                payload.expected_updated_at,
+                actor_id=claims.sub,
             )
         }
 
@@ -115,9 +115,11 @@ def delete_department(
 ) -> dict[str, str | int | dict[str, int]]:
     try:
         logger.info("delete_department: department_id=%s", department_id)
-        counts = _normalize_counts(
-            delete.delete_department(department_id), {"departments": 1}
-        )
+        sym_id = read.resolve_symposium_for_linked(department_id)
+        with maybe_symposium_lock(sym_id):
+            counts = _normalize_counts(
+                delete.delete_department(department_id), {"departments": 1}
+            )
         logger.info("delete_department complete: counts=%s", counts)
         return {
             "status": "deleted",

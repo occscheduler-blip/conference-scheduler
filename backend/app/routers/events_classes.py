@@ -10,6 +10,7 @@ import app.supabase_io.supabase_schemas as supabase_schemas
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
 from app.routers.events_helpers import (
+    _checked_update,
     _normalize_counts,
     _parse_uuid_list,
     _serialize_update_fields,
@@ -17,6 +18,7 @@ from app.routers.events_helpers import (
 )
 from app.supabase_io import delete, read, write
 from app.supabase_io.client import supabase
+from app.supabase_io.locks import maybe_symposium_lock
 from app.supabase_io.nested_read import (
     CLASS_ALLOWS,
     get_classes_nested,
@@ -82,23 +84,23 @@ def add_class(
 @router.put("/update_class")
 def update_class(
     payload: request_schemas.UpdateClassRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         logger.info("update_class: class_id=%s", payload.class_id)
         updates = payload.model_dump(
             exclude_none=True,
-            exclude={"class_id"},
+            exclude={"class_id", "expected_updated_at"},
         )
         update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("classes")
-            .update(update_payload)
-            .eq("id", str(payload.class_id))
-            .execute()
-        )
         records_updated = {
-            "classes": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+            "classes": _checked_update(
+                "classes",
+                str(payload.class_id),
+                update_payload,
+                payload.expected_updated_at,
+                actor_id=claims.sub,
+            )
         }
 
         return {
@@ -126,7 +128,9 @@ def delete_class(
 ) -> dict[str, str | int | dict[str, int]]:
     try:
         logger.info("delete_class: class_id=%s", class_id)
-        counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
+        sym_id = read.resolve_symposium_for_linked(class_id)
+        with maybe_symposium_lock(sym_id):
+            counts = _normalize_counts(delete.delete_class(class_id), {"classes": 1})
         logger.info("delete_class complete: counts=%s", counts)
         return {
             "status": "deleted",
