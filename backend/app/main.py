@@ -61,7 +61,7 @@ def log_startup() -> None:
     logger.info("Supabase URL configured: %s", bool(settings.supabase_url))
 
 
-@app.get("/health", tags=["health"])
+@app.api_route("/health", methods=["GET", "HEAD"], tags=["health"])
 def health_check() -> dict[str, str]:
     return {"status": "ok", "environment": settings.app_env}
 
