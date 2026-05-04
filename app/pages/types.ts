@@ -66,6 +66,7 @@ export type SymposiumDetails = {
   name: string;
   rooms_available?: number | null;
   room_names?: Array<string | null> | null;
+  default_buffer?: number | null;
 };
 
 // A department entry used in dropdowns/selects

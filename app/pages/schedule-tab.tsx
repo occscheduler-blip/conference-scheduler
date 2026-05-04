@@ -56,6 +56,8 @@ export default function ScheduleTab({
   const [symposiumTimeframes, setSymposiumTimeframes] = useState<Timeframe[]>([]);
   const [roomsAvailable, setRoomsAvailable] = useState(1);
   const [roomNames, setRoomNames] = useState<Array<string | null>>([]);
+  const [symposiumName, setSymposiumName] = useState("");
+  const [defaultBuffer, setDefaultBuffer] = useState(0);
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(false);
   const [selectedDay, setSelectedDay] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -63,7 +65,10 @@ export default function ScheduleTab({
   // Scheduler
   const [isRunningScheduler, setIsRunningScheduler] = useState(false);
   const [schedulerMessage, setSchedulerMessage] = useState<string | null>(null);
-  const [schedulerFailure, setSchedulerFailure] = useState<{ unscheduledCount: number } | null>(null);
+  const [schedulerFailure, setSchedulerFailure] = useState<{ unscheduledCount: number; diagnostics: string[]; suggestions: string[] } | null>(null);
+  const [debuggerFindings, setDebuggerFindings] = useState<string[] | null>(null);
+  const [debuggerRecommendations, setDebuggerRecommendations] = useState<Partial<Record<"professorAvailability" | "studentAvailability" | "sameClassSameRoom" | "roomConflicts" | "personConflicts", "off" | "soft" | "hard">>>({});
+  const [debugBestAssignments, setDebugBestAssignments] = useState<{ presentation_id: string; room_index: number; start: string; end: string }[]>([]);
 
   // Edit modal
   const [editingPresentation, setEditingPresentation] = useState<SchedulePresentation | null>(null);
@@ -136,6 +141,8 @@ export default function ScheduleTab({
         const parsedRooms = Number(schedule.symposium?.rooms_available ?? 1);
         setRoomsAvailable(Number.isFinite(parsedRooms) && parsedRooms > 0 ? Math.floor(parsedRooms) : 1);
         setRoomNames(schedule.symposium?.room_names ?? []);
+        setSymposiumName(schedule.symposium?.name ?? "");
+        setDefaultBuffer(Number(schedule.symposium?.default_buffer ?? 0));
 
         if (schedule.departments.length === 0) {
           setPresentations([]);
@@ -368,16 +375,20 @@ export default function ScheduleTab({
   }), [presentations, personNames, roomNames, constraints, symposiumTimeframes, resourceAvailability, allProfessorIds]);
 
   // Handlers
-  const handleRunScheduler = async (skipConfirm: boolean = false) => {
+  const handleRunScheduler = async (skipConfirm: boolean = false, debugMode: boolean = false) => {
     if (!selectedSymposiumId) return;
     if (!skipConfirm && !window.confirm("This will regenerate the schedule. Existing assignments will be replaced. Continue?")) return;
 
     setIsRunningScheduler(true);
-    setSchedulerMessage("Starting scheduler...");
+    setSchedulerMessage(debugMode ? "Running exhaustive constraint analysis (up to 10 minutes)..." : "Starting scheduler...");
     setSchedulerFailure(null);
+    setDebuggerFindings(null);
+    setDebuggerRecommendations({});
+    setDebugBestAssignments([]);
     try {
       const { raw: startRaw } = await apiPost("/api/events/schedule", {
         symposium_id: selectedSymposiumId,
+        debug_mode: debugMode,
         constraints: {
           room_conflicts: constraints.roomConflicts,
           person_conflicts: constraints.personConflicts,
@@ -394,10 +405,9 @@ export default function ScheduleTab({
       }, authHeaders);
 
       const jobId = startRaw.job_id as string;
-      setSchedulerMessage("Scheduler running...");
+      setSchedulerMessage(debugMode ? "Testing all constraint combinations... (up to 10 minutes)" : "Scheduler running...");
 
-      // Poll until the job completes or fails (5 minute timeout)
-      const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+      const POLL_TIMEOUT_MS = debugMode ? 10 * 60 * 1000 : 5 * 60 * 1000;
       const pollStart = Date.now();
       const raw = await new Promise<Record<string, unknown>>((resolve, reject) => {
         const poll = async () => {
@@ -428,6 +438,9 @@ export default function ScheduleTab({
       const status = raw.status as string;
       const assignments = (raw.assignments as unknown[]) ?? [];
       const unscheduledIds = (raw.unscheduled_presentations as unknown[]) ?? [];
+      const diagnostics = (raw.diagnostics as string[]) ?? [];
+      const suggestions = (raw.suggestions as string[]) ?? [];
+      const rawDebugBest = (raw.debug_best_assignments as { presentation_id: string; room_index: number; start: string; end: string }[]) ?? [];
       setSchedulerMessage(
         `Schedule ${status}. ${assignments.length} assigned, ${unscheduledIds.length} unscheduled.`
       );
@@ -435,13 +448,119 @@ export default function ScheduleTab({
       setBulkSaveMessage(null);
       await fetchScheduleData(selectedSymposiumId);
       if (unscheduledIds.length > 0) {
-        setSchedulerFailure({ unscheduledCount: unscheduledIds.length });
+        const hints = suggestions.filter((s) => s.startsWith("[Debugger]")).map((s) => s.replace(/^\[Debugger\]\s*/, ""));
+        const regularSuggestions = suggestions.filter((s) => !s.startsWith("[Debugger]"));
+        setSchedulerFailure({ unscheduledCount: unscheduledIds.length, diagnostics, suggestions: regularSuggestions });
+        if (hints.length > 0) {
+          setDebuggerFindings(hints);
+          if (rawDebugBest.length > 0) setDebugBestAssignments(rawDebugBest);
+          const recSigMap = [
+            { key: "professorAvailability" as const, signal: "professor availability" },
+            { key: "studentAvailability" as const, signal: "student availability" },
+            { key: "sameClassSameRoom" as const, signal: "same class" },
+            { key: "roomConflicts" as const, signal: "room conflicts" },
+            { key: "personConflicts" as const, signal: "person conflicts" },
+          ] as const;
+          const recs: Partial<Record<"professorAvailability" | "studentAvailability" | "sameClassSameRoom" | "roomConflicts" | "personConflicts", "off" | "soft" | "hard">> = {};
+          for (const hint of hints) {
+            const lower = hint.toLowerCase();
+            for (const { key, signal } of recSigMap) {
+              if (lower.includes(signal)) {
+                const match = lower.match(/\bto (soft|hard|off)\b/);
+                if (match) recs[key] = match[1] as "off" | "soft" | "hard";
+              }
+            }
+          }
+          setDebuggerRecommendations(recs);
+        }
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       setSchedulerMessage(`Error: ${msg}`);
     } finally {
       setIsRunningScheduler(false);
+    }
+  };
+
+  const [isAddingRoom, setIsAddingRoom] = useState(false);
+  const [pendingRooms, setPendingRooms] = useState<number | null>(null);
+  const [isApplyingRooms, setIsApplyingRooms] = useState(false);
+  const [pendingBuffer, setPendingBuffer] = useState<number | null>(null);
+  const [isApplyingBuffer, setIsApplyingBuffer] = useState(false);
+
+  const handleApplyBuffer = async () => {
+    if (!selectedSymposiumId || pendingBuffer === null) return;
+    setIsApplyingBuffer(true);
+    try {
+      await apiPut("/api/events/update_presentation_buffers", {
+        symposium_id: selectedSymposiumId,
+        buffer_minutes: pendingBuffer,
+      }, authHeaders);
+      await apiPut("/api/events/update_symposium", {
+        symposium_id: selectedSymposiumId,
+        symposium_name: symposiumName,
+        rooms_available: roomsAvailable,
+        room_names: roomNames,
+        default_buffer: pendingBuffer,
+        timeframes: symposiumTimeframes.map((tf) => ({
+          start_time: tf.start_time,
+          end_time: tf.end_time,
+        })),
+      }, authHeaders);
+      setDefaultBuffer(pendingBuffer);
+      setPendingBuffer(null);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Failed to update buffers.");
+    } finally {
+      setIsApplyingBuffer(false);
+    }
+  };
+
+  const handleApplyRooms = async () => {
+    if (!selectedSymposiumId || pendingRooms === null) return;
+    setIsApplyingRooms(true);
+    try {
+      await apiPut("/api/events/update_symposium", {
+        symposium_id: selectedSymposiumId,
+        symposium_name: symposiumName,
+        rooms_available: pendingRooms,
+        room_names: roomNames,
+        default_buffer: defaultBuffer,
+        timeframes: symposiumTimeframes.map((tf) => ({
+          start_time: tf.start_time,
+          end_time: tf.end_time,
+        })),
+      }, authHeaders);
+      setRoomsAvailable(pendingRooms);
+      setPendingRooms(null);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Failed to update rooms.");
+    } finally {
+      setIsApplyingRooms(false);
+    }
+  };
+
+  const handleAddRoom = async () => {
+    if (!selectedSymposiumId) return;
+    setIsAddingRoom(true);
+    try {
+      const newCount = roomsAvailable + 1;
+      await apiPut("/api/events/update_symposium", {
+        symposium_id: selectedSymposiumId,
+        symposium_name: symposiumName,
+        rooms_available: newCount,
+        room_names: roomNames,
+        default_buffer: defaultBuffer,
+        timeframes: symposiumTimeframes.map((tf) => ({
+          start_time: tf.start_time,
+          end_time: tf.end_time,
+        })),
+      }, authHeaders);
+      setRoomsAvailable(newCount);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Failed to add room.");
+    } finally {
+      setIsAddingRoom(false);
     }
   };
 
@@ -1271,88 +1390,311 @@ export default function ScheduleTab({
       ) : null}
 
       {/* Scheduler failure popup — appears whenever the scheduler leaves presentations unscheduled. */}
-      {schedulerFailure ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
-          onClick={() => setSchedulerFailure(null)}
-        >
-          <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border border-[#d6b676] bg-white shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="bg-[#9a1f1f] px-5 py-3 text-lg font-semibold text-white">
-              Schedule incomplete
-            </div>
-            <div className="space-y-4 px-5 py-4">
-              <p className="text-sm text-[#111]">
-                The scheduler could not place{" "}
-                <span className="font-bold">{schedulerFailure.unscheduledCount}</span>{" "}
-                presentation{schedulerFailure.unscheduledCount !== 1 ? "s" : ""}. Try relaxing one or more of the constraints below, then re-run.
-              </p>
+      {schedulerFailure ? (() => {
+        const titleById = new Map(presentations.map((p) => [p.id, p.title]));
+        const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+        const humanize = (msg: string): string => {
+          const match = msg.match(uuidPattern);
+          if (!match) return msg;
+          const title = titleById.get(match[0]);
+          return title ? msg.replace(match[0], `"${title}"`) : msg;
+        };
 
-              <div className="space-y-1">
-                {([
-                  { key: "professorAvailability" as const, label: "Professor availability" },
-                  { key: "studentAvailability" as const, label: "Student availability" },
-                  { key: "sameClassSameRoom" as const, label: "Same class \u2192 same room" },
-                ]).map(({ key, label }) => (
-                  <div
-                    key={key}
-                    className="flex items-center justify-between gap-2 rounded-md border border-[#e5eaff] px-3 py-2"
-                  >
-                    <span className="text-sm font-medium text-[#111]">{label}</span>
-                    <div className="flex shrink-0 overflow-hidden rounded-md border border-[#d0d8f0]">
-                      {(["off", "soft", "hard"] as const).map((mode) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => setConstraints((prev) => ({ ...prev, [key]: mode }))}
-                          className={`w-[42px] py-1 text-[10px] font-semibold transition ${
-                            constraints[key] === mode
-                              ? mode === "off"
-                                ? "bg-[#e0e0e0] text-[#555]"
-                                : mode === "soft"
-                                  ? "bg-[#fff3cd] text-[#856404]"
-                                  : "bg-[#1635a7] text-white"
-                              : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
-                          }`}
-                        >
-                          {mode === "off" ? "Off" : mode === "soft" ? "Soft" : "Hard"}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+        const allSuggestions = schedulerFailure.suggestions ?? [];
+        const regularSuggestions = allSuggestions;
+
+        const constraintMap = [
+          { key: "professorAvailability" as const, label: "Professor availability", signal: "professor availability" },
+          { key: "studentAvailability" as const, label: "Student availability", signal: "student availability" },
+          { key: "sameClassSameRoom" as const, label: "Same class \u2192 same room", signal: "same class" },
+        ] as const;
+
+        const renderToggle = (key: "professorAvailability" | "studentAvailability" | "sameClassSameRoom", label: string) => (
+          <div key={key} className="flex items-center justify-between gap-2 rounded-md border border-[#d0d8f0] bg-white px-3 py-1.5">
+            <span className="text-xs font-medium text-[#1a3580]">{label}</span>
+            <div className="flex shrink-0 overflow-hidden rounded border border-[#d0d8f0]">
+              {(["off", "soft", "hard"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setConstraints((prev) => ({ ...prev, [key]: mode }))}
+                  className={`w-[42px] py-1 text-[10px] font-semibold transition ${
+                    constraints[key] === mode
+                      ? mode === "off" ? "bg-[#e0e0e0] text-[#555]"
+                        : mode === "soft" ? "bg-[#fff3cd] text-[#856404]"
+                        : "bg-[#1635a7] text-white"
+                      : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
+                  }`}
+                >
+                  {mode === "off" ? "Off" : mode === "soft" ? "Soft" : "Hard"}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+
+        const needsBuffer = regularSuggestions.some((s) => /buffer/i.test(s));
+
+        const mentionedConstraints = constraintMap.filter(({ signal }) =>
+          regularSuggestions.some((s) => s.toLowerCase().includes(signal))
+        );
+        const hasQuickActions = true;
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+            onClick={() => setSchedulerFailure(null)}
+          >
+            <div
+              className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+              style={{ maxHeight: "90vh" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="shrink-0 bg-[#9a1f1f] px-5 py-3">
+                <p className="text-base font-semibold text-white">Schedule incomplete</p>
+                <p className="text-sm text-red-200">
+                  {schedulerFailure.unscheduledCount} presentation{schedulerFailure.unscheduledCount !== 1 ? "s" : ""} could not be placed
+                </p>
               </div>
 
-              <p className="text-[11px] text-[#888]">
-                Soft constraints are preferred but can be violated; Off removes the constraint entirely.
-              </p>
+              {/* Scrollable body */}
+              <div className="space-y-5 overflow-y-auto px-5 py-4">
 
-              <div className="flex gap-3 pt-1">
+                {/* Why it failed */}
+                {(schedulerFailure.diagnostics ?? []).length > 0 && (
+                  <section className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#9a1f1f]">Why it failed</p>
+                    <ul className="list-disc space-y-1 pl-4">
+                      {(schedulerFailure.diagnostics ?? []).map((d, i) => (
+                        <li key={i} className="text-sm text-[#444]">{humanize(d)}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+
+                {/* Suggestions */}
+                {regularSuggestions.length > 0 && (
+                  <section className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#1635a7]">Suggestions</p>
+                    <ul className="list-disc space-y-1 pl-4">
+                      {regularSuggestions.map((s, i) => (
+                        <li key={i} className="text-sm text-[#333]">{s}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+
+                {/* Quick actions — all toggles + room/buffer controls */}
+                {hasQuickActions && (
+                  <section className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                    <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#555]">Quick actions</p>
+                    <div className="space-y-2">
+                      {mentionedConstraints.map(({ key, label }) => renderToggle(key, label))}
+                      <div className="flex items-center gap-3 pt-1">
+                        <span className="text-sm text-[#333]">Rooms: <strong>{pendingRooms ?? roomsAvailable}</strong></span>
+                        <div className="flex items-center gap-1">
+                          <button type="button" onClick={() => setPendingRooms((pendingRooms ?? roomsAvailable) - 1)} disabled={(pendingRooms ?? roomsAvailable) <= 1} className="flex h-6 w-6 items-center justify-center rounded border border-[#c7d4f7] bg-white text-sm font-bold text-[#1635a7] hover:bg-[#eef3ff] disabled:opacity-40">−</button>
+                          <span className="w-8 text-center text-xs font-semibold text-[#1635a7]">{pendingRooms ?? roomsAvailable}</span>
+                          <button type="button" onClick={() => setPendingRooms((pendingRooms ?? roomsAvailable) + 1)} className="flex h-6 w-6 items-center justify-center rounded border border-[#c7d4f7] bg-white text-sm font-bold text-[#1635a7] hover:bg-[#eef3ff]">+</button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleApplyRooms()}
+                          disabled={isApplyingRooms || pendingRooms === null || pendingRooms === roomsAvailable}
+                          className="rounded-lg bg-[#1635a7] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0f2a8a] disabled:opacity-50"
+                        >
+                          {isApplyingRooms ? "Applying…" : "Apply"}
+                        </button>
+                      </div>
+                      {needsBuffer && (
+                        <div className="flex items-center gap-3 pt-1">
+                          <span className="text-sm text-[#333]">Buffer: <strong>{defaultBuffer} min</strong></span>
+                          <div className="flex items-center gap-1">
+                            <button type="button" onClick={() => setPendingBuffer((pendingBuffer ?? defaultBuffer) - 1)} disabled={(pendingBuffer ?? defaultBuffer) <= 0} className="flex h-6 w-6 items-center justify-center rounded border border-[#c7d4f7] bg-white text-sm font-bold text-[#1635a7] hover:bg-[#eef3ff] disabled:opacity-40">−</button>
+                            <span className="w-8 text-center text-xs font-semibold text-[#1635a7]">{pendingBuffer ?? defaultBuffer}</span>
+                            <button type="button" onClick={() => setPendingBuffer((pendingBuffer ?? defaultBuffer) + 1)} className="flex h-6 w-6 items-center justify-center rounded border border-[#c7d4f7] bg-white text-sm font-bold text-[#1635a7] hover:bg-[#eef3ff]">+</button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleApplyBuffer()}
+                            disabled={isApplyingBuffer || pendingBuffer === null || pendingBuffer === defaultBuffer}
+                            className="rounded-lg bg-[#1635a7] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0f2a8a] disabled:opacity-50"
+                          >
+                            {isApplyingBuffer ? "Applying…" : "Apply to all"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                )}
+
+              </div>
+
+              {/* Footer */}
+              <div className="shrink-0 flex flex-wrap gap-3 border-t border-gray-100 px-5 py-3">
                 <button
                   type="button"
-                  onClick={() => {
-                    setSchedulerFailure(null);
-                    void handleRunScheduler(true);
-                  }}
+                  onClick={() => { setSchedulerFailure(null); void handleRunScheduler(true); }}
                   disabled={isRunningScheduler}
                   className="rounded-lg bg-[#0f33a8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] disabled:opacity-50"
                 >
                   {isRunningScheduler ? "Re-running..." : "Re-run scheduler"}
                 </button>
+                <div className="group relative">
+                  <button
+                    type="button"
+                    onClick={() => { setSchedulerFailure(null); void handleRunScheduler(true, true); }}
+                    disabled={isRunningScheduler}
+                    className="rounded-lg bg-[#7c4f00] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#5e3b00] disabled:opacity-50"
+                  >
+                    {isRunningScheduler ? "Analyzing..." : "Run Debugger"}
+                  </button>
+                  <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-64 rounded-lg bg-gray-900 px-3 py-2 text-xs text-white shadow-lg group-hover:block">
+                    Tests every combination of hard/soft constraints (up to 10 min) to find the settings that schedule the most presentations.
+                  </div>
+                </div>
                 <button
                   type="button"
                   onClick={() => setSchedulerFailure(null)}
-                  className="rounded-lg border border-[#0f33a8] bg-white px-5 py-2 text-sm font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+                  className="rounded-lg border border-gray-300 bg-white px-5 py-2 text-sm font-semibold text-[#333] transition hover:bg-gray-50"
                 >
                   Dismiss
                 </button>
               </div>
             </div>
           </div>
-        </div>
-      ) : null}
+        );
+      })() : null}
+
+      {/* Debugger findings popup — only appears after a Run Debugger run */}
+      {debuggerFindings ? (() => {
+        const constraintMap = [
+          { key: "professorAvailability" as const, label: "Professor availability", signal: "professor availability" },
+          { key: "studentAvailability" as const, label: "Student availability", signal: "student availability" },
+          { key: "sameClassSameRoom" as const, label: "Same class \u2192 same room", signal: "same class" },
+          { key: "roomConflicts" as const, label: "Room conflicts", signal: "room conflicts" },
+          { key: "personConflicts" as const, label: "Person conflicts", signal: "person conflicts" },
+        ] as const;
+
+        const recommendedConstraints = constraintMap.filter(({ key }) => key in debuggerRecommendations);
+        const hasRecommendations = recommendedConstraints.length > 0;
+
+        // Summary bullets: skip "Set X to Y" lines — those are shown as toggles instead.
+        const summaryHints = debuggerFindings.filter((h) => !/\bto (soft|hard|off)\b/i.test(h));
+
+        return (
+          <div
+            className="fixed inset-0 flex items-center justify-center bg-black/50 px-4"
+            style={{ zIndex: 60 }}
+            onClick={() => setDebuggerFindings(null)}
+          >
+            <div
+              className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+              style={{ maxHeight: "90vh" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="shrink-0 bg-[#7c4f00] px-5 py-3">
+                <p className="text-base font-semibold text-white">Debugger findings</p>
+                <p className="text-sm text-amber-200">Results from exhaustive constraint analysis</p>
+              </div>
+
+              <div className="space-y-4 overflow-y-auto px-5 py-4">
+                {/* Summary */}
+                {summaryHints.length > 0 && (
+                  <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                    <ul className="list-disc space-y-1.5 pl-4">
+                      {summaryHints.map((hint, i) => (
+                        <li key={i} className="text-sm text-amber-900">{hint}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+
+                {/* Recommended constraint settings */}
+                {hasRecommendations && (
+                  <section className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                    <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#555]">
+                      Recommended settings
+                    </p>
+                    <div className="space-y-2">
+                      {recommendedConstraints.map(({ key, label }) => {
+                        const recommended = debuggerRecommendations[key]!;
+                        return (
+                          <div key={key} className="flex items-center justify-between gap-2 rounded-md border border-[#d0d8f0] bg-white px-3 py-1.5">
+                            <span className="text-xs font-medium text-[#1a3580]">{label}</span>
+                            <div className="flex shrink-0 overflow-hidden rounded border border-[#d0d8f0]">
+                              {(["off", "soft", "hard"] as const).map((mode) => {
+                                const isRec = mode === recommended;
+                                const isCurrent = mode === constraints[key];
+                                return (
+                                  <button
+                                    key={mode}
+                                    type="button"
+                                    onClick={() => setDebuggerRecommendations((prev) => ({ ...prev, [key]: mode }))}
+                                    className={`w-[42px] py-1 text-[10px] font-semibold transition ${
+                                      isRec
+                                        ? mode === "off" ? "bg-[#e0e0e0] text-[#555]"
+                                          : "bg-[#b45309] text-white"
+                                        : isCurrent
+                                          ? "bg-[#e8eeff] text-[#888]"
+                                          : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
+                                    }`}
+                                  >
+                                    {mode === "off" ? "Off" : mode === "soft" ? "Soft" : "Hard"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-2 text-[11px] text-[#888]">
+                      Amber = recommended. Click to adjust before accepting.
+                    </p>
+                  </section>
+                )}
+              </div>
+
+              <div className="shrink-0 flex gap-3 border-t border-gray-100 px-5 py-3">
+                {hasRecommendations && debugBestAssignments.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        setConstraints((prev) => ({ ...prev, ...debuggerRecommendations }));
+                        await apiPost("/api/events/schedule/apply-debug", {
+                          symposium_id: selectedSymposiumId,
+                          assignments: debugBestAssignments,
+                        }, authHeaders);
+                        setDebuggerFindings(null);
+                        setSchedulerFailure(null);
+                        setDebugBestAssignments([]);
+                        await fetchScheduleData(selectedSymposiumId);
+                      } catch (err) {
+                        const msg = err instanceof Error ? err.message : "Unknown error";
+                        setSchedulerMessage(`Error applying schedule: ${msg}`);
+                      }
+                    }}
+                    disabled={isRunningScheduler}
+                    className="rounded-lg bg-[#1b6e2b] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#15572b] disabled:opacity-50"
+                  >
+                    Accept & Apply
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDebuggerFindings(null)}
+                  className="rounded-lg border border-gray-300 bg-white px-5 py-2 text-sm font-semibold text-[#333] transition hover:bg-gray-50"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
     </div>
   );
 }
