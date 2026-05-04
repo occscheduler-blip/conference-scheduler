@@ -68,6 +68,32 @@ class TestAuth:
         assert resp.status_code == 200
 
 
+# ── TestEmailEndpointsRegistered ─────────────────────────────────────────────
+
+class TestEmailEndpointsRegistered:
+    """Guard against accidental removal of the email endpoints.
+
+    These previously vanished during a merge conflict that kept the modular
+    router layout but dropped the handlers. An unauthenticated POST should
+    return 401 (route exists, auth rejected); a 404 means the route is gone.
+    """
+
+    def test_email_symposium_route_exists(self, client):
+        resp = client.post("/api/events/email_symposium", json={})
+        assert resp.status_code != 404, "POST /api/events/email_symposium is missing"
+        assert resp.status_code == 401
+
+    def test_email_classes_route_exists(self, client):
+        resp = client.post("/api/events/email_classes", json={})
+        assert resp.status_code != 404, "POST /api/events/email_classes is missing"
+        assert resp.status_code == 401
+
+    def test_email_students_route_exists(self, client):
+        resp = client.post("/api/events/email_students", json={})
+        assert resp.status_code != 404, "POST /api/events/email_students is missing"
+        assert resp.status_code == 401
+
+
 # ── TestSymposiums ────────────────────────────────────────────────────────────
 
 class TestSymposiums:
