@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+/node_modules*/
 /.pnp
 .pnp.*
 .yarn/*
@@ -14,7 +15,7 @@
 /coverage
 
 # next.js
-/.next/
+/.next*/
 /out/
 
 # production
@@ -23,6 +24,7 @@
 # misc
 .DS_Store
 .claude/
+*.icloud
 *.pem
 
 # debug
@@ -43,6 +45,8 @@ yarn-error.log*
 next-env.d.ts
 
 .venv/
+__pycache__/
+*.py[cod]
 
 # Tauri / desktop build artifacts
 /src-tauri/target/
@@ -55,4 +59,3 @@ next-env.d.ts
 
 # build-script scratch dir (used to hide app/api during static export)
 /.desktop-build/
-node_modules
