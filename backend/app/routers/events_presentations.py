@@ -189,6 +189,40 @@ def delete_presentation(
         ) from exc
 
 
+@router.put("/update_presentation_buffers")
+def update_presentation_buffers(
+    payload: request_schemas.UpdateSymposiumBuffersRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    """Set every presentation buffer in a symposium to the given value in one shot."""
+    try:
+        logger.info("update_presentation_buffers: symposium_id=%s  buffer=%d", payload.symposium_id, payload.buffer_minutes)
+        dept_resp = read.get_departments(symposium_id=payload.symposium_id)
+        dept_ids = [row["id"] for row in (dept_resp.data or [])]
+        if not dept_ids:
+            return {"status": "ok", "presentations_updated": 0}
+
+        class_resp = read.get_classes(department_id=[UUID(d) for d in dept_ids])
+        class_ids = [str(row["id"]) for row in (class_resp.data or [])]
+        if not class_ids:
+            return {"status": "ok", "presentations_updated": 0}
+
+        resp = (
+            supabase.table("presentations")
+            .update({"buffer": payload.buffer_minutes})
+            .in_("class_id", class_ids)
+            .execute()
+        )
+        count = len(resp.data) if resp.data else 0
+        logger.info("update_presentation_buffers: updated %d presentations", count)
+        return {"status": "ok", "presentations_updated": count}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("update_presentation_buffers failed")
+        raise HTTPException(status_code=500, detail=f"Failed to update buffers: {exc}") from exc
+
+
 @router.get("/presentations", response_model=None)
 def get_presentations(class_id: str | None = None) -> APIResponse:
     try:

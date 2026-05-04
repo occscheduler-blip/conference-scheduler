@@ -537,6 +537,20 @@ class BulkUpdateScheduleAssignmentRequest(BaseModel):
         return self
 
 
+class UpdateSymposiumBuffersRequest(BaseModel):
+    symposium_id: UUID
+    buffer_minutes: int
+
+    @field_validator("buffer_minutes")
+    @classmethod
+    def validate_buffer(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Buffer minutes cannot be negative.")
+        if v > MAX_TIME:
+            raise ValueError(f"Buffer minutes cannot exceed {MAX_TIME}.")
+        return v
+
+
 class UpdatePresentationRequest(BaseModel):
     presentation_id: UUID
     title: str
@@ -590,6 +604,19 @@ class ScheduleConstraintsRequest(BaseModel):
 class RunSchedulerRequest(BaseModel):
     symposium_id: UUID
     constraints: ScheduleConstraintsRequest = ScheduleConstraintsRequest()
+    debug_mode: bool = False
+
+
+class DebugAssignment(BaseModel):
+    presentation_id: str
+    room_index: int
+    start: str
+    end: str
+
+
+class ApplyDebugScheduleRequest(BaseModel):
+    symposium_id: UUID
+    assignments: list[DebugAssignment]
 
 
 class EmailSymposiumRequest(BaseModel):

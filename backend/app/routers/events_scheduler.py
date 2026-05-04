@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConstraints, slot_minutes: int) -> None:
+def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConstraints, slot_minutes: int, debug_mode: bool = False) -> None:
     """Background thread: run the solver and write results back to scheduler_jobs.
 
     Each thread gets its own supabase connection pool via the thread-local proxy
@@ -50,7 +50,7 @@ def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConst
 
     try:
         _update({"status": "running"})
-        result = build_schedule_for_symposium(symposium_id, slot_minutes=slot_minutes, constraints=constraints)
+        result = build_schedule_for_symposium(symposium_id, slot_minutes=slot_minutes, constraints=constraints, debug_mode=debug_mode)
         logger.info("schedule job %s complete: status=%s  assignments=%d", job_id, result.status, len(result.assignments))
         result_payload = {
             "status": result.status,
@@ -60,6 +60,11 @@ def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConst
             ],
             "unscheduled_presentations": list(result.unscheduled_presentations),
             "diagnostics": list(result.diagnostics),
+            "suggestions": list(result.suggestions),
+            "debug_best_assignments": [
+                {"presentation_id": a.presentation_id, "room_index": a.room_index, "start": a.start.isoformat(), "end": a.end.isoformat()}
+                for a in result.debug_best_assignments
+            ],
         }
         _update({"status": "completed", "result": result_payload})
     except Exception as exc:
@@ -96,7 +101,7 @@ def run_schedule(
         )
         job_id = cast(dict[str, Any], job_row.data[0])["id"]
 
-        thread = threading.Thread(target=_run_schedule_job, args=(job_id, str(body.symposium_id), constraints, slot_minutes), daemon=True)
+        thread = threading.Thread(target=_run_schedule_job, args=(job_id, str(body.symposium_id), constraints, slot_minutes, body.debug_mode), daemon=True)
         thread.start()
 
         return {"job_id": job_id}
@@ -107,6 +112,35 @@ def run_schedule(
     except Exception as exc:
         logger.exception("run_schedule failed: symposium_id=%s", body.symposium_id)
         raise HTTPException(status_code=500, detail=f"Failed to start scheduler: {exc}") from exc
+
+
+@router.post("/schedule/apply-debug")
+def apply_debug_schedule(
+    body: request_schemas.ApplyDebugScheduleRequest,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    """Save the debug probe's best assignments to temporary_timeframes without re-running the solver."""
+    from app.scheduler.models import ScheduledPresentation
+    from app.scheduler.service import _save_assignments
+
+    try:
+        assignments = tuple(
+            ScheduledPresentation(
+                presentation_id=a["presentation_id"],
+                room_index=int(a["room_index"]),
+                start=parse_app_datetime(a["start"]),
+                end=parse_app_datetime(a["end"]),
+            )
+            for a in body.assignments
+        )
+        from app.scheduler.models import ScheduleResult
+        result = ScheduleResult(status="feasible", assignments=assignments)
+        presentation_ids = tuple(a["presentation_id"] for a in body.assignments)
+        _save_assignments(result, presentation_ids, str(body.symposium_id))
+        return {"status": "ok", "saved": len(assignments)}
+    except Exception as exc:
+        logger.exception("apply_debug_schedule failed: symposium_id=%s", body.symposium_id)
+        raise HTTPException(status_code=500, detail=f"Failed to apply debug schedule: {exc}") from exc
 
 
 @router.get("/schedule_job/{job_id}")

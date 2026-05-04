@@ -72,3 +72,4 @@ class ScheduleResult:
     unscheduled_presentations: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
+    debug_best_assignments: tuple[ScheduledPresentation, ...] = ()
