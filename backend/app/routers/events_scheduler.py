@@ -354,16 +354,26 @@ def bulk_update_schedule_assignments(
 ) -> dict[str, object]:
     """Batch-update multiple presentation room/time assignments with conflict detection."""
     try:
-        logger.info("bulk_update_schedule_assignments: symposium_id=%s  count=%d", payload.symposium_id, len(payload.assignments))
+        logger.info(
+            "bulk_update_schedule_assignments: symposium_id=%s  assigned=%d  unscheduled=%d",
+            payload.symposium_id, len(payload.assignments), len(payload.unscheduled_presentation_ids),
+        )
         room_names = _load_room_names(payload.symposium_id)
         assignment_map: dict[str, request_schemas.SingleScheduleAssignment] = {
             str(a.presentation_id): a for a in payload.assignments
         }
+        unscheduled_set: set[str] = {str(pid) for pid in payload.unscheduled_presentation_ids}
 
         entities = load_symposium_entities(payload.symposium_id)
         index = build_conflict_index(entities)
 
         for pid in assignment_map:
+            if pid not in index.presentations_by_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Presentation {pid} not found in this symposium.",
+                )
+        for pid in unscheduled_set:
             if pid not in index.presentations_by_id:
                 raise HTTPException(
                     status_code=404,
@@ -375,7 +385,7 @@ def bulk_update_schedule_assignments(
 
         non_batch_ids = [
             UUID(pid) for pid in index.presentations_by_id
-            if pid not in assignment_map
+            if pid not in assignment_map and pid not in unscheduled_set
         ]
         existing_tf: dict[str, dict[str, Any]] = {}
         if non_batch_ids:
@@ -386,6 +396,8 @@ def bulk_update_schedule_assignments(
                     existing_tf[linked] = tf
 
         for pid, p in index.presentations_by_id.items():
+            if pid in unscheduled_set:
+                continue
             buf = timedelta(minutes=int(p.get("buffer") or 0))
             if pid in assignment_map:
                 a = assignment_map[pid]
@@ -442,7 +454,8 @@ def bulk_update_schedule_assignments(
                     )
 
         batch_pids = [UUID(pid) for pid in assignment_map]
-        delete.delete_temporary_timeframes(batch_pids)
+        unscheduled_pids = [UUID(pid) for pid in unscheduled_set]
+        delete.delete_temporary_timeframes(batch_pids + unscheduled_pids)
 
         tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
         room_by_presentation: dict[UUID, str | int | None] = {}
@@ -455,6 +468,8 @@ def bulk_update_schedule_assignments(
                 "end_time": a.end_time,
                 "symposium_id": payload.symposium_id,
             })
+        for pid in unscheduled_set:
+            room_by_presentation[UUID(pid)] = None
 
         if room_by_presentation:
             write.update_column_by_ids(
@@ -466,7 +481,7 @@ def bulk_update_schedule_assignments(
 
         return {
             "status": "updated",
-            "count": len(assignment_map),
+            "count": len(assignment_map) + len(unscheduled_set),
         }
     except HTTPException:
         raise

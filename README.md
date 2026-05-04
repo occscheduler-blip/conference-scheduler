@@ -208,6 +208,63 @@ npm run dev
 
 ---
 
+## Building the Desktop App
+
+*For shipping a self-contained `.dmg` to a non-technical user — bundles the frontend + a local FastAPI backend connected to remote Supabase, so the user doesn't install Docker, Python, or Node.*
+
+The bundled app is currently **macOS Apple Silicon only** (`aarch64`). Intel Macs and Windows would need separate build hosts.
+
+### Additional prerequisites
+
+On top of the dev setup above:
+
+| Tool | Install |
+|------|---------|
+| Rust toolchain | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| Xcode Command Line Tools | `xcode-select --install` |
+| PyInstaller (in backend venv) | `cd backend && .venv/bin/pip install pyinstaller` |
+
+### Build
+
+```bash
+npm run desktop:build
+```
+
+This runs three stages: PyInstaller bundles the FastAPI backend (uses the values in `backend/.env`), Next.js produces a static export with the desktop backend URL baked in, and `tauri build` compiles the Rust shell and packages everything into a `.dmg`.
+
+Output:
+
+```
+src-tauri/target/release/bundle/dmg/Conference Scheduler_0.1.0_aarch64.dmg
+```
+
+### How it runs
+
+The user double-clicks the app, which:
+
+1. Spawns the bundled FastAPI backend on `127.0.0.1:17850`
+2. Shows a splash screen while the backend boots (~3s)
+3. Loads the static frontend, which talks to the local backend
+4. The local backend talks to **remote Supabase** using the keys from `backend/.env` baked into the bundle
+
+Backend logs land at `~/Library/Logs/Conference Scheduler/backend.log` — first place to look if anything misbehaves.
+
+### Things to know before distributing
+
+- **Unsigned**: the first launch triggers Gatekeeper. The user must **right-click the app → Open** the first time, then approve the warning. Subsequent launches open normally. To remove the warning entirely, sign and notarize with an Apple Developer cert.
+- **Embedded credentials**: `backend/.env` (Supabase service-role key, JWT secret) gets baked into the bundle. Anyone with the `.dmg` can extract them. For wider distribution, point the bundle at a separate "test" Supabase project rather than production.
+- **Bundle size**: ~104 MB `.dmg` (~270 MB installed). OR-Tools is the largest contributor.
+
+### Iterating
+
+```bash
+npm run desktop:dev      # rebuilds backend, runs `tauri dev` with hot frontend reload
+```
+
+Frontend code changes hot-reload. Backend or Rust shell changes require re-running the command.
+
+---
+
 ## Common Commands
 
 ```bash
@@ -229,6 +286,10 @@ npm test                                        # frontend tests (no backend nee
 # Database
 supabase start / stop / status
 supabase migration up    # apply new migration files
+
+# Desktop app (macOS, see "Building the Desktop App" above)
+npm run desktop:dev      # dev iteration with hot reload
+npm run desktop:build    # produce .app + .dmg in src-tauri/target/release/bundle/
 ```
 
 ---
@@ -261,8 +322,17 @@ conference-scheduler/
 │   └── Makefile                # make test → mypy + pytest
 ├── supabase/
 │   └── migrations/             # 11+ SQL migration files
+├── src-tauri/                  # Tauri desktop shell (Rust)
+│   ├── src/main.rs             # Spawns the Python sidecar, manages lifecycle
+│   ├── tauri.conf.json         # Bundle config, window settings
+│   └── icons/
+├── scripts/                    # Desktop build helpers
+│   ├── build-desktop-frontend.mjs  # Static-export wrapper
+│   └── copy-sidecar.mjs            # Copies PyInstaller output to src-tauri/binaries/
 ├── docs/                       # Architecture diagrams and walkthroughs
-├── public/                     # Static assets
+├── public/                     # Static assets (incl. desktop loader splash)
+├── backend/desktop_main.py     # PyInstaller entry point for the bundled backend
+├── backend/desktop.spec        # PyInstaller spec
 ├── package.json
 ├── .env.example                # Frontend env template
 ├── CITATIONS.md

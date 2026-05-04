@@ -3,13 +3,14 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import type { DepartmentOption, ProfessorRow, SavedClass } from "./types";
-import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
+import { apiFetch, apiPost, apiPut, apiDelete, BACKEND_URL } from "../lib/api";
+import { confirmDialog } from "../lib/dialog";
 
 function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   const searchParams = useSearchParams();
   const symposiumIdFromLink = searchParams.get("symposium_id") ?? "";
   const departmentIdFromLink = searchParams.get("department_id") ?? "";
-  const backendUrl = "/api/backend";
+  const backendUrl = BACKEND_URL;
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
   const [symposiumOptions, setSymposiumOptions] = useState<DepartmentOption[]>([]);
@@ -238,7 +239,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
 
   // AI template: deletes a class and all linked professors from the backend, with a confirm dialog.
   const removeSavedClass = async (savedClass: SavedClass) => {
-    const confirmed = window.confirm(`Delete class "${savedClass.className}"?`);
+    const confirmed = await confirmDialog(`Delete class "${savedClass.className}"?`, "Delete class");
     if (!confirmed) return;
     setMessage("");
     setDeletingLocalId(savedClass.localId);
