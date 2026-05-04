@@ -160,6 +160,49 @@ class TestSymposiums:
         assert db.count("timeframes") == 1
 
 
+class TestBasicSchedule:
+    def test_basic_schedule_respects_professor_unavailable_window(self, client, h):
+        resp = client.post(
+            "/api/events/basic_schedule",
+            json={
+                "day_start": "2026-04-20T09:00:00Z",
+                "day_end": "2026-04-20T18:00:00Z",
+                "presentation_minutes": 60,
+                "room_count": 1,
+                "professor_name": "Prof. Smith",
+                "professor_unavailable": [
+                    {
+                        "start_time": "2026-04-20T14:00:00Z",
+                        "end_time": "2026-04-20T17:00:00Z",
+                    }
+                ],
+                "students": [
+                    {"name": "Student 1"},
+                    {"name": "Student 2"},
+                    {"name": "Student 3"},
+                    {"name": "Student 4"},
+                    {"name": "Student 5"},
+                    {"name": "Student 6"},
+                ],
+            },
+            headers=h,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] in {"optimal", "feasible"}
+        assert body["summary"]["scheduled_count"] == 6
+        starts = [item["start_time"] for item in body["scheduled"]]
+        assert starts == [
+            "2026-04-20T09:00:00+00:00",
+            "2026-04-20T10:00:00+00:00",
+            "2026-04-20T11:00:00+00:00",
+            "2026-04-20T12:00:00+00:00",
+            "2026-04-20T13:00:00+00:00",
+            "2026-04-20T17:00:00+00:00",
+        ]
+        assert all(item["room_index"] == 0 for item in body["scheduled"])
+
+
 # ── TestDepartments ───────────────────────────────────────────────────────────
 
 class TestDepartments:

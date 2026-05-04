@@ -64,7 +64,7 @@ def admin_login(body: LoginRequest) -> dict[str, str]:
     }
 
 
-@router.post("/admin/create", status_code=status.HTTP_200_OK)
+@router.post("/admin/create")
 def admin_create(
     body: CreateAdminRequest,
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
@@ -198,7 +198,7 @@ class OTPVerifyBody(BaseModel):
     otp: str
 
 
-@router.post("/otp/request", status_code=status.HTTP_200_OK)
+@router.post("/otp/request")
 def otp_request(body: OTPRequestBody) -> dict[str, str]:
     """Generate a 6-digit OTP and email it to the user.
 
@@ -229,7 +229,7 @@ def otp_request(body: OTPRequestBody) -> dict[str, str]:
     return {"detail": "OTP sent to your email address."}
 
 
-@router.post("/otp/verify", status_code=status.HTTP_200_OK)
+@router.post("/otp/verify")
 def otp_verify(body: OTPVerifyBody) -> dict[str, str]:
     """Exchange a valid OTP for a JWT access token."""
     logger.info("OTP verify: role=%s  email=%s", body.role, body.email)

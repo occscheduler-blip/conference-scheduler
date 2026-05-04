@@ -11,6 +11,7 @@ class Settings(BaseSettings):
         env_file=(_ENV_PATH, ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     app_name: str = "Conference Scheduler API"
@@ -27,6 +28,9 @@ class Settings(BaseSettings):
 
     resend_api_key: str = ""
     resend_from: str = "noreply@hamilton.edu"
+
+    jwt_secret_key: str = ""
+    jwt_ttl_hours: int = 24
 
     @property
     def cors_origins(self) -> list[str]:
