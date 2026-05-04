@@ -11,12 +11,14 @@ import app.supabase_io.supabase_schemas as supabase_schemas
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
 from app.routers.events_helpers import (
+    _checked_update,
     _serialize_update_fields,
     _normalize_counts,
     _sum_counts,
 )
 from app.supabase_io import delete, read, write
 from app.supabase_io.client import supabase
+from app.supabase_io.locks import symposium_lock
 from app.utils import rows_affected as _rows_affected
 
 logger = logging.getLogger(__name__)
@@ -84,45 +86,55 @@ def add_symposium(
 @router.put("/update_symposium")
 def update_symposium(
     payload: request_schemas.UpdateSymposiumRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         logger.info("update_symposium: symposium_id=%s", payload.symposium_id)
         updates = payload.model_dump(
             exclude_none=True,
-            exclude={"symposium_id", "timeframes"},
+            exclude={"symposium_id", "timeframes", "expected_updated_at"},
         )
         updates["room_names"] = payload.room_names
         if "symposium_name" in updates:
             updates["name"] = updates.pop("symposium_name")
         update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("symposiums")
-            .update(update_payload)
-            .eq("id", str(payload.symposium_id))
-            .execute()
-        )
-        records_updated = {
-            "symposiums": _rows_affected(
-                update_resp, fallback=1 if update_payload else 0
-            )
-        }
 
-        deleted_timeframes = delete.delete_timeframes(payload.symposium_id)
-        timeframes = [
-            supabase_schemas.Timeframe(
-                id=uuid4(),
-                linked_id=payload.symposium_id,
-                start_time=timeframe.start_time,
-                end_time=timeframe.end_time,
+        # Hold the symposium lock so the symposium row update + timeframes
+        # delete+insert are serialized vs. concurrent edits and the scheduler.
+        with symposium_lock(payload.symposium_id) as conn:
+            symposiums_updated = _checked_update(
+                "symposiums",
+                str(payload.symposium_id),
+                update_payload,
+                payload.expected_updated_at,
+                actor_id=claims.sub,
             )
-            for timeframe in payload.timeframes
-        ]
-        timeframe_payloads = [item.model_dump() for item in timeframes]
-        timeframe_response = write.insert("timeframes", timeframe_payloads)
-        timeframes_inserted = _rows_affected(
-            timeframe_response, fallback=len(timeframes)
-        )
+            records_updated = {"symposiums": symposiums_updated}
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM public.timeframes WHERE linked_id = %s",
+                    (str(payload.symposium_id),),
+                )
+                deleted_timeframes = cur.rowcount or 0
+
+                rows = [
+                    (
+                        str(uuid4()),
+                        str(payload.symposium_id),
+                        timeframe.start_time,
+                        timeframe.end_time,
+                    )
+                    for timeframe in payload.timeframes
+                ]
+                if rows:
+                    cur.executemany(
+                        "INSERT INTO public.timeframes (id, linked_id, start_time, end_time)"
+                        " VALUES (%s, %s, %s, %s)",
+                        rows,
+                    )
+                timeframes_inserted = len(rows)
+
         records_deleted = {"timeframes": deleted_timeframes}
         records_inserted = {"timeframes": timeframes_inserted}
 
@@ -155,9 +167,10 @@ def delete_symposium(
 ) -> dict[str, str | int | dict[str, int]]:
     try:
         logger.info("delete_symposium: symposium_id=%s", symposium_id)
-        counts = _normalize_counts(
-            delete.delete_symposium(symposium_id), {"symposiums": 1}
-        )
+        with symposium_lock(symposium_id):
+            counts = _normalize_counts(
+                delete.delete_symposium(symposium_id), {"symposiums": 1}
+            )
         logger.info("delete_symposium complete: counts=%s", counts)
         return {
             "status": "deleted",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, apiPut } from "../lib/api";
+import { apiFetch, apiPut, ApiError } from "../lib/api";
 import {
   buildCalendarFromTimeframes,
   formatTimeLabel,
@@ -141,7 +141,13 @@ export default function AvailabilityEditor({
       await apiPut("/api/events/update_timeframes", { linked_id: linkedId, timeframes }, authHeaders);
       setStatusMessage(`Saved ${timeframes.length} availability slot${timeframes.length === 1 ? "" : "s"}.`);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Save failed.");
+      if (error instanceof ApiError && error.isBusy()) {
+        setErrorMessage("This symposium is busy with another change. Please wait a moment and retry.");
+      } else if (error instanceof ApiError && error.isStale()) {
+        setErrorMessage("These availability slots were changed by another tab — please reload the editor.");
+      } else {
+        setErrorMessage(error instanceof Error ? error.message : "Save failed.");
+      }
     } finally {
       setIsSaving(false);
     }

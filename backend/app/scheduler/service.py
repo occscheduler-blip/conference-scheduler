@@ -231,34 +231,39 @@ def _save_assignments(
     symposium_id: str,
 ) -> None:
     from app.supabase_io import delete, write
+    from app.supabase_io.locks import symposium_lock
 
     logger.info("Saving %d schedule assignments to temporary tables", len(result.assignments))
-    # Clear existing draft assignments for every presentation in the symposium so
-    # anything the solver leaves unscheduled is reflected in the DB/UI.
-    presentation_ids = [UUID(pid) for pid in presentation_ids_to_reset]
-    if presentation_ids:
-        delete.delete_temporary_timeframes(presentation_ids)
-        write.update_column_by_ids(
-            "presentations", "temporary_room", {pid: None for pid in presentation_ids}
-        )
+    # Hold the per-symposium advisory lock for the whole write phase so a
+    # concurrent solver run, manual schedule edit, or publish can't interleave
+    # with our delete + update + insert sequence.
+    with symposium_lock(symposium_id):
+        # Clear existing draft assignments for every presentation in the symposium so
+        # anything the solver leaves unscheduled is reflected in the DB/UI.
+        presentation_ids = [UUID(pid) for pid in presentation_ids_to_reset]
+        if presentation_ids:
+            delete.delete_temporary_timeframes(presentation_ids)
+            write.update_column_by_ids(
+                "presentations", "temporary_room", {pid: None for pid in presentation_ids}
+            )
 
-    timeframe_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
-    room_by_presentation: dict[UUID, str | int | None] = {}
-    for assignment in result.assignments:
-        timeframe_rows.append({
-            "id": uuid4(),
-            "linked_id": UUID(assignment.presentation_id),
-            "start_time": assignment.start.isoformat(),
-            "end_time": assignment.end.isoformat(),
-            "symposium_id": UUID(symposium_id),
-        })
-        room_by_presentation[UUID(assignment.presentation_id)] = assignment.room_index
+        timeframe_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
+        room_by_presentation: dict[UUID, str | int | None] = {}
+        for assignment in result.assignments:
+            timeframe_rows.append({
+                "id": uuid4(),
+                "linked_id": UUID(assignment.presentation_id),
+                "start_time": assignment.start.isoformat(),
+                "end_time": assignment.end.isoformat(),
+                "symposium_id": UUID(symposium_id),
+            })
+            room_by_presentation[UUID(assignment.presentation_id)] = assignment.room_index
 
-    if room_by_presentation:
-        write.update_column_by_ids("presentations", "temporary_room", room_by_presentation)
+        if room_by_presentation:
+            write.update_column_by_ids("presentations", "temporary_room", room_by_presentation)
 
-    if timeframe_rows:
-        write.insert("temporary_timeframes", timeframe_rows)
+        if timeframe_rows:
+            write.insert("temporary_timeframes", timeframe_rows)
     logger.info("Draft schedule assignments saved successfully")
 
 

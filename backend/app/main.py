@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.request_context import RequestIdFilter, request_id_middleware
 from app.routers.auth import router as auth_router
 from app.routers.events import router as events_router
 
@@ -14,9 +15,13 @@ from app.routers.events import router as events_router
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    format="%(asctime)s  %(levelname)-8s  [%(request_id)s]  %(name)s  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# Inject the request id into every log record (default "-" outside requests).
+_request_id_filter = RequestIdFilter()
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_request_id_filter)
 logger = logging.getLogger("app")
 
 settings = get_settings()
@@ -29,6 +34,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Per-request id (must be registered before the logging middleware so the
+# id is populated by the time we log).
+app.middleware("http")(request_id_middleware)
 
 
 # ---------------------------------------------------------------------------

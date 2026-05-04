@@ -106,6 +106,66 @@ def _room_label(room_names: list[str], room: int) -> str:
     return f"Room {room + 1}"
 
 
+def _checked_update(
+    table: str,
+    entity_id: str,
+    update_payload: dict[str, Any],
+    expected_updated_at: datetime | None,
+    actor_id: str | None = None,
+) -> int:
+    """UPDATE a row by id with optional optimistic-concurrency check.
+
+    If ``expected_updated_at`` is provided, the UPDATE matches only when the
+    current ``updated_at`` equals it. On mismatch (no row updated), this
+    fetches the current row and raises HTTP 409 with code ``stale`` so the
+    caller can refresh and retry.
+
+    If ``actor_id`` is provided (typically ``claims.sub``), it is written to
+    ``last_modified_by`` so we can answer "who modified this row last".
+
+    Returns the number of rows updated. Returns 0 (no error) if
+    ``update_payload`` is empty.
+    """
+    if not update_payload and actor_id is None:
+        return 0
+
+    payload: dict[str, Any] = dict(update_payload)
+    if actor_id is not None:
+        payload["last_modified_by"] = actor_id
+
+    query = (
+        supabase.table(table)
+        .update(payload)
+        .eq("id", entity_id)
+    )
+    if expected_updated_at is not None:
+        query = query.eq("updated_at", expected_updated_at.isoformat())
+    resp = query.execute()
+    rows = list(getattr(resp, "data", None) or [])
+
+    if rows:
+        return len(rows)
+    if expected_updated_at is None:
+        return 0  # no version check; caller decides what 0 rows means
+
+    current = (
+        supabase.table(table)
+        .select("*")
+        .eq("id", entity_id)
+        .limit(1)
+        .execute()
+    )
+    current_rows = list(getattr(current, "data", None) or [])
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "stale",
+            "message": "Record was modified by another user. Refresh and retry.",
+            "current_row": current_rows[0] if current_rows else None,
+        },
+    )
+
+
 def _assert_within_symposium_windows(
     symposium_id: UUID,
     start: datetime,
