@@ -234,7 +234,7 @@ def _run_exhaustive_debug(
     problem: ScheduleProblem,
     current_unscheduled: int,
     total_time_budget: float = 540.0,
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], tuple[ScheduledPresentation, ...]]:
     """Try every combination of relaxing hard constraints in parallel to find the
     configuration that schedules the most presentations.
 
@@ -249,6 +249,7 @@ def _run_exhaustive_debug(
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from dataclasses import replace
     from itertools import combinations as iter_combinations
+    from typing import Any, cast
 
     if current_unscheduled == 0:
         return (), ()
@@ -289,7 +290,7 @@ def _run_exhaustive_debug(
     from app.scheduler.models import ScheduleResult as _ScheduleResult
 
     def _probe(relaxed_attrs: dict[str, str]) -> tuple[dict[str, str], _ScheduleResult]:
-        relaxed_problem = replace(problem, constraints=replace(problem.constraints, **relaxed_attrs))
+        relaxed_problem = replace(problem, constraints=replace(problem.constraints, **cast(Any, relaxed_attrs)))
         try:
             result = solve_schedule(relaxed_problem, time_limit_seconds=time_per_probe, num_search_workers=1)
             return relaxed_attrs, result

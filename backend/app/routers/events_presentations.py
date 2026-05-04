@@ -1,6 +1,7 @@
 """Presentation CRUD + read endpoints."""
 import logging
 from datetime import date, datetime
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -198,12 +199,12 @@ def update_presentation_buffers(
     try:
         logger.info("update_presentation_buffers: symposium_id=%s  buffer=%d", payload.symposium_id, payload.buffer_minutes)
         dept_resp = read.get_departments(symposium_id=payload.symposium_id)
-        dept_ids = [row["id"] for row in (dept_resp.data or [])]
+        dept_ids = [cast(dict[str, Any], row)["id"] for row in (dept_resp.data or [])]
         if not dept_ids:
             return {"status": "ok", "presentations_updated": 0}
 
-        class_resp = read.get_classes(department_id=[UUID(d) for d in dept_ids])
-        class_ids = [str(row["id"]) for row in (class_resp.data or [])]
+        class_resp = read.get_classes(department_id=[UUID(str(d)) for d in dept_ids])
+        class_ids = [str(cast(dict[str, Any], row)["id"]) for row in (class_resp.data or [])]
         if not class_ids:
             return {"status": "ok", "presentations_updated": 0}
 

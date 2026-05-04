@@ -126,16 +126,16 @@ def apply_debug_schedule(
     try:
         assignments = tuple(
             ScheduledPresentation(
-                presentation_id=a["presentation_id"],
-                room_index=int(a["room_index"]),
-                start=parse_app_datetime(a["start"]),
-                end=parse_app_datetime(a["end"]),
+                presentation_id=a.presentation_id,
+                room_index=a.room_index,
+                start=parse_app_datetime(a.start),
+                end=parse_app_datetime(a.end),
             )
             for a in body.assignments
         )
         from app.scheduler.models import ScheduleResult
         result = ScheduleResult(status="feasible", assignments=assignments)
-        presentation_ids = tuple(a["presentation_id"] for a in body.assignments)
+        presentation_ids = tuple(a.presentation_id for a in body.assignments)
         _save_assignments(result, presentation_ids, str(body.symposium_id))
         return {"status": "ok", "saved": len(assignments)}
     except Exception as exc:
