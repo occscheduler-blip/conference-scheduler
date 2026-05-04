@@ -29,6 +29,8 @@ export type DragState = {
   fromUnscheduled: boolean;
   /** Conflict result for the current snap target, or null */
   conflict: ConflictResult | null;
+  /** Whether the cursor is currently over the unscheduled drop zone */
+  overUnscheduled: boolean;
 };
 
 type PendingDrag = {
@@ -47,7 +49,9 @@ type UseScheduleDragConfig = {
   selectedDay: string;
   conflictContext: ConflictContext;
   gridRef: React.RefObject<HTMLDivElement | null>;
+  unscheduledPanelRef?: React.RefObject<HTMLDivElement | null>;
   onDrop: (presentationId: string, room: number, startTime: Date, endTime: Date) => void;
+  onDropUnscheduled?: (presentationId: string) => void;
   onClickBlock: (pres: SchedulePresentation) => void;
   onDropBlocked?: (message: string) => void;
 };
@@ -150,6 +154,7 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
           snapTarget: null,
           fromUnscheduled: pending.fromUnscheduled,
           conflict: null,
+          overUnscheduled: false,
         });
         return;
       }
@@ -159,12 +164,20 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
 
       setDragState((prev) => {
         if (!prev) return prev;
-        const { roomsAvailable: rooms, minSlot: min, maxSlot: max, selectedDay: day, conflictContext, gridRef: gRef } = configRef.current;
+        const { roomsAvailable: rooms, minSlot: min, maxSlot: max, selectedDay: day, conflictContext, gridRef: gRef, unscheduledPanelRef: uRef } = configRef.current;
         const grid = gRef.current;
         let snapTarget: SnapTarget | null = null;
         let conflict: ConflictResult | null = null;
 
-        if (grid) {
+        const panel = uRef?.current ?? null;
+        let overUnscheduled = false;
+        if (panel) {
+          const r = panel.getBoundingClientRect();
+          overUnscheduled =
+            e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+        }
+
+        if (grid && !overUnscheduled) {
           const pos = viewportToGridPosition(e.clientX, e.clientY, grid, rooms, min, max);
           if (pos) {
             const startTime = minuteToDate(day, pos.minuteInDay);
@@ -173,7 +186,7 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
           }
         }
 
-        return { ...prev, currentX: e.clientX, currentY: e.clientY, snapTarget, conflict };
+        return { ...prev, currentX: e.clientX, currentY: e.clientY, snapTarget, conflict, overUnscheduled };
       });
     }
 
@@ -191,7 +204,11 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
       // capture current dragState before clearing, then run side-effects.
       const prev = dragStateRef.current;
       setDragState(null);
-      if (prev?.snapTarget) {
+      if (prev?.overUnscheduled) {
+        if (!prev.fromUnscheduled) {
+          configRef.current.onDropUnscheduled?.(prev.presentation.id);
+        }
+      } else if (prev?.snapTarget) {
         if (!prev.conflict?.blocked) {
           const endTime = new Date(prev.snapTarget.startTime.getTime() + prev.presentation.minutes * 60 * 1000);
           configRef.current.onDrop(prev.presentation.id, prev.snapTarget.room, prev.snapTarget.startTime, endTime);

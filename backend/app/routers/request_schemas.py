@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.supabase_io.client import supabase
 
@@ -528,12 +528,13 @@ class SingleScheduleAssignment(BaseModel):
 
 class BulkUpdateScheduleAssignmentRequest(BaseModel):
     symposium_id: UUID
-    assignments: list[SingleScheduleAssignment]
+    assignments: list[SingleScheduleAssignment] = Field(default_factory=list)
+    unscheduled_presentation_ids: list[UUID] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def at_least_one(self) -> "BulkUpdateScheduleAssignmentRequest":
-        if not self.assignments:
-            raise ValueError("At least one assignment is required.")
+        if not self.assignments and not self.unscheduled_presentation_ids:
+            raise ValueError("At least one assignment or unscheduled id is required.")
         return self
 
 
