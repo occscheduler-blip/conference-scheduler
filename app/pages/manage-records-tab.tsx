@@ -74,9 +74,12 @@ export default function ManageRecordsTab({ token }: { token: string }) {
   const [presentationTitle, setPresentationTitle] = useState("");
   const [presentationMinutes, setPresentationMinutes] = useState("20");
   const [presentationBuffer, setPresentationBuffer] = useState("0");
+  const [presentationBufferTouched, setPresentationBufferTouched] = useState(false);
   const [presentationStudentIdsState, setPresentationStudentIdsState] = useState<string[]>([]);
   const [presentationProfessorIdsState, setPresentationProfessorIdsState] = useState<string[]>([]);
   const [emailStudentsAfterPresentationAdd, setEmailStudentsAfterPresentationAdd] = useState(true);
+  const [selectedPresentationIds, setSelectedPresentationIds] = useState<string[]>([]);
+  const [bulkPresentationStart, setBulkPresentationStart] = useState("");
 
   const selectedDepartment = departments.find((department) => department.id === selectedDepartmentId);
   const selectedClass = classes.find((classRecord) => classRecord.id === selectedClassId);
@@ -112,6 +115,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
     setPresentationTitle("");
     setPresentationMinutes("20");
     setPresentationBuffer("0");
+    setPresentationBufferTouched(false);
     setPresentationStudentIdsState([]);
     setPresentationProfessorIdsState([]);
   };
@@ -199,6 +203,9 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       setStudents(studentRows);
       setProfessors(professorRows);
       setPresentations(presentationRows);
+      setSelectedPresentationIds((current) =>
+        current.filter((id) => presentationRows.some((presentation) => presentation.id === id))
+      );
     } catch (error) {
       showMessage(error instanceof Error ? error.message : "Failed to load class records.", "error");
       setStudents([]);
@@ -221,6 +228,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
     setStudents([]);
     setProfessors([]);
     setPresentations([]);
+    setSelectedPresentationIds([]);
     resetClassForm();
     resetProfessorForm();
     resetStudentForm();
@@ -233,6 +241,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
     setStudents([]);
     setProfessors([]);
     setPresentations([]);
+    setSelectedPresentationIds([]);
     resetClassForm();
     resetProfessorForm();
     resetStudentForm();
@@ -244,6 +253,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
     resetProfessorForm();
     resetStudentForm();
     resetPresentationForm();
+    setSelectedPresentationIds([]);
     void fetchClassChildren(selectedClassId);
   }, [fetchClassChildren, selectedClassId]);
 
@@ -254,6 +264,20 @@ export default function ManageRecordsTab({ token }: { token: string }) {
     if (selectedClassId) {
       await fetchClassChildren(selectedClassId);
     }
+  };
+
+  const allPresentationsSelected = presentations.length > 0 && selectedPresentationIds.length === presentations.length;
+
+  const toggleAllPresentations = () => {
+    setSelectedPresentationIds(allPresentationsSelected ? [] : presentations.map((presentation) => presentation.id));
+  };
+
+  const togglePresentationSelection = (presentationId: string) => {
+    setSelectedPresentationIds((current) =>
+      current.includes(presentationId)
+        ? current.filter((id) => id !== presentationId)
+        : [...current, presentationId]
+    );
   };
 
   const handleClassSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -373,9 +397,14 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       return;
     }
     const minutes = Number.parseInt(presentationMinutes, 10);
-    const buffer = Number.parseInt(presentationBuffer, 10);
-    if (!presentationTitle.trim() || !Number.isFinite(minutes) || minutes < 1 || !Number.isFinite(buffer) || buffer < 0) {
-      showMessage("Enter a title, duration, and buffer.", "error");
+    const shouldValidateBuffer = presentationMode === "add" || presentationBufferTouched;
+    const parsedBuffer = Number.parseInt(presentationBuffer, 10);
+    if (!presentationTitle.trim() || !Number.isFinite(minutes) || minutes < 1) {
+      showMessage("Enter a title and duration.", "error");
+      return;
+    }
+    if (shouldValidateBuffer && (!Number.isFinite(parsedBuffer) || parsedBuffer < 0)) {
+      showMessage("Enter a valid buffer.", "error");
       return;
     }
     try {
@@ -384,7 +413,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
           class_id: selectedClassId,
           title: presentationTitle.trim(),
           minutes,
-          buffer,
+          buffer: parsedBuffer,
           presenting_students: presentationStudentIdsState,
           assigned_professors: presentationProfessorIdsState,
         }, authHeaders);
@@ -398,22 +427,61 @@ export default function ManageRecordsTab({ token }: { token: string }) {
         }
       } else {
         const existing = presentations.find((presentation) => presentation.id === presentationId);
-        await apiPut("/api/events/update_presentation", {
+        const updatePayload: Record<string, unknown> = {
           presentation_id: presentationId,
           class_id: selectedClassId,
           title: presentationTitle.trim(),
           minutes,
-          buffer,
           room: existing?.room ?? null,
           presenting_students: presentationStudentIdsState,
           assigned_professors: presentationProfessorIdsState,
-        }, authHeaders);
+        };
+        if (presentationBufferTouched) {
+          updatePayload.buffer = parsedBuffer;
+        }
+        await apiPut("/api/events/update_presentation", updatePayload, authHeaders);
         showMessage("Presentation updated.", "success");
       }
       resetPresentationForm();
       await fetchClassChildren(selectedClassId);
     } catch (error) {
       showMessage(error instanceof Error ? error.message : "Failed to save presentation.", "error");
+    }
+  };
+
+  const handleBulkPresentationTimeSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (selectedPresentationIds.length === 0) {
+      showMessage("Select at least one presentation.", "error");
+      return;
+    }
+    if (!bulkPresentationStart) {
+      showMessage("Choose a start time.", "error");
+      return;
+    }
+    const start = new Date(bulkPresentationStart);
+    if (Number.isNaN(start.getTime())) {
+      showMessage("Choose a valid start time.", "error");
+      return;
+    }
+    const selectedPresentations = presentations.filter((presentation) => selectedPresentationIds.includes(presentation.id));
+    try {
+      await Promise.all(selectedPresentations.map((presentation) => {
+        const durationMinutes = presentation.minutes ?? 20;
+        const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+        return apiPut("/api/events/update_timeframes", {
+          linked_id: presentation.id,
+          timeframes: [{
+            start_time: start.toISOString(),
+            end_time: end.toISOString(),
+          }],
+        }, authHeaders);
+      }));
+      showMessage(`Updated ${selectedPresentations.length} presentation time${selectedPresentations.length === 1 ? "" : "s"}.`, "success");
+      setSelectedPresentationIds([]);
+      await fetchClassChildren(selectedClassId);
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : "Failed to update presentation times.", "error");
     }
   };
 
@@ -625,7 +693,17 @@ export default function ManageRecordsTab({ token }: { token: string }) {
             </label>
             <label className="flex flex-col gap-1.5">
               <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Buffer Minutes</span>
-              <input type="number" min={0} className={fieldClass} value={presentationBuffer} onChange={(event) => setPresentationBuffer(event.target.value)} disabled={!selectedClassId} />
+              <input
+                type="number"
+                min={0}
+                className={fieldClass}
+                value={presentationBuffer}
+                onChange={(event) => {
+                  setPresentationBuffer(event.target.value);
+                  setPresentationBufferTouched(true);
+                }}
+                disabled={!selectedClassId}
+              />
             </label>
             <label className="flex flex-col gap-1.5 md:col-span-2">
               <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Presenting Students</span>
@@ -670,10 +748,38 @@ export default function ManageRecordsTab({ token }: { token: string }) {
               <button type="submit" className={buttonClass} disabled={!selectedClassId}>{presentationMode === "add" ? "Add Presentation" : "Save Presentation"}</button>
             </div>
           </form>
+          <form onSubmit={handleBulkPresentationTimeSubmit} className="mt-4 rounded-lg border border-[#d9e2ff] bg-white p-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <button type="button" className={secondaryButtonClass} onClick={toggleAllPresentations} disabled={presentations.length === 0}>
+                {allPresentationsSelected ? "Clear Selection" : "Select All"}
+              </button>
+              <label className="flex min-w-64 flex-col gap-1.5">
+                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Start Time</span>
+                <input
+                  type="datetime-local"
+                  className={fieldClass}
+                  value={bulkPresentationStart}
+                  onChange={(event) => setBulkPresentationStart(event.target.value)}
+                  disabled={selectedPresentationIds.length === 0}
+                />
+              </label>
+              <button type="submit" className={buttonClass} disabled={selectedPresentationIds.length === 0 || !bulkPresentationStart}>
+                Set Time for Selected
+              </button>
+            </div>
+          </form>
           <div className="mt-4 space-y-2">
             {presentations.length === 0 ? <p className="text-sm text-[#555]">No presentations found.</p> : presentations.map((presentation) => (
               <div key={presentation.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#e5e7eb] bg-white p-3">
-                <div>
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={selectedPresentationIds.includes(presentation.id)}
+                    onChange={() => togglePresentationSelection(presentation.id)}
+                    aria-label={`Select ${presentation.title}`}
+                  />
+                  <div>
                   <p className="text-sm font-semibold text-[#111]">{presentation.title}</p>
                   <p className="text-xs text-[#555]">
                     {presentation.minutes ?? "?"} min, {presentation.buffer ?? 0} min buffer
@@ -682,6 +788,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
                   <p className="text-xs text-[#555]">
                     Assigned professors: {presentation.assigned_professors?.length ? presentation.assigned_professors.map((professor) => professor.name).join(", ") : "All class professors"}
                   </p>
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <button type="button" className={secondaryButtonClass} onClick={() => {
@@ -690,6 +797,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
                     setPresentationTitle(presentation.title);
                     setPresentationMinutes(String(presentation.minutes ?? 20));
                     setPresentationBuffer(String(presentation.buffer ?? 0));
+                    setPresentationBufferTouched(false);
                     setPresentationStudentIdsState(presentationStudentIds(presentation));
                     setPresentationProfessorIdsState(presentationProfessorIds(presentation));
                   }}>Edit</button>

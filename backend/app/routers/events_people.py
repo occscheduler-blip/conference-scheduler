@@ -131,7 +131,10 @@ def delete_student(
 
 
 @router.get("/students")
-def get_students(class_id: str | None = None) -> APIResponse:
+def get_students(
+    class_id: str | None = None,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "professor", "student", "attendee"])),
+) -> APIResponse:
     try:
         return read.get_students(class_id=_parse_uuid_list(class_id))
     except HTTPException:
@@ -246,7 +249,10 @@ def delete_professor(
 
 
 @router.get("/professors")
-def get_professors(class_id: str | None = None) -> APIResponse:
+def get_professors(
+    class_id: str | None = None,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+) -> APIResponse:
     try:
         return read.get_professors(class_id=_parse_uuid_list(class_id))
     except HTTPException:
@@ -298,7 +304,10 @@ def add_request(
 
 
 @router.get("/requests")
-def get_requests(student_id: str | None = None) -> APIResponse:
+def get_requests(
+    student_id: str | None = None,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["student"])),
+) -> APIResponse:
     try:
         return read.get_requests(student_id=_parse_uuid_list(student_id))
     except HTTPException:

@@ -174,7 +174,9 @@ def delete_symposium(
 
 
 @router.get("/symposiums")
-def get_symposiums() -> APIResponse:
+def get_symposiums(
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student", "attendee"])),
+) -> APIResponse:
     try:
         return read.get_symposiums()
     except HTTPException:
@@ -187,7 +189,10 @@ def get_symposiums() -> APIResponse:
 
 
 @router.get("/symposiums/{symposium_id}")
-def get_symposium(symposium_id: UUID) -> dict[str, object]:
+def get_symposium(
+    symposium_id: UUID,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "attendee"])),
+) -> dict[str, object]:
     try:
         symposium_response = (
             supabase.table("symposiums")

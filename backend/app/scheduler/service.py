@@ -7,14 +7,14 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from app.scheduler.cp_sat import solve_schedule
+from app.scheduler.cp_sat import SolveSchedule
 
 logger = logging.getLogger(__name__)
 from app.scheduler.models import (
-    AvailabilityWindow,
+    AvailabilityTimeframe,
     PresentationInput,
     ScheduleConstraints,
-    ScheduleProblem,
+    ScheduleData,
     ScheduleResult,
 )
 from app.supabase_io import read
@@ -22,54 +22,54 @@ from app.supabase_io.client import supabase
 from app.utils import parse_app_datetime
 
 
-def _coerce_uuid(value: str | UUID) -> UUID:
+def _CoerceUuid(value: str | UUID) -> UUID:
     return value if isinstance(value, UUID) else UUID(value)
 
 
-def _coerce_datetime(value: object) -> datetime:
+def _CoerceDatetime(value: object) -> datetime:
     return parse_app_datetime(value)
 
 
-def _assignments_within_symposium_windows(
-    problem: ScheduleProblem,
+def _AssignmentsWithinSymposiumTimeframes(
+    schedule_data: ScheduleData,
     result: ScheduleResult,
 ) -> bool:
     return all(
         any(
-            assignment.start >= window.start and assignment.end <= window.end
-            for window in problem.symposium_windows
+            assignment.start >= timeframe.start and assignment.end <= timeframe.end
+            for timeframe in schedule_data.symposium_timeframes
         )
         for assignment in result.assignments
     )
 
 
-def _window_rows_to_models(rows: list[dict[str, Any]]) -> tuple[AvailabilityWindow, ...]:
-    windows = []
+def _TimeframeRowsToModels(rows: list[dict[str, Any]]) -> tuple[AvailabilityTimeframe, ...]:
+    timeframes = []
     for row in rows:
-        start_time = _coerce_datetime(row["start_time"])
-        end_time = _coerce_datetime(row["end_time"])
+        start_time = _CoerceDatetime(row["start_time"])
+        end_time = _CoerceDatetime(row["end_time"])
         if end_time > start_time:
-            windows.append(AvailabilityWindow(start=start_time, end=end_time))
-    windows.sort(key=lambda window: window.start)
+            timeframes.append(AvailabilityTimeframe(start=start_time, end=end_time))
+    timeframes.sort(key=lambda timeframe: timeframe.start)
 
-    if not windows:
+    if not timeframes:
         return ()
 
-    merged: list[AvailabilityWindow] = [windows[0]]
-    for window in windows[1:]:
+    merged: list[AvailabilityTimeframe] = [timeframes[0]]
+    for timeframe in timeframes[1:]:
         current = merged[-1]
-        if window.start <= current.end:
-            merged[-1] = AvailabilityWindow(
+        if timeframe.start <= current.end:
+            merged[-1] = AvailabilityTimeframe(
                 start=current.start,
-                end=max(current.end, window.end),
+                end=max(current.end, timeframe.end),
             )
             continue
-        merged.append(window)
+        merged.append(timeframe)
 
     return tuple(merged)
 
 
-def _get_symposium_row(symposium_id: UUID) -> dict[str, Any]:
+def _GetSymposiumRow(symposium_id: UUID) -> dict[str, Any]:
     response = (
         supabase.table("symposiums")
         .select("*")
@@ -83,19 +83,19 @@ def _get_symposium_row(symposium_id: UUID) -> dict[str, Any]:
     return dict(rows[0])
 
 
-def build_problem_from_symposium(
+def BuildScheduleDataFromSymposium(
     symposium_id: str | UUID,
     slot_minutes: int = 5,
     constraints: ScheduleConstraints | None = None,
-) -> ScheduleProblem:
+) -> ScheduleData:
     if constraints is None:
         constraints = ScheduleConstraints()
-    logger.info("Building schedule problem for symposium_id=%s  slot_minutes=%d", symposium_id, slot_minutes)
+    logger.info("Building schedule data for symposium_id=%s  slot_minutes=%d", symposium_id, slot_minutes)
     t_total = time.perf_counter()
-    symposium_uuid = _coerce_uuid(symposium_id)
+    symposium_uuid = _CoerceUuid(symposium_id)
 
     t = time.perf_counter()
-    symposium_row = _get_symposium_row(symposium_uuid)
+    symposium_row = _GetSymposiumRow(symposium_uuid)
     logger.info("[setup-timing] symposium_row: %.3fs", time.perf_counter() - t)
     rooms_available = int(symposium_row["rooms_available"])
     symposium_default_buffer = int(symposium_row.get("default_buffer") or 0)
@@ -178,54 +178,68 @@ def build_problem_from_symposium(
     for row in timeframe_rows:
         grouped_rows[str(row["linked_id"])].append(row)
 
-    symposium_windows = _window_rows_to_models(grouped_rows.get(str(symposium_uuid), []))
-    if not symposium_windows:
+    symposium_timeframes = _TimeframeRowsToModels(grouped_rows.get(str(symposium_uuid), []))
+    if not symposium_timeframes:
         raise ValueError(f"Symposium {symposium_uuid} has no timeframes.")
 
-    resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
-    soft_resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = {}
+    resource_timeframes: dict[str, tuple[AvailabilityTimeframe, ...]] = {}
+    soft_resource_timeframes: dict[str, tuple[AvailabilityTimeframe, ...]] = {}
     for linked_id, rows in grouped_rows.items():
         if linked_id == str(symposium_uuid):
             continue
-        windows = _window_rows_to_models(rows)
+        timeframes = _TimeframeRowsToModels(rows)
         if linked_id in professor_ids and constraints.professor_availability == "hard":
-            resource_windows[linked_id] = windows
+            resource_timeframes[linked_id] = timeframes
         elif linked_id in professor_ids and constraints.professor_availability == "soft":
-            soft_resource_windows[linked_id] = windows
+            soft_resource_timeframes[linked_id] = timeframes
         elif linked_id in student_ids and constraints.student_availability == "hard":
-            resource_windows[linked_id] = windows
+            resource_timeframes[linked_id] = timeframes
         elif linked_id in student_ids and constraints.student_availability == "soft":
-            soft_resource_windows[linked_id] = windows
+            soft_resource_timeframes[linked_id] = timeframes
+        else:
+            continue
 
     # Professors with no timeframes are treated as fully available.
     for id in professor_ids:
-        if id not in resource_windows:
-            resource_windows[id] = symposium_windows
+        if id not in resource_timeframes:
+            resource_timeframes[id] = symposium_timeframes
 
     # Do the same for students
     for id in student_ids:
-        if id not in resource_windows:
-            resource_windows[id] = symposium_windows
+        if id not in resource_timeframes:
+            resource_timeframes[id] = symposium_timeframes
 
     logger.info(
-        "Schedule problem built: rooms=%d  presentations=%d  professors=%d  students=%d  windows=%d  total=%.3fs",
-        rooms_available, len(scheduler_presentations), len(professor_ids), len(student_ids), len(symposium_windows),
+        "Schedule data built: rooms=%d  presentations=%d  professors=%d  students=%d  timeframes=%d  total=%.3fs",
+        rooms_available, len(scheduler_presentations), len(professor_ids), len(student_ids), len(symposium_timeframes),
         time.perf_counter() - t_total,
     )
-    return ScheduleProblem(
+    return ScheduleData(
         symposium_id=str(symposium_uuid),
         rooms_available=rooms_available,
-        symposium_windows=symposium_windows,
+        symposium_timeframes=symposium_timeframes,
         presentations=tuple(scheduler_presentations),
-        resource_windows=resource_windows,
-        soft_resource_windows=soft_resource_windows,
+        resource_timeframes=resource_timeframes,
+        soft_resource_timeframes=soft_resource_timeframes,
         professor_resource_ids=tuple(sorted(professor_ids)),
         slot_minutes=slot_minutes,
         constraints=constraints,
     )
 
 
-def _save_assignments(
+def BuildProblemFromSymposium(
+    symposium_id: str | UUID,
+    slot_minutes: int = 5,
+    constraints: ScheduleConstraints | None = None,
+) -> ScheduleData:
+    return BuildScheduleDataFromSymposium(
+        symposium_id=symposium_id,
+        slot_minutes=slot_minutes,
+        constraints=constraints,
+    )
+
+
+def _SaveAssignments(
     result: ScheduleResult,
     presentation_ids_to_reset: tuple[str, ...],
     symposium_id: str,
@@ -262,32 +276,37 @@ def _save_assignments(
     logger.info("Draft schedule assignments saved successfully")
 
 
-def build_schedule_for_symposium(
+def BuildScheduleForSymposium(
     symposium_id: str | UUID,
     slot_minutes: int = 5,
     time_limit_seconds: float = 30.0,
     constraints: ScheduleConstraints | None = None,
 ) -> ScheduleResult:
-    problem = build_problem_from_symposium(
+    schedule_data = BuildScheduleDataFromSymposium(
         symposium_id=symposium_id,
         slot_minutes=slot_minutes,
         constraints=constraints,
     )
-    result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
-    if result.status in ("optimal", "feasible") and not _assignments_within_symposium_windows(problem, result):
-        logger.error("Scheduler returned an assignment outside the symposium windows: symposium_id=%s", symposium_id)
+    result = SolveSchedule(schedule_data, time_limit_seconds=time_limit_seconds)
+    if result.status in ("optimal", "feasible") and not _AssignmentsWithinSymposiumTimeframes(schedule_data, result):
+        logger.error("Scheduler returned an assignment outside the symposium timeframes: symposium_id=%s", symposium_id)
         return ScheduleResult(
             status="invalid",
             assignments=(),
-            unscheduled_presentations=tuple(p.id for p in problem.presentations),
-            diagnostics=("Scheduler produced an assignment outside the symposium windows.",),
+            unscheduled_presentations=tuple(p.id for p in schedule_data.presentations),
+            diagnostics=("Scheduler produced an assignment outside the symposium timeframes.",),
         )
     if result.status in ("optimal", "feasible"):
-        _save_assignments(
+        _SaveAssignments(
             result,
-            tuple(p.id for p in problem.presentations),
-            str(symposium_id),
+            tuple(p.id for p in schedule_data.presentations),
+            schedule_data.symposium_id,
         )
     else:
         logger.warning("Scheduler did not find a solution: status=%s", result.status)
     return result
+
+
+build_schedule_data_from_symposium = BuildScheduleDataFromSymposium
+build_problem_from_symposium = BuildProblemFromSymposium
+build_schedule_for_symposium = BuildScheduleForSymposium

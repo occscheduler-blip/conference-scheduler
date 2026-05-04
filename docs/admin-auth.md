@@ -2,14 +2,13 @@
 
 ## Overview
 
-There are two independent auth systems in this app:
+The app uses JWT Bearer tokens for route protection:
 
 | System | Used for | How |
 |--------|----------|-----|
-| `X-API-Key` header | All `/api/events/*` routes | Static key checked against `BACKEND_API_KEY` env var |
-| JWT Bearer token | Admin routes (`/api/auth/*`) | bcrypt password → JWT issued on login |
+| JWT Bearer token | `/api/auth/*` and `/api/events/*` routes | Login/session endpoints issue JWTs with role claims |
 
-These systems don't interact. Adding JWT auth to a route doesn't affect API key routes and vice versa.
+The previous static key route protection has been removed.
 
 ---
 

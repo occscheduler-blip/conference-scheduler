@@ -21,7 +21,7 @@ flowchart LR
 
   subgraph API["FastAPI Backend (/backend/app)"]
     Main["main.py<br/>FastAPI router mount"]
-    Security["security.py<br/>require_api_key()"]
+    Security["auth/dependencies.py<br/>require_jwt()"]
     Events["routers/events.py<br/>API endpoints"]
     ReqSchemas["routers/request_schemas.py<br/>Pydantic request validation"]
     IORead["supabase_io/read.py"]
@@ -99,8 +99,8 @@ flowchart LR
 
 ## Data and Control Flow
 
-1. Frontend pages call backend endpoints using `NEXT_PUBLIC_BACKEND_URL`; protected API calls include `X-API-Key` from `NEXT_PUBLIC_BACKEND_API_KEY`.
-2. `backend/app/main.py` mounts `/api/events/*` with a dependency on `require_api_key`, so all event routes are API-key protected.
+1. Frontend pages call backend endpoints through the Next.js proxy; protected API calls include a JWT Bearer token.
+2. Event routes use `require_jwt()` dependencies with role-specific allow lists.
 3. `routers/events.py` validates request payloads via `request_schemas.py`, then performs table operations through:
    - `supabase_io/write.py` for inserts
    - `supabase_io/read.py` for queries

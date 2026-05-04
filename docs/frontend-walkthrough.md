@@ -50,10 +50,11 @@ flowchart LR
 
 ### Environment variables
 
-Most pages read:
+The Next.js backend proxy reads:
 
-- `NEXT_PUBLIC_BACKEND_URL` (defaults to `http://localhost:8000`)
-- `NEXT_PUBLIC_BACKEND_API_KEY` (optional, sent as `X-API-Key`)
+- `BACKEND_URL`
+
+Frontend API calls send JWT Bearer tokens through the proxy when a protected route is called.
 
 ### Common data-loading pattern
 

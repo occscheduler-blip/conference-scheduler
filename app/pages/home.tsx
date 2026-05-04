@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import type {
   ClassRecord,
   DepartmentRecord,
@@ -11,7 +10,7 @@ import type {
   Timeframe,
 } from "./types";
 import { parseBackendDateTime, normalizeId, dayKey, dayLabel, timeLabel } from "../lib/utils";
-import { apiFetch, BACKEND_URL } from "../lib/api";
+import { apiFetch, apiPost, BACKEND_URL } from "../lib/api";
 import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 import { buildPresentationColorMap, COLOR_SHADES, rgbToHex, getTextColor } from "../lib/scheduleColors";
 import { ScheduleGrid, getRoomLabel, type GridBlock } from "../lib/ScheduleGrid";
@@ -29,9 +28,14 @@ type ItineraryDetailItem = {
   end_time: string | null;
 };
 
-function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAttendee?: boolean; attendeeId?: string; authToken?: string; onSignOut?: () => void }) {
-  const searchParams = useSearchParams();
+type AttendeeSession = {
+  token: string;
+  attendeeId: string;
+};
 
+const ANONYMOUS_ATTENDEE_SESSION_KEY = "conference-scheduler-attendee-session";
+
+function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAttendee?: boolean; attendeeId?: string; authToken?: string; onSignOut?: () => void }) {
   const [symposia, setSymposia] = useState<SymposiumOption[]>([]);
   const [selectedSymposiumId, setSelectedSymposiumId] = useState("");
   const [timeframes, setTimeframes] = useState<Timeframe[]>([]);
@@ -52,8 +56,48 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
   const [showItinerary, setShowItinerary] = useState(false);
   const [itineraryDetails, setItineraryDetails] = useState<ItineraryDetailItem[] | null>(null);
   const [itineraryLoading, setItineraryLoading] = useState(false);
+  const [anonymousSession, setAnonymousSession] = useState<AttendeeSession | null>(null);
 
-  const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  const effectiveAuthToken = authToken ?? anonymousSession?.token;
+  const authHeaders = useMemo(
+    () => effectiveAuthToken ? { Authorization: `Bearer ${effectiveAuthToken}` } : undefined,
+    [effectiveAuthToken],
+  );
+
+  useEffect(() => {
+    if (authToken) return;
+
+    const stored = window.localStorage.getItem(ANONYMOUS_ATTENDEE_SESSION_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored) as Partial<AttendeeSession>;
+        if (parsed.token && parsed.attendeeId) {
+          setAnonymousSession({ token: parsed.token, attendeeId: parsed.attendeeId });
+          return;
+        }
+      } catch {
+        window.localStorage.removeItem(ANONYMOUS_ATTENDEE_SESSION_KEY);
+      }
+    }
+
+    async function createAnonymousSession() {
+      try {
+        const { raw } = await apiPost("/api/auth/attendee/session", {});
+        const next = {
+          token: (raw.access_token as string) ?? "",
+          attendeeId: (raw.entity_id as string) ?? "",
+        };
+        if (!next.token || !next.attendeeId) throw new Error("Missing attendee session token.");
+        window.localStorage.setItem(ANONYMOUS_ATTENDEE_SESSION_KEY, JSON.stringify(next));
+        setAnonymousSession(next);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Could not create attendee session.";
+        setMessage(msg);
+      }
+    }
+
+    void createAnonymousSession();
+  }, [authToken]);
 
   // Load itinerary from DB on mount
   useEffect(() => {
@@ -118,17 +162,11 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
     presentationId: string;
   } | null>(null);
 
-  const isLoggedIn = Boolean(
-    searchParams.get("student_id") ||
-      searchParams.get("professor_id") ||
-      searchParams.get("department_id") ||
-      searchParams.get("user_id")
-  );
-
   useEffect(() => {
     async function loadSymposia() {
+      if (!authHeaders) return;
       try {
-        const list = await apiFetch<SymposiumOption>("/api/events/symposiums");
+        const list = await apiFetch<SymposiumOption>("/api/events/symposiums", { headers: authHeaders });
         setSymposia(list);
         setSelectedSymposiumId(list[0]?.id ?? "");
       } catch (error) {
@@ -137,7 +175,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
       }
     }
     void loadSymposia();
-  }, []);
+  }, [authHeaders]);
 
   // AI template: loads all symposium schedule data in parallel — departments, classes, presentations, and students — and joins them for display.
   useEffect(() => {
@@ -157,7 +195,9 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
       try {
         setMessage(null);
 
-        const schedule = await fetchSymposiumSchedule(selectedSymposiumId, { mode: "published" });
+        if (!authHeaders) return;
+
+        const schedule = await fetchSymposiumSchedule(selectedSymposiumId, { mode: "published", authHeaders });
 
         setTimeframes(schedule.symposiumTimeframes);
         const parsedRooms = Number(schedule.symposium?.rooms_available ?? 1);
@@ -229,7 +269,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
       }
     }
     void loadSymposiumDetails();
-  }, [selectedSymposiumId]);
+  }, [authHeaders, selectedSymposiumId]);
 
   // AI template: derived state — groups presentations into display cards, builds filter options, and applies search/filter logic.
   const days = useMemo(

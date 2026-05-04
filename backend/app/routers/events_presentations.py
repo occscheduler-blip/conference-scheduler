@@ -190,7 +190,10 @@ def delete_presentation(
 
 
 @router.get("/presentations", response_model=None)
-def get_presentations(class_id: str | None = None) -> APIResponse:
+def get_presentations(
+    class_id: str | None = None,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "professor", "student", "attendee"])),
+) -> APIResponse:
     try:
         return read.get_presentations(class_id=_parse_uuid_list(class_id))
     except HTTPException:

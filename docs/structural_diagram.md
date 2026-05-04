@@ -24,8 +24,8 @@ flowchart LR
   end
 
   subgraph API["FastAPI Backend (/backend/app)"]
-    Main["main.py<br/>mounts /api router + API key dependency"]
-    Security["security.py<br/>require_api_key()"]
+    Main["main.py<br/>mounts /api router"]
+    Security["auth/dependencies.py<br/>require_jwt()"]
     Events["routers/events.py<br/>route handlers"]
     ReqSchemas["routers/request_schemas.py<br/>Pydantic request validation"]
     IORead["supabase_io/read.py"]
@@ -142,7 +142,7 @@ Note: `GET /api/events/symposia/{id}` is implemented — it was previously liste
 
 ## Data/Control Flow Notes
 
-1. `main.py` applies `require_api_key()` to all `/api/events/*` routes.
+1. Event routes use `require_jwt()` dependencies with role-specific allow lists.
 2. `events.py` validates request models using `request_schemas.py`.
 3. `events.py` uses `read.py`, `write.py`, and `delete.py`, and also performs direct `supabase.table(...)` calls for some operations.
 4. `timeframes.linked_id` is reused for symposium windows and person/entity availability records, not only symposium records.

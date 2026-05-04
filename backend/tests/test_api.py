@@ -23,9 +23,15 @@ class TestHealth:
 # ── TestAuth ─────────────────────────────────────────────────────────────────
 
 class TestAuth:
-    def test_public_get_no_token_ok(self, client):
-        """GET endpoints are public — no token required."""
+    def test_get_no_token_returns_401(self, client):
+        """GET endpoints require a JWT."""
         resp = client.get("/api/events/symposiums")
+        assert resp.status_code == 401
+
+    def test_attendee_get_token_ok(self, client):
+        from app.auth.jwt_utils import encode_jwt
+        token = encode_jwt("00000000-0000-0000-0000-000000000099", "viewer@attendee.local", "attendee")
+        resp = client.get("/api/events/symposiums", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
 
     def test_no_token_returns_401_on_protected(self, client):
@@ -460,6 +466,26 @@ class TestPresentations:
         assert row["minutes"] == 30
         assert db.count("presenting_students") == 1
 
+    def test_update_presentation_without_buffer_preserves_existing(self, client, h, db):
+        ids = self._setup(client, h, db)
+        pres_id = _add_presentation(client, h, ids["class_id"], ids["student_ids"], buffer=7)["presentation_id"]
+        resp = client.put(
+            "/api/events/update_presentation",
+            json={
+                "presentation_id": pres_id,
+                "title": "Updated Title",
+                "class_id": ids["class_id"],
+                "minutes": 30,
+                "presenting_students": [ids["student_ids"][0]],
+            },
+            headers=h,
+        )
+        assert resp.status_code == 200
+        row = db.rows("presentations")[0]
+        assert row["title"] == "Updated Title"
+        assert row["minutes"] == 30
+        assert row["buffer"] == 7
+
     def test_delete_presentation(self, client, h, db):
         ids = self._setup(client, h, db)
         pres_id = _add_presentation(client, h, ids["class_id"], ids["student_ids"])["presentation_id"]
@@ -493,14 +519,19 @@ class TestRequests:
         assert db.count("requests") == 1
 
     def test_get_requests(self, client, h, db):
+        from app.auth.jwt_utils import encode_jwt
+
         student_id = self._setup(client, h, db)
         client.post(
             "/api/events/add_request",
             json={"name": "Prof. A", "email": "a@hamilton.edu", "student_id": student_id},
             headers=h,
         )
+        student_headers = {
+            "Authorization": f"Bearer {encode_jwt(student_id, 'student@hamilton.edu', 'student')}"
+        }
         resp = client.get(
-            f"/api/events/requests?student_id={student_id}", headers=h
+            f"/api/events/requests?student_id={student_id}", headers=student_headers
         )
         assert resp.status_code == 200
         assert len(resp.json()["data"]) == 1

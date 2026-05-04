@@ -8,7 +8,7 @@ ConstraintMode = Literal["off", "soft", "hard"]
 
 
 @dataclass(frozen=True)
-class AvailabilityWindow:
+class AvailabilityTimeframe:
     start: datetime
     end: datetime
 
@@ -41,15 +41,15 @@ class ScheduleConstraints:
 
 
 @dataclass(frozen=True)
-class ScheduleProblem:
+class ScheduleData:
     symposium_id: str
     rooms_available: int
-    symposium_windows: tuple[AvailabilityWindow, ...]
+    symposium_timeframes: tuple[AvailabilityTimeframe, ...]
     presentations: tuple[PresentationInput, ...]
-    resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = field(
+    resource_timeframes: dict[str, tuple[AvailabilityTimeframe, ...]] = field(
         default_factory=dict
     )
-    soft_resource_windows: dict[str, tuple[AvailabilityWindow, ...]] = field(
+    soft_resource_timeframes: dict[str, tuple[AvailabilityTimeframe, ...]] = field(
         default_factory=dict
     )
     professor_resource_ids: tuple[str, ...] = ()
@@ -72,3 +72,9 @@ class ScheduleResult:
     unscheduled_presentations: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
+
+
+# Backwards-compatible aliases for code paths that still use the older names
+# while the scheduler refactor moves toward "timeframe" and "data" language.
+AvailabilityWindow = AvailabilityTimeframe
+ScheduleProblem = ScheduleData

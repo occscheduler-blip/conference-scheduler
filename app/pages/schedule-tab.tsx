@@ -246,6 +246,7 @@ export default function ScheduleTab({
           try {
             const allAvailTfs = await apiFetch<Timeframe>(
               `/api/events/timeframes?linked_id=${encodeURIComponent(resourceIdList.join(","))}`,
+              { headers: authHeaders },
             );
             for (const tf of allAvailTfs) {
               const key = normalizeId(tf.linked_id ?? "");

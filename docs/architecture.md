@@ -47,7 +47,7 @@ Timeframes (available time windows) attach polymorphically to Symposia, Professo
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
 | Backend | Python, FastAPI, Pydantic v2 |
 | Database | Supabase (hosted Postgres) |
-| Auth | Static API key via `X-API-Key` header |
+| Auth | JWT Bearer tokens with role claims |
 | Testing | pytest |
 
 ---
@@ -58,13 +58,10 @@ The frontend lives in `/app` and uses the **Next.js 16 App Router** with file-ba
 
 ### Common Patterns
 
-**API calls** — all pages read two environment variables and attach the API key as a header:
+**API calls** — frontend code calls the local Next.js proxy, and protected calls include a JWT Bearer token:
 ```typescript
-const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-const apiKey = process.env.NEXT_PUBLIC_BACKEND_API_KEY ?? "";
-
-const res = await fetch(`${backendUrl}/api/events/symposia`, {
-  headers: { "X-API-Key": apiKey }
+const res = await fetch("/api/backend/api/events/symposiums", {
+  headers: { Authorization: `Bearer ${token}` }
 });
 ```
 
@@ -519,9 +516,9 @@ GET /health
 → {"status": "ok", "environment": "development"}
 ```
 
-**Router Registration** — all business routes are mounted under `/api/events` and require API key auth:
+**Router Registration** — all business routes are mounted under `/api/events`; each protected route declares its own JWT role dependency:
 ```python
-app.include_router(events_router, prefix="/api/events", dependencies=[Depends(require_api_key)])
+app.include_router(events_router, prefix="/api")
 ```
 
 ---
@@ -538,7 +535,6 @@ A Pydantic `BaseSettings` class that reads from environment variables (case-inse
 | `app_env` | `APP_ENV` | `"development"` | `development` or `production` |
 | `app_port` | `APP_PORT` | `8000` | Port to bind |
 | `backend_cors_origins` | `BACKEND_CORS_ORIGINS` | `"http://localhost:3000"` | Comma-separated allowed origins |
-| `backend_api_key` | `BACKEND_API_KEY` | `""` | Required — API key for auth |
 | `supabase_url` | `SUPABASE_URL` | `""` | Required — Supabase project URL |
 | `supabase_key` | `SUPABASE_KEY` | `""` | Required — Supabase anon/service key |
 | `supabase_db_url` | `SUPABASE_DB_URL` | `""` | Direct DB URL (for migrations) |
@@ -828,7 +824,7 @@ Each `Update*` schema has all fields optional — only provided fields are appli
 
 ### API Endpoints
 
-All endpoints below are prefixed with `/api/events` and require `X-API-Key` header.
+All endpoints below are prefixed with `/api/events` and protected routes require a JWT Bearer token with an allowed role.
 
 #### Helper Utilities (internal, `events.py`)
 
@@ -962,16 +958,15 @@ Symposium (1) ──────────────────────
 ```bash
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-anon-or-service-key
-BACKEND_API_KEY=your-secret-api-key
 BACKEND_CORS_ORIGINS=http://localhost:3000
 LOG_LEVEL=INFO
 APP_ENV=development
+JWT_SECRET_KEY=your-jwt-secret
 ```
 
 **Frontend (`.env.local`):**
 ```bash
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
-NEXT_PUBLIC_BACKEND_API_KEY=your-secret-api-key
+BACKEND_URL=http://localhost:8000
 ```
 
 ### Running Locally

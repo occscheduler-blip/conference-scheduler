@@ -542,7 +542,7 @@ class UpdatePresentationRequest(BaseModel):
     title: str
     class_id: UUID
     minutes: int
-    buffer: int
+    buffer: int | None = None
     room: int | None = None
     presenting_students: list[UUID]
 

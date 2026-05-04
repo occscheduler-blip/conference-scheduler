@@ -1,4 +1,5 @@
 import logging
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -138,6 +139,29 @@ def admin_delete(
 
 class AttendeeRegisterBody(BaseModel):
     email: str
+
+
+@router.post("/attendee/session", status_code=status.HTTP_200_OK)
+def attendee_session() -> dict[str, str]:
+    """Create an anonymous attendee identity for public-site viewers."""
+    attendee_id = uuid4()
+    email = f"anonymous-{attendee_id}@attendee.local"
+    insert_resp = supabase.table("attendees").insert({"id": str(attendee_id), "email": email}).execute()
+    insert_rows = cast(list[dict[str, object]], insert_resp.data or [])
+    if not insert_rows:
+        logger.error("Failed to create anonymous attendee session")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create attendee session.",
+        )
+
+    token = encode_jwt(str(attendee_id), email, "attendee")
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "role": "attendee",
+        "entity_id": str(attendee_id),
+    }
 
 
 @router.post("/attendee/register", status_code=status.HTTP_200_OK)

@@ -91,7 +91,6 @@ This prints the local `API URL`, `SERVICE_ROLE_KEY`, and `DB URL`. Use these in 
 SUPABASE_URL=http://127.0.0.1:54321
 SUPABASE_KEY=<SERVICE_ROLE_KEY from supabase status>
 SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
-BACKEND_API_KEY=any-secret-you-choose
 JWT_SECRET_KEY=any-secret-you-choose
 ```
 

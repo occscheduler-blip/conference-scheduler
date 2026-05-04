@@ -62,7 +62,10 @@ def update_timeframes(
 
 
 @router.get("/timeframes")
-def get_timeframes(linked_id: str | None = None) -> APIResponse:
+def get_timeframes(
+    linked_id: str | None = None,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "professor", "student", "attendee"])),
+) -> APIResponse:
     try:
         return read.get_timeframes(linked_id=_parse_uuid_list(linked_id))
     except HTTPException:

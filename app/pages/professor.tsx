@@ -529,7 +529,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     const selectedNames = selectedEntries.map((entry) => entry.name);
     const selectedIds = selectedEntries.map((entry) => entry.id);
     if (selectedNames.length === 0) {
-      setGroupMessage("Select at least one student to make a presentation group.");
+      setGroupMessage("Select at least one student to group together.");
       return;
     }
     setPresentationGroups((current) => [
@@ -1058,7 +1058,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                 <div className="w-full rounded-lg border border-[#d7e0ff] bg-[#fdfdff] p-3">
                   <p className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a]">Uploaded Students</p>
                   <p className="mt-1 text-xs font-semibold text-[#4b5d99]">
-                    Click student names to select them, then click Make Presentation Group.
+                    Select the students who should present together, then click Group Selected Students.
                   </p>
                   {uploadedStudents.length > 0 ? (
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -1106,7 +1106,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                       disabled={uploadedStudents.length === 0}
                       className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d]"
                     >
-                      Make Presentation Group
+                      Group Selected Students
                     </button>
                     {groupMessage ? <p className="mt-2 text-sm font-semibold text-[#9a1f1f]">{groupMessage}</p> : null}
                   </div>

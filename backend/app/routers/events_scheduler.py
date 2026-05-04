@@ -17,14 +17,14 @@ from app.routers.events_helpers import (
     _parse_uuid_list,
     _room_label,
 )
-from app.scheduler import build_schedule_for_symposium
+from app.scheduler import BuildScheduleForSymposium
 from app.scheduler.conflicts import (
-    build_conflict_index,
-    format_person_conflict_pair,
-    format_person_conflict_single,
-    format_room_conflict_pair,
-    format_room_conflict_single,
-    load_symposium_entities,
+    BuildConflictIndex,
+    FormatPersonConflictPair,
+    FormatPersonConflictSingle,
+    FormatRoomConflictPair,
+    FormatRoomConflictSingle,
+    LoadSymposiumEntities,
 )
 from app.scheduler.models import ScheduleConstraints
 from app.supabase_io import delete, read, write
@@ -35,22 +35,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConstraints, slot_minutes: int) -> None:
+def _RunScheduleJob(job_id: str, symposium_id: str, constraints: ScheduleConstraints, slot_minutes: int) -> None:
     """Background thread: run the solver and write results back to scheduler_jobs.
 
     Each thread gets its own supabase connection pool via the thread-local proxy
     in app.supabase_io.client, so there is no HTTP/2 stream-state sharing with
     the request-handler threads.
     """
-    def _update(payload: dict[str, Any]) -> None:
+    def _Update(payload: dict[str, Any]) -> None:
         try:
             supabase.table("scheduler_jobs").update({**payload, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", job_id).execute()
         except Exception:
             logger.exception("schedule job %s: failed to update status to %s", job_id, payload.get("status"))
 
     try:
-        _update({"status": "running"})
-        result = build_schedule_for_symposium(symposium_id, slot_minutes=slot_minutes, constraints=constraints)
+        _Update({"status": "running"})
+        result = BuildScheduleForSymposium(symposium_id, slot_minutes=slot_minutes, constraints=constraints)
         logger.info("schedule job %s complete: status=%s  assignments=%d", job_id, result.status, len(result.assignments))
         result_payload = {
             "status": result.status,
@@ -61,14 +61,14 @@ def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConst
             "unscheduled_presentations": list(result.unscheduled_presentations),
             "diagnostics": list(result.diagnostics),
         }
-        _update({"status": "completed", "result": result_payload})
+        _Update({"status": "completed", "result": result_payload})
     except Exception as exc:
         logger.exception("schedule job %s failed", job_id)
-        _update({"status": "failed", "error": str(exc)})
+        _Update({"status": "failed", "error": str(exc)})
 
 
 @router.post("/schedule")
-def run_schedule(
+def RunSchedule(
     body: request_schemas.RunSchedulerRequest,
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, object]:
@@ -96,7 +96,7 @@ def run_schedule(
         )
         job_id = cast(dict[str, Any], job_row.data[0])["id"]
 
-        thread = threading.Thread(target=_run_schedule_job, args=(job_id, str(body.symposium_id), constraints, slot_minutes), daemon=True)
+        thread = threading.Thread(target=_RunScheduleJob, args=(job_id, str(body.symposium_id), constraints, slot_minutes), daemon=True)
         thread.start()
 
         return {"job_id": job_id}
@@ -110,7 +110,7 @@ def run_schedule(
 
 
 @router.get("/schedule_job/{job_id}")
-def get_schedule_job(
+def GetScheduleJob(
     job_id: str,
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, object]:
@@ -135,7 +135,10 @@ def get_schedule_job(
 
 
 @router.get("/temporary_timeframes")
-def get_temporary_timeframes(linked_id: str | None = None) -> APIResponse:
+def GetTemporaryTimeframes(
+    linked_id: str | None = None,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> APIResponse:
     try:
         return read.get_temporary_timeframes(linked_id=_parse_uuid_list(linked_id))
     except HTTPException:
@@ -146,7 +149,7 @@ def get_temporary_timeframes(linked_id: str | None = None) -> APIResponse:
 
 
 @router.post("/publish_schedule")
-def publish_schedule(
+def PublishSchedule(
     body: request_schemas.PublishScheduleRequest,
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, object]:
@@ -209,7 +212,7 @@ def publish_schedule(
 
 
 @router.put("/update_schedule_assignment")
-def update_schedule_assignment(
+def UpdateScheduleAssignment(
     payload: request_schemas.UpdateScheduleAssignmentRequest,
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str | int]:
@@ -219,14 +222,14 @@ def update_schedule_assignment(
         presentation_id = str(payload.presentation_id)
         room_names = _load_room_names(payload.symposium_id)
 
-        entities = load_symposium_entities(payload.symposium_id)
-        index = build_conflict_index(entities)
+        entities = LoadSymposiumEntities(payload.symposium_id)
+        index = BuildConflictIndex(entities)
 
         target_pres = index.presentations_by_id.get(presentation_id)
         if target_pres is None:
             raise HTTPException(status_code=404, detail="Presentation not found in this symposium.")
 
-        target_resources = index.resources_for(target_pres)
+        target_resources = index.ResourcesFor(target_pres)
 
         new_start = ensure_app_timezone(payload.start_time)
         new_end = ensure_app_timezone(payload.end_time)
@@ -267,19 +270,19 @@ def update_schedule_assignment(
                 if other_room is not None and int(other_room) == payload.room:
                     raise HTTPException(
                         status_code=409,
-                        detail=format_room_conflict_single(
+                        detail=FormatRoomConflictSingle(
                             _room_label(room_names, payload.room), other_title,
                         ),
                     )
 
-                shared = target_resources & index.resources_for(other)
+                shared = target_resources & index.ResourcesFor(other)
                 if shared:
                     person_id = next(iter(shared))
                     raise HTTPException(
                         status_code=409,
-                        detail=format_person_conflict_single(
-                            index.person_role(person_id),
-                            index.person_name(person_id),
+                        detail=FormatPersonConflictSingle(
+                            index.PersonRole(person_id),
+                            index.PersonName(person_id),
                             other_title,
                         ),
                     )
@@ -314,7 +317,7 @@ def update_schedule_assignment(
 
 
 @router.put("/bulk_update_schedule_assignments")
-def bulk_update_schedule_assignments(
+def BulkUpdateScheduleAssignments(
     payload: request_schemas.BulkUpdateScheduleAssignmentRequest,
     _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, object]:
@@ -326,8 +329,8 @@ def bulk_update_schedule_assignments(
             str(a.presentation_id): a for a in payload.assignments
         }
 
-        entities = load_symposium_entities(payload.symposium_id)
-        index = build_conflict_index(entities)
+        entities = LoadSymposiumEntities(payload.symposium_id)
+        index = BuildConflictIndex(entities)
 
         for pid in assignment_map:
             if pid not in index.presentations_by_id:
@@ -372,7 +375,7 @@ def bulk_update_schedule_assignments(
         for i, pid_a in enumerate(scheduled_ids):
             room_a, start_a, buffered_end_a = effective[pid_a]
             pres_a = index.presentations_by_id[pid_a]
-            resources_a = index.resources_for(pres_a)
+            resources_a = index.ResourcesFor(pres_a)
 
             for pid_b in scheduled_ids[i + 1:]:
                 room_b, start_b, buffered_end_b = effective[pid_b]
@@ -390,19 +393,19 @@ def bulk_update_schedule_assignments(
                 if room_a == room_b:
                     raise HTTPException(
                         status_code=409,
-                        detail=format_room_conflict_pair(
+                        detail=FormatRoomConflictPair(
                             _room_label(room_names, room_a), title_a, title_b,
                         ),
                     )
 
-                shared = resources_a & index.resources_for(pres_b)
+                shared = resources_a & index.ResourcesFor(pres_b)
                 if shared:
                     person_id = next(iter(shared))
                     raise HTTPException(
                         status_code=409,
-                        detail=format_person_conflict_pair(
-                            index.person_role(person_id),
-                            index.person_name(person_id),
+                        detail=FormatPersonConflictPair(
+                            index.PersonRole(person_id),
+                            index.PersonName(person_id),
                             title_a, title_b,
                         ),
                     )

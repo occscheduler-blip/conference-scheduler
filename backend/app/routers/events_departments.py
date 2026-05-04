@@ -137,6 +137,7 @@ def delete_department(
 def get_departments(
     symposium_id: str | None = None,
     include: str | None = None,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student", "attendee"])),
 ) -> APIResponse | list[dict[str, object]]:
     try:
         ids = _parse_uuid_list(symposium_id)

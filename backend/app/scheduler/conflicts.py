@@ -32,7 +32,7 @@ class SymposiumEntities:
     professors: list[dict[str, Any]]
 
 
-def load_symposium_entities(symposium_id: UUID) -> SymposiumEntities:
+def LoadSymposiumEntities(symposium_id: UUID) -> SymposiumEntities:
     """Fetch everything needed to detect conflicts under one symposium.
 
     Follows departments → classes → (presentations, professors). Presentations
@@ -75,7 +75,7 @@ class ConflictIndex:
     all_professor_ids: frozenset[str]
     person_name_by_id: dict[str, str] = field(default_factory=dict)
 
-    def resources_for(self, presentation: dict[str, Any]) -> set[str]:
+    def ResourcesFor(self, presentation: dict[str, Any]) -> set[str]:
         """Return the set of person-ids required for this presentation.
 
         Mirrors the scheduler's resource model: every professor in the
@@ -89,16 +89,20 @@ class ConflictIndex:
                 resources.add(sid)
         return resources
 
-    def person_role(self, person_id: str) -> str:
+    def PersonRole(self, person_id: str) -> str:
         """"Professor" if this id belongs to a professor, else "Student"."""
         return "Professor" if person_id in self.all_professor_ids else "Student"
 
-    def person_name(self, person_id: str, fallback: str = "Someone") -> str:
+    def PersonName(self, person_id: str, fallback: str = "Someone") -> str:
         return self.person_name_by_id.get(person_id, fallback)
 
+    resources_for = ResourcesFor
+    person_role = PersonRole
+    person_name = PersonName
 
-def build_conflict_index(entities: SymposiumEntities) -> ConflictIndex:
-    """Derive lookup tables from the raw rows returned by `load_symposium_entities`."""
+
+def BuildConflictIndex(entities: SymposiumEntities) -> ConflictIndex:
+    """Derive lookup tables from the raw rows returned by `LoadSymposiumEntities`."""
     professors_by_class: dict[str, list[str]] = {}
     person_name_by_id: dict[str, str] = {}
     all_professor_ids: set[str] = set()
@@ -143,21 +147,21 @@ def build_conflict_index(entities: SymposiumEntities) -> ConflictIndex:
 # Kept here so both handlers phrase conflicts identically.
 
 
-def format_room_conflict_single(room_label: str, other_title: str) -> str:
+def FormatRoomConflictSingle(room_label: str, other_title: str) -> str:
     return (
         f"Room conflict: {room_label} is already occupied by "
         f"\"{other_title}\" at that time."
     )
 
 
-def format_room_conflict_pair(room_label: str, title_a: str, title_b: str) -> str:
+def FormatRoomConflictPair(room_label: str, title_a: str, title_b: str) -> str:
     return (
         f"Room conflict: {room_label} is double-booked between "
         f"\"{title_a}\" and \"{title_b}\" at that time."
     )
 
 
-def format_person_conflict_single(role: str, name: str, other_title: str) -> str:
+def FormatPersonConflictSingle(role: str, name: str, other_title: str) -> str:
     return (
         f"Scheduling conflict: {role} \"{name}\" is required at both "
         f"this presentation and \"{other_title}\" at that time. "
@@ -165,9 +169,17 @@ def format_person_conflict_single(role: str, name: str, other_title: str) -> str
     )
 
 
-def format_person_conflict_pair(role: str, name: str, title_a: str, title_b: str) -> str:
+def FormatPersonConflictPair(role: str, name: str, title_a: str, title_b: str) -> str:
     return (
         f"Scheduling conflict: {role} \"{name}\" is required at both "
         f"\"{title_a}\" and \"{title_b}\" at that time. "
         f"They cannot be in two rooms at once."
     )
+
+
+load_symposium_entities = LoadSymposiumEntities
+build_conflict_index = BuildConflictIndex
+format_room_conflict_single = FormatRoomConflictSingle
+format_room_conflict_pair = FormatRoomConflictPair
+format_person_conflict_single = FormatPersonConflictSingle
+format_person_conflict_pair = FormatPersonConflictPair
