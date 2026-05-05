@@ -1475,11 +1475,12 @@ export default function ScheduleTab({
         );
 
         const needsBuffer = regularSuggestions.some((s) => /buffer/i.test(s));
+        const needsRooms = regularSuggestions.some((s) => /room/i.test(s));
 
         const mentionedConstraints = constraintMap.filter(({ signal }) =>
           regularSuggestions.some((s) => s.toLowerCase().includes(signal))
         );
-        const hasQuickActions = true;
+        const hasQuickActions = mentionedConstraints.length > 0 || needsBuffer || needsRooms;
 
         return (
           <div
@@ -1532,22 +1533,24 @@ export default function ScheduleTab({
                     <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#555]">Quick actions</p>
                     <div className="space-y-2">
                       {mentionedConstraints.map(({ key, label }) => renderToggle(key, label))}
-                      <div className="flex items-center gap-3 pt-1">
-                        <span className="text-sm text-[#333]">Rooms: <strong>{pendingRooms ?? roomsAvailable}</strong></span>
-                        <div className="flex items-center gap-1">
-                          <button type="button" onClick={() => setPendingRooms((pendingRooms ?? roomsAvailable) - 1)} disabled={(pendingRooms ?? roomsAvailable) <= 1} className="flex h-6 w-6 items-center justify-center rounded border border-[#c7d4f7] bg-white text-sm font-bold text-[#1635a7] hover:bg-[#eef3ff] disabled:opacity-40">−</button>
-                          <span className="w-8 text-center text-xs font-semibold text-[#1635a7]">{pendingRooms ?? roomsAvailable}</span>
-                          <button type="button" onClick={() => setPendingRooms((pendingRooms ?? roomsAvailable) + 1)} className="flex h-6 w-6 items-center justify-center rounded border border-[#c7d4f7] bg-white text-sm font-bold text-[#1635a7] hover:bg-[#eef3ff]">+</button>
+                      {needsRooms && (
+                        <div className="flex items-center gap-3 pt-1">
+                          <span className="text-sm text-[#333]">Rooms: <strong>{pendingRooms ?? roomsAvailable}</strong></span>
+                          <div className="flex items-center gap-1">
+                            <button type="button" onClick={() => setPendingRooms((pendingRooms ?? roomsAvailable) - 1)} disabled={(pendingRooms ?? roomsAvailable) <= 1} className="flex h-6 w-6 items-center justify-center rounded border border-[#c7d4f7] bg-white text-sm font-bold text-[#1635a7] hover:bg-[#eef3ff] disabled:opacity-40">−</button>
+                            <span className="w-8 text-center text-xs font-semibold text-[#1635a7]">{pendingRooms ?? roomsAvailable}</span>
+                            <button type="button" onClick={() => setPendingRooms((pendingRooms ?? roomsAvailable) + 1)} className="flex h-6 w-6 items-center justify-center rounded border border-[#c7d4f7] bg-white text-sm font-bold text-[#1635a7] hover:bg-[#eef3ff]">+</button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleApplyRooms()}
+                            disabled={isApplyingRooms || pendingRooms === null || pendingRooms === roomsAvailable}
+                            className="rounded-lg bg-[#1635a7] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0f2a8a] disabled:opacity-50"
+                          >
+                            {isApplyingRooms ? "Applying…" : "Apply"}
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleApplyRooms()}
-                          disabled={isApplyingRooms || pendingRooms === null || pendingRooms === roomsAvailable}
-                          className="rounded-lg bg-[#1635a7] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0f2a8a] disabled:opacity-50"
-                        >
-                          {isApplyingRooms ? "Applying…" : "Apply"}
-                        </button>
-                      </div>
+                      )}
                       {needsBuffer && (
                         <div className="flex items-center gap-3 pt-1">
                           <span className="text-sm text-[#333]">Buffer: <strong>{defaultBuffer} min</strong></span>
