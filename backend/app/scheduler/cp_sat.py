@@ -19,6 +19,7 @@ from .cp_sat_helpers import (
 )
 from .models import (
     PresentationInput,
+    ScheduledPresentation,
     ScheduleProblem,
     ScheduleResult,
 )
