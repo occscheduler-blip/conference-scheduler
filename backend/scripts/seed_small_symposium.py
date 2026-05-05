@@ -1,17 +1,18 @@
 """
-Seed script: inserts a medium symposium alongside existing data.
-2 days, 2 departments, 8 classes, 6 professors, 6 students/class = 48 presentations, 4 rooms.
-Run from the backend directory: python seed_medium_symposium.py
+Seed script: inserts a small symposium alongside existing data.
+1 day, 1 department, 3 classes, 3 professors, 4 students/class = 12 presentations, 2 rooms.
+Run from the backend directory: python scripts/seed_small_symposium.py
 """
 
 import os
+from pathlib import Path
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from supabase import create_client
 
@@ -25,11 +26,10 @@ def ustr(u) -> str:
 
 
 def generate_data():
-    rng = random.Random(13)
+    rng = random.Random(7)
 
     day_bounds = [
-        (datetime(2024, 2, 5, 13, 0, tzinfo=timezone.utc), datetime(2024, 2, 5, 20, 0, tzinfo=timezone.utc)),
-        (datetime(2024, 2, 6, 13, 0, tzinfo=timezone.utc), datetime(2024, 2, 6, 20, 0, tzinfo=timezone.utc)),
+        (datetime(2024, 3, 15, 13, 0, tzinfo=timezone.utc), datetime(2024, 3, 15, 18, 0, tzinfo=timezone.utc)),
     ]
 
     def random_availability(coverage: float) -> list:
@@ -37,11 +37,8 @@ def generate_data():
         for day_start, day_end in day_bounds:
             day_minutes = int((day_end - day_start).total_seconds() / 60)
             target = max(60, min(day_minutes, round(day_minutes * coverage)))
-            max_wins = min(3, target // 60)
-            num_windows = rng.choices(
-                range(1, max_wins + 1),
-                weights=[50, 35, 15][:max_wins],
-            )[0]
+            max_wins = min(2, target // 60)
+            num_windows = rng.choices(range(1, max_wins + 1), weights=[60, 40][:max_wins])[0]
             placed: list[tuple[int, int]] = []
             remaining = target
             for w in range(num_windows):
@@ -67,20 +64,19 @@ def generate_data():
         return windows
 
     def person_coverage() -> float:
-        return rng.triangular(0.55, 1.00, 0.75)
+        return rng.triangular(0.60, 1.00, 0.80)
 
-    NUM_PROFESSORS = 6
-    NUM_CLASSES = 8
-    STUDENTS_PER_CLASS = 6
-    NUM_DEPARTMENTS = 2
+    NUM_PROFESSORS = 3
+    NUM_CLASSES = 3
+    STUDENTS_PER_CLASS = 4
 
     # --- Symposium ---
     symposium_id = uuid.uuid4()
     symposium = {
         "id": ustr(symposium_id),
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "name": "Medium Symposium",
-        "rooms_available": 4,
+        "name": "Small Symposium",
+        "rooms_available": 2,
         "default_buffer": 5,
     }
 
@@ -94,16 +90,15 @@ def generate_data():
         for s, e in day_bounds
     ]
 
-    # --- Departments ---
-    departments = []
-    for d in range(NUM_DEPARTMENTS):
-        departments.append({
-            "id": ustr(uuid.uuid4()),
-            "department_name": f"Department {d}",
-            "department_head_name": f"Head {d}",
-            "email": f"medium-dept{d}@university.edu",
-            "symposium_id": ustr(symposium_id),
-        })
+    # --- Department ---
+    dept_id = ustr(uuid.uuid4())
+    departments = [{
+        "id": dept_id,
+        "department_name": "Department A",
+        "department_head_name": "Head A",
+        "email": "dept-a@university.edu",
+        "symposium_id": ustr(symposium_id),
+    }]
 
     # --- Classes & professors ---
     prof_availability: dict[int, list] = {
@@ -116,19 +111,17 @@ def generate_data():
 
     for c in range(NUM_CLASSES):
         class_id = ustr(uuid.uuid4())
-        dept_id = departments[c % NUM_DEPARTMENTS]["id"]
         classes.append({"id": class_id, "name": f"Class {c}", "department_id": dept_id})
 
-        prof_index = c % NUM_PROFESSORS
-        if prof_index not in prof_id_by_index:
+        if c not in prof_id_by_index:
             prof_uuid = ustr(uuid.uuid4())
-            prof_id_by_index[prof_index] = prof_uuid
+            prof_id_by_index[c] = prof_uuid
             prof_records.append({
                 "id": prof_uuid,
-                "name": f"Professor {prof_index}",
-                "email": f"medium-prof{prof_index}@university.edu",
+                "name": f"Professor {c}",
+                "email": f"small-prof{c}@university.edu",
                 "class_id": class_id,
-                "_availability": prof_availability[prof_index],
+                "_availability": prof_availability[c],
             })
 
     prof_timeframes = [
@@ -157,22 +150,22 @@ def generate_data():
         class_id = classes[c]["id"]
         for s in range(STUDENTS_PER_CLASS):
             avail = random_availability(person_coverage())
-            duration = rng.choice([15, 20, 25])
+            duration = rng.choice([15, 20])
 
             pres_id = ustr(uuid.uuid4())
             student_id = ustr(uuid.uuid4())
 
             presentations.append({
                 "id": pres_id,
-                "title": f"Medium Class {c} — Student {s}",
+                "title": f"Small Class {c} — Student {s}",
                 "class_id": class_id,
                 "minutes": duration,
                 "buffer": 5,
             })
             students.append({
                 "id": student_id,
-                "name": f"Medium Student {c * STUDENTS_PER_CLASS + s}",
-                "email": f"medium-student{c * STUDENTS_PER_CLASS + s}@university.edu",
+                "name": f"Small Student {c * STUDENTS_PER_CLASS + s}",
+                "email": f"small-student{c * STUDENTS_PER_CLASS + s}@university.edu",
                 "class_id": class_id,
                 "presentation_id": pres_id,
             })
@@ -215,7 +208,7 @@ def batch_insert(table: str, rows: list[dict], batch_size: int = 200):
 
 
 def seed(data: dict):
-    print("Seeding medium symposium data...")
+    print("Seeding small symposium data...")
     batch_insert("symposiums", [data["symposium"]])
     batch_insert("timeframes", data["sym_timeframes"])
     batch_insert("departments", data["departments"])

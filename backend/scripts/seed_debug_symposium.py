@@ -31,18 +31,19 @@ Expected suggestions from _build_admin_suggestions:
   - Reduce required room buffer or make that rule softer.
 
 Usage (from the backend directory):
-    python seed_debug_symposium.py
-    python seed_debug_symposium.py --clear
+    python scripts/seed_debug_symposium.py
+    python scripts/seed_debug_symposium.py --clear
 """
 
 import argparse
 import os
+from pathlib import Path
 import uuid
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from supabase import create_client
 

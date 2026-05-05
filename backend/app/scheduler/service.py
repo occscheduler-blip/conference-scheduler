@@ -362,7 +362,8 @@ def build_schedule_for_symposium(
         logger.warning("Scheduler did not find a solution: status=%s", result.status)
 
     if debug_mode and result.unscheduled_presentations:
-        from .cp_sat import _run_exhaustive_debug
+        from .cp_sat_helpers import _run_exhaustive_debug
+
         probe_hints, debug_best_assignments = _run_exhaustive_debug(problem, len(result.unscheduled_presentations), total_time_budget=540.0)
         result = ScheduleResult(
             status=result.status,

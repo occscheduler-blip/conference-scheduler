@@ -1,17 +1,18 @@
 """
-Seed script: inserts a large symposium alongside existing data.
-3 days, 3 departments, 10 classes, 10 professors, 10 students/class = 100 presentations, 6 rooms.
-Run from the backend directory: python seed_large_symposium.py
+Seed script: inserts a medium symposium alongside existing data.
+2 days, 2 departments, 8 classes, 6 professors, 6 students/class = 48 presentations, 4 rooms.
+Run from the backend directory: python scripts/seed_medium_symposium.py
 """
 
 import os
+from pathlib import Path
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from supabase import create_client
 
@@ -25,12 +26,11 @@ def ustr(u) -> str:
 
 
 def generate_data():
-    rng = random.Random(99)
+    rng = random.Random(13)
 
     day_bounds = [
-        (datetime(2024, 4, 8, 13, 0, tzinfo=timezone.utc), datetime(2024, 4, 8, 21, 0, tzinfo=timezone.utc)),
-        (datetime(2024, 4, 9, 13, 0, tzinfo=timezone.utc), datetime(2024, 4, 9, 21, 0, tzinfo=timezone.utc)),
-        (datetime(2024, 4, 10, 13, 0, tzinfo=timezone.utc), datetime(2024, 4, 10, 21, 0, tzinfo=timezone.utc)),
+        (datetime(2024, 2, 5, 13, 0, tzinfo=timezone.utc), datetime(2024, 2, 5, 20, 0, tzinfo=timezone.utc)),
+        (datetime(2024, 2, 6, 13, 0, tzinfo=timezone.utc), datetime(2024, 2, 6, 20, 0, tzinfo=timezone.utc)),
     ]
 
     def random_availability(coverage: float) -> list:
@@ -68,20 +68,20 @@ def generate_data():
         return windows
 
     def person_coverage() -> float:
-        return rng.triangular(0.50, 1.00, 0.75)
+        return rng.triangular(0.55, 1.00, 0.75)
 
-    NUM_PROFESSORS = 10
-    NUM_CLASSES = 10
-    STUDENTS_PER_CLASS = 10
-    NUM_DEPARTMENTS = 3
+    NUM_PROFESSORS = 6
+    NUM_CLASSES = 8
+    STUDENTS_PER_CLASS = 6
+    NUM_DEPARTMENTS = 2
 
     # --- Symposium ---
     symposium_id = uuid.uuid4()
     symposium = {
         "id": ustr(symposium_id),
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "name": "Large Symposium",
-        "rooms_available": 6,
+        "name": "Medium Symposium",
+        "rooms_available": 4,
         "default_buffer": 5,
     }
 
@@ -102,7 +102,7 @@ def generate_data():
             "id": ustr(uuid.uuid4()),
             "department_name": f"Department {d}",
             "department_head_name": f"Head {d}",
-            "email": f"large-dept{d}@university.edu",
+            "email": f"medium-dept{d}@university.edu",
             "symposium_id": ustr(symposium_id),
         })
 
@@ -127,7 +127,7 @@ def generate_data():
             prof_records.append({
                 "id": prof_uuid,
                 "name": f"Professor {prof_index}",
-                "email": f"large-prof{prof_index}@university.edu",
+                "email": f"medium-prof{prof_index}@university.edu",
                 "class_id": class_id,
                 "_availability": prof_availability[prof_index],
             })
@@ -165,15 +165,15 @@ def generate_data():
 
             presentations.append({
                 "id": pres_id,
-                "title": f"Large Class {c} — Student {s}",
+                "title": f"Medium Class {c} — Student {s}",
                 "class_id": class_id,
                 "minutes": duration,
                 "buffer": 5,
             })
             students.append({
                 "id": student_id,
-                "name": f"Large Student {c * STUDENTS_PER_CLASS + s}",
-                "email": f"large-student{c * STUDENTS_PER_CLASS + s}@university.edu",
+                "name": f"Medium Student {c * STUDENTS_PER_CLASS + s}",
+                "email": f"medium-student{c * STUDENTS_PER_CLASS + s}@university.edu",
                 "class_id": class_id,
                 "presentation_id": pres_id,
             })
@@ -216,7 +216,7 @@ def batch_insert(table: str, rows: list[dict], batch_size: int = 200):
 
 
 def seed(data: dict):
-    print("Seeding large symposium data...")
+    print("Seeding medium symposium data...")
     batch_insert("symposiums", [data["symposium"]])
     batch_insert("timeframes", data["sym_timeframes"])
     batch_insert("departments", data["departments"])

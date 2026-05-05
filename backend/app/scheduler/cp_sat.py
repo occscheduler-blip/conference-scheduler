@@ -3,80 +3,25 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from math import ceil
 
 from ortools.sat.python import cp_model
-from app.utils import ensure_app_timezone
 
 logger = logging.getLogger(__name__)
 
+from .cp_sat_helpers import (
+    _build_admin_suggestions,
+    _eligible_starts,
+    _normalize_windows,
+    _slot_count,
+    _window_contains,
+)
 from .models import (
-    AvailabilityWindow,
     PresentationInput,
-    ScheduledPresentation,
     ScheduleProblem,
     ScheduleResult,
 )
-
-
-def _ensure_utc(moment: datetime) -> datetime:
-    if moment.tzinfo is None:
-        return ensure_app_timezone(moment).astimezone(timezone.utc)
-    return moment.astimezone(timezone.utc)
-
-
-def _normalize_windows(
-    windows: tuple[AvailabilityWindow, ...],
-) -> tuple[AvailabilityWindow, ...]:
-    normalized = tuple(
-        sorted(
-            (
-                AvailabilityWindow(
-                    start=_ensure_utc(window.start), end=_ensure_utc(window.end)
-                )
-                for window in windows
-                if window.end > window.start
-            ),
-            key=lambda window: window.start,
-        )
-    )
-    return normalized
-
-
-def _window_contains(
-    windows: tuple[AvailabilityWindow, ...], start: datetime, end: datetime
-) -> bool:
-    return any(start >= window.start and end <= window.end for window in windows)
-
-
-def _slot_count(duration_minutes: int, slot_minutes: int) -> int:
-    return ceil(duration_minutes / slot_minutes)
-
-
-def _eligible_starts(
-    presentation: PresentationInput,
-    symposium_windows: tuple[AvailabilityWindow, ...],
-    resource_windows: dict[str, tuple[AvailabilityWindow, ...]],
-    slot_minutes: int,
-) -> tuple[datetime, ...]:
-    starts: list[datetime] = []
-    duration = timedelta(minutes=presentation.duration_minutes)
-    step = timedelta(minutes=slot_minutes)
-
-    for window in symposium_windows:
-        candidate = window.start
-        while candidate + duration <= window.end:
-            end = candidate + duration
-            if all(
-                _window_contains(resource_windows[resource_id], candidate, end)
-                for resource_id in presentation.resource_ids
-                if resource_id in resource_windows
-            ):
-                starts.append(candidate)
-            candidate += step
-
-    return tuple(starts)
 
 
 def _objective_weighted_sum(
@@ -88,6 +33,7 @@ def _objective_weighted_sum(
     room_imbalance_terms: list[cp_model.IntVar],
     horizon_slots: int,  # kept for signature compatibility; no longer used for weights
 ) -> cp_model.LinearExpr:
+    """Combine soft quality terms into the secondary CP-SAT objective."""
     # Fixed small weights — no horizon_slots scaling.
     # Avoids int64 overflow when horizon_slots is large (e.g. 3360 with 1-min slots).
     # Department span weighted highest among grouping objectives so same-department
@@ -108,246 +54,18 @@ def _objective_weighted_sum(
     )
 
 
-def _build_admin_suggestions(
-    problem: ScheduleProblem,
-    diagnostics: tuple[str, ...],
-    unscheduled_presentations: tuple[str, ...],
-) -> tuple[str, ...]:
-    suggestions: list[str] = []
-
-    total_sym_minutes = sum(
-        int((w.end - w.start).total_seconds() // 60)
-        for w in problem.symposium_windows
-    )
-    total_room_minutes = total_sym_minutes * problem.rooms_available
-    total_required_minutes = sum(
-        p.duration_minutes + p.buffer_minutes for p in problem.presentations
-    )
-
-    # --- Extract blocked presentation titles from diagnostics ---
-    blocked_titles: list[str] = []
-    for msg in diagnostics:
-        if "could not be scheduled" in msg and msg.startswith('"'):
-            end_quote = msg.index('"', 1)
-            blocked_titles.append(msg[1:end_quote])
-
-    def _title_list(titles: list[str], limit: int = 3) -> str:
-        shown = [f'"{t}"' for t in titles[:limit]]
-        rest = len(titles) - limit
-        suffix = f" and {rest} more" if rest > 0 else ""
-        return ", ".join(shown) + suffix
-
-    # --- Suggestion: availability bottleneck ---
-    if blocked_titles:
-        blocked_ids = set(unscheduled_presentations)
-        blocked_pres = [p for p in problem.presentations if p.id in blocked_ids]
-        prof_ids = set(problem.professor_resource_ids)
-        has_prof = any(any(r in prof_ids for r in p.resource_ids) for p in blocked_pres)
-        has_student = any(any(r not in prof_ids for r in p.resource_ids) for p in blocked_pres)
-
-        if has_prof and has_student:
-            suggestions.append(
-                f"{len(blocked_titles)} presentation(s) — {_title_list(blocked_titles)} — "
-                f"could not be placed because the professor's and/or student's availability "
-                f"windows have no overlap with the symposium schedule. "
-                f"Expand the relevant availability windows, or set 'Professor Availability' "
-                f"and/or 'Student Availability' to Soft and re-run."
-            )
-        elif has_prof:
-            suggestions.append(
-                f"{len(blocked_titles)} presentation(s) — {_title_list(blocked_titles)} — "
-                f"could not be placed because the professor's availability window has no overlap "
-                f"with the symposium schedule. Expand the professor's availability window or set "
-                f"'Professor Availability' to Soft and re-run."
-            )
-        else:
-            suggestions.append(
-                f"{len(blocked_titles)} presentation(s) — {_title_list(blocked_titles)} — "
-                f"could not be placed because the student's availability window has no overlap "
-                f"with the symposium schedule. Expand student availability windows or set "
-                f"'Student Availability' to Soft and re-run."
-            )
-
-    # --- Suggestion: overloaded classes (same-class-same-room hard) ---
-    if problem.constraints.same_class_same_room == "hard":
-        class_load: dict[str, list[PresentationInput]] = defaultdict(list)
-        for p in problem.presentations:
-            if p.class_id:
-                class_load[p.class_id].append(p)
-        overloaded = [
-            (presos, sum(p.duration_minutes + p.buffer_minutes for p in presos))
-            for presos in class_load.values()
-            if sum(p.duration_minutes + p.buffer_minutes for p in presos) > total_sym_minutes
-        ]
-        if overloaded:
-            presos, class_total = max(overloaded, key=lambda x: x[1] - total_sym_minutes)
-            shortage = class_total - total_sym_minutes
-            rooms_needed = ceil(class_total / total_sym_minutes)
-            extra = rooms_needed - problem.rooms_available
-            sample = presos[0].title
-            suggestions.append(
-                f"The class containing \"{sample}\" has {len(presos)} presentations totalling "
-                f"{class_total} min, but only {total_sym_minutes} min is available per room. "
-                f"With 'Same Class → Same Room' set to Hard they must all share one room — "
-                f"{shortage} min over the limit. Set 'Same Class \u2192 Same Room' to Soft to let "
-                f"the scheduler spread this class across rooms."
-            )
-        elif len(class_load) > 0 and len(unscheduled_presentations) > 0:
-            suggestions.append(
-                f"'Same Class → Same Room' is Hard, forcing every class into a single room. "
-                f"This can cause overflow even when total capacity looks sufficient. "
-                f"Set it to Soft so the scheduler can spread presentations across rooms."
-            )
-
-    # --- Suggestion: overall capacity ---
-    if total_required_minutes > total_room_minutes:
-        shortage = total_required_minutes - total_room_minutes
-        extra_rooms = ceil(total_required_minutes / total_sym_minutes) - problem.rooms_available
-        room_advice = f"Adding {extra_rooms} more room(s)" if extra_rooms > 0 else "Adding more rooms"
-        suggestions.append(
-            f"Total required time ({total_required_minutes} min) exceeds total room capacity "
-            f"({total_room_minutes} min across {problem.rooms_available} room(s)) by {shortage} min. "
-            f"{room_advice} or extending the symposium window would resolve this."
-        )
-
-    # --- Suggestion: buffers adding significant dead time ---
-    buffered = [p for p in problem.presentations if p.buffer_minutes > 0]
-    if buffered and unscheduled_presentations:
-        total_buf = sum(p.buffer_minutes for p in buffered)
-        avg_buf = total_buf // len(buffered)
-        suggestions.append(
-            f"Room buffers account for {total_buf} min of dead time across "
-            f"{len(buffered)} presentation(s) (avg {avg_buf} min each). "
-            f"Reducing buffer sizes in the presentation editor would free {total_buf} min of room time."
-        )
-
-    if not suggestions:
-        suggestions.append(
-            "Try switching constraints from Hard to Soft one at a time and re-running after each "
-            "change to isolate which rule is causing the failure."
-        )
-
-    return tuple(suggestions)
-
-
-def _run_exhaustive_debug(
-    problem: ScheduleProblem,
-    current_unscheduled: int,
-    total_time_budget: float = 540.0,
-) -> tuple[tuple[str, ...], tuple[ScheduledPresentation, ...]]:
-    """Try every combination of relaxing hard constraints in parallel to find the
-    configuration that schedules the most presentations.
-
-    All combos run concurrently in a thread pool.  CP-SAT releases the GIL so
-    threads genuinely run in parallel.  Each probe uses num_search_workers=1 to
-    avoid CPU thrashing: N parallel probes × 1 worker ≈ same CPU as 1 probe × N
-    workers, but wall time is ~N× faster.
-
-    The best result is chosen by (1) fewest unscheduled, then (2) fewest
-    relaxations (prefer the minimal constraint change).
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from dataclasses import replace
-    from itertools import combinations as iter_combinations
-    from typing import Any, cast
-
-    if current_unscheduled == 0:
-        return (), ()
-
-    relaxable: list[tuple[str, str]] = [
-        ("professor_availability", "professor availability"),
-        ("student_availability", "student availability"),
-        ("same_class_same_room", "same class → same room"),
-        ("room_conflicts", "room conflicts"),
-        ("person_conflicts", "person conflicts"),
-    ]
-
-    hard_constraints = [
-        (attr, label) for attr, label in relaxable
-        if getattr(problem.constraints, attr) == "hard"
-    ]
-
-    if not hard_constraints:
-        return ("[Debugger] No hard constraints to relax — try adding more rooms or extending the symposium window.",), ()
-
-    n = len(hard_constraints)
-    n_combos = 2 ** n - 1  # exclude the all-hard case already run
-
-    # Each probe gets 1 search worker; cap probe time at 30 s but ensure at
-    # least 10 s.  With parallel execution the wall time ≈ time_per_probe, not
-    # n_combos × time_per_probe.
-    time_per_probe = max(10.0, min(30.0, total_time_budget / n_combos))
-
-    # Build all combos ordered by number of relaxations (fewest first) so that
-    # when we pick among equally-good results we favour the minimal change.
-    all_combos: list[dict[str, str]] = []
-    for r in range(1, n + 1):
-        for subset in iter_combinations(range(n), r):
-            all_combos.append({hard_constraints[i][0]: "soft" for i in subset})
-
-    total_presentations = len(problem.presentations)
-
-    from app.scheduler.models import ScheduleResult as _ScheduleResult
-
-    def _probe(relaxed_attrs: dict[str, str]) -> tuple[dict[str, str], _ScheduleResult]:
-        relaxed_problem = replace(problem, constraints=replace(problem.constraints, **cast(Any, relaxed_attrs)))
-        try:
-            result = solve_schedule(relaxed_problem, time_limit_seconds=time_per_probe, num_search_workers=1)
-            return relaxed_attrs, result
-        except Exception:
-            logger.debug("Exhaustive probe failed for %s", relaxed_attrs, exc_info=True)
-            return relaxed_attrs, _ScheduleResult(
-                status="infeasible",
-                assignments=(),
-                unscheduled_presentations=tuple(p.id for p in problem.presentations),
-            )
-
-    # Use min(n_combos, 8) workers — enough to saturate a typical server without
-    # spawning an unreasonable number of threads.
-    max_workers = min(n_combos, 8)
-    probe_results: list[tuple[dict[str, str], _ScheduleResult]] = []
-
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_probe, combo): combo for combo in all_combos}
-        for future in as_completed(futures):
-            probe_results.append(future.result())
-
-    # Pick the best result: fewest unscheduled, then fewest relaxations.
-    probe_results.sort(key=lambda x: (len(x[1].unscheduled_presentations), len(x[0])))
-    best_relaxations, best_result = probe_results[0]
-    best_unscheduled = len(best_result.unscheduled_presentations)
-
-    if best_unscheduled >= current_unscheduled:
-        return (
-            "[Debugger] No constraint combination improved scheduling. "
-            "The bottleneck is likely capacity — try adding rooms or extending the symposium window.",
-        ), ()
-
-    hints: list[str] = []
-    improvement = current_unscheduled - best_unscheduled
-
-    if best_unscheduled == 0:
-        hints.append(
-            f"[Debugger] A fully optimal configuration was found: all {total_presentations} "
-            f"presentations can be scheduled with the settings below."
-        )
-    else:
-        hints.append(
-            f"[Debugger] Best configuration found schedules "
-            f"{total_presentations - best_unscheduled}/{total_presentations} presentations "
-            f"({improvement} more than current settings). Accept below to apply this schedule."
-        )
-
-    for attr, label in relaxable:
-        if attr in best_relaxations:
-            hints.append(f"[Debugger] Set {label} to Soft.")
-
-    return tuple(hints), best_result.assignments
-
-
 def solve_schedule(
     problem: ScheduleProblem, time_limit_seconds: float = 30.0, num_search_workers: int = 4
 ) -> ScheduleResult:
+    """Build and solve the CP-SAT schedule model for a symposium.
+
+    The solver flow is:
+    validate the input problem, normalize hard/soft availability windows,
+    pre-compute eligible starts for each presentation, create assignment and
+    timing variables, add hard constraints and soft penalties, minimize skipped
+    presentations first and schedule quality second, then translate the CP-SAT
+    solution into ``ScheduledPresentation`` rows.
+    """
     logger.info(
         "solve_schedule: presentations=%d  rooms=%d  windows=%d  time_limit=%.1fs",
         len(problem.presentations), problem.rooms_available, len(problem.symposium_windows), time_limit_seconds,
@@ -389,6 +107,9 @@ def solve_schedule(
             diagnostics=("No presentations were provided.",),
         )
 
+    # Phase 1: normalize availability inputs.
+    # Hard windows remove invalid start options before the model is built; soft
+    # windows stay available but receive an objective penalty when violated.
     resource_windows = {
         resource_id: _normalize_windows(windows)
         for resource_id, windows in problem.resource_windows.items()
@@ -398,6 +119,9 @@ def solve_schedule(
         for resource_id, windows in problem.soft_resource_windows.items()
     }
 
+    # Phase 2: pre-solver filtering.
+    # Enumerating eligible starts up front keeps the CP-SAT model smaller and
+    # lets us produce a useful message for presentations that cannot fit at all.
     eligible_starts: dict[str, tuple[datetime, ...]] = {}
     unschedulable: list[str] = []
     diagnostics: list[str] = []
@@ -445,7 +169,23 @@ def solve_schedule(
             suggestions=suggestions,
         )
 
+    # Phase 3: create the model and core assignment variables.
+    # assign[presentation, option, room] is the central decision variable:
+    # exactly one true value schedules a presentation, and zero means skipped.
     model = cp_model.CpModel()
+    # Model documentation:
+    # - Each presentation has a finite set of eligible start options from the
+    #   pre-solver. For each eligible option and each room, we create one
+    #   Boolean assignment variable.
+    # - is_scheduled[presentation] is true when any assignment option is chosen.
+    #   Leaving it false lets the solver return a partial schedule instead of
+    #   failing the whole run when capacity or availability is too tight.
+    # - start/end slot variables summarize the selected option so grouping
+    #   objectives can use AddMinEquality/AddMaxEquality.
+    # - Hard constraints forbid invalid combinations. Soft constraints create
+    #   penalty variables that the objective tries to minimize.
+    # - The objective first minimizes skipped presentations, then improves the
+    #   schedule quality with soft penalties, span minimization, and room balance.
     assignment_vars: dict[tuple[str, int, int], cp_model.IntVar] = {}
     is_scheduled_vars: dict[str, cp_model.IntVar] = {}
     start_index_vars: dict[str, cp_model.IntVar] = {}
@@ -456,7 +196,6 @@ def solve_schedule(
     eff_end_for_max: dict[str, cp_model.IntVar] = {}
     option_lookup: dict[tuple[str, int, int], tuple[datetime, datetime]] = {}
     soft_penalty_lookup: dict[tuple[str, int], int] = {}
-    all_instants: set[datetime] = set()
     step = timedelta(minutes=problem.slot_minutes)
 
     base_time = min(window.start for window in symposium_windows)
@@ -471,10 +210,6 @@ def solve_schedule(
         )
         for option_index, start_time in enumerate(eligible_starts[presentation.id]):
             end_time = start_time + timedelta(minutes=presentation.duration_minutes)
-            buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
-            all_instants.add(start_time)
-            all_instants.add(end_time)
-            all_instants.add(buffered_end)
             start_slot = int((start_time - base_time) / step)
             option_indices.append(start_slot)
             soft_penalty_lookup[(presentation.id, option_index)] = sum(
@@ -546,7 +281,9 @@ def solve_schedule(
         model.Add(eff_emax >= end_index - horizon_slots + horizon_slots * is_sched)
         eff_end_for_max[presentation.id] = eff_emax
 
-    # Group presentations by department, class, and resource.
+    # Phase 4: build lookup groups used by constraints.
+    # These indexes let later sections talk in domain terms: same department,
+    # same class, or same person/resource.
     presentations_by_department: dict[str, list[PresentationInput]] = defaultdict(list)
     presentations_by_class: dict[str, list[PresentationInput]] = defaultdict(list)
     presentations_by_resource: dict[str, list[PresentationInput]] = defaultdict(list)
@@ -561,22 +298,27 @@ def solve_schedule(
     soft_violation_terms: list[cp_model.IntVar] = []
     _soft_violation_counter = 0
 
-    def _add_constraint_or_penalty(
+    def _add_hard_at_most_one(expr_vars: list[cp_model.IntVar]) -> None:
+        """Forbid more than one variable in a conflict group from being true."""
+        if expr_vars:
+            model.Add(sum(expr_vars) <= 1)
+
+    def _add_soft_at_most_one_penalty(
         expr_vars: list[cp_model.IntVar],
-        mode: str,
         label: str,
     ) -> None:
+        """Penalize, rather than forbid, a conflict group with multiple true vars."""
         nonlocal _soft_violation_counter
         if not expr_vars:
             return
-        if mode == "hard":
-            model.Add(sum(expr_vars) <= 1)
-        elif mode == "soft":
-            violation = model.NewBoolVar(f"sv_{label}_{_soft_violation_counter}")
-            _soft_violation_counter += 1
-            model.Add(sum(expr_vars) <= 1).OnlyEnforceIf(violation.Not())
-            soft_violation_terms.append(violation)
+        violation = model.NewBoolVar(f"sv_{label}_{_soft_violation_counter}")
+        _soft_violation_counter += 1
+        model.Add(sum(expr_vars) <= 1).OnlyEnforceIf(violation.Not())
+        soft_violation_terms.append(violation)
 
+    # Phase 5: same-class room preference.
+    # Hard mode pins every class to one room; soft mode chooses a preferred room
+    # but pays a penalty when a presentation from that class is placed elsewhere.
     if problem.constraints.same_class_same_room != "off":
         for class_id, class_presentations in presentations_by_class.items():
             if len(class_presentations) < 2:
@@ -624,10 +366,9 @@ def solve_schedule(
 
     t_slow = time.perf_counter()
 
-    # ── Hard constraints: AddNoOverlap (O(n log n)) ──────────────────────────
-    # Replaces the old per-instant loop which was O(instants × presentations ×
-    # options × rooms) — prohibitively slow with fine-grained slot alignment.
-
+    # Phase 6: hard room/person conflict constraints.
+    # AddNoOverlap gives CP-SAT interval semantics directly and avoids the old
+    # per-minute/per-slot conflict sweep.
     if problem.constraints.room_conflicts == "hard":
         for room_index in range(problem.rooms_available):
             room_ivs: list[cp_model.IntervalVar] = []
@@ -691,10 +432,11 @@ def solve_schedule(
             if len(person_ivs) > 1:
                 model.AddNoOverlap(person_ivs)
 
-    # ── Soft constraints: coarse 15-min sweep ────────────────────────────────
-    # For soft room/person conflicts we fall back to a per-instant penalty
-    # approach, but use 15-minute granularity regardless of slot_minutes to
-    # keep model-build time bounded.
+    # Phase 7: soft room/person conflict penalties.
+    # Soft mode does not forbid overlap outright; instead it creates violation
+    # booleans that are minimized in the objective. The sweep uses 15-minute
+    # granularity even when slot_minutes is smaller so model-build time stays
+    # bounded.
     if problem.constraints.room_conflicts == "soft" or problem.constraints.person_conflicts == "soft":
         coarse_step = timedelta(minutes=max(15, problem.slot_minutes))
         soft_instants: set[datetime] = set()
@@ -715,8 +457,8 @@ def solve_schedule(
                             buffered_end = end_time + timedelta(minutes=presentation.buffer_minutes)
                             if start_time <= instant < buffered_end:
                                 overlapping.append(assignment_vars[key])
-                    _add_constraint_or_penalty(
-                        overlapping, "soft", f"room_{room_index}_{instant}"
+                    _add_soft_at_most_one_penalty(
+                        overlapping, f"room_{room_index}_{instant}"
                     )
 
             if problem.constraints.person_conflicts == "soft":
@@ -732,12 +474,15 @@ def solve_schedule(
                                         assignment_vars[key]
                                     )
                 for resource_id, overlapping_res in resources_at_time.items():
-                    _add_constraint_or_penalty(
-                        overlapping_res, "soft", f"person_{resource_id}_{instant}"
+                    _add_soft_at_most_one_penalty(
+                        overlapping_res, f"person_{resource_id}_{instant}"
                     )
 
     logger.info("[solve-timing] conflict constraints: %.3fs", time.perf_counter() - t_slow)
 
+    # Phase 8: quality terms.
+    # These variables describe the shape of a valid/partial schedule: shorter
+    # makespan, tighter department/class/professor spans, and balanced rooms.
     makespan = model.NewIntVar(0, 1000000, "makespan")
     model.AddMaxEquality(makespan, list(eff_end_for_max.values()))
 
@@ -879,6 +624,9 @@ def solve_schedule(
         else:
             room_imbalance_terms.append(room_imbalance)
 
+    # Phase 9: objective.
+    # The first priority is scheduling as many presentations as possible; all
+    # quality preferences are secondary tie-breakers after that.
     makespan_for_objective = (
         makespan if problem.constraints.minimize_makespan == "soft" else model.NewConstant(0)
     )
@@ -931,6 +679,7 @@ def solve_schedule(
     unscheduled_count = n_schedulable - sum(is_scheduled_vars.values())
     model.Minimize(unscheduled_count * scheduling_penalty_weight + quality_objective)
 
+    # Phase 10: solve the model within the configured time/worker budget.
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
     solver.parameters.num_search_workers = num_search_workers
@@ -955,6 +704,8 @@ def solve_schedule(
             suggestions=suggestions,
         )
 
+    # Phase 11: translate solver decisions back into application records.
+    # Only assignment variables set to true become ScheduledPresentation rows.
     assignments: list[ScheduledPresentation] = []
     cp_sat_unscheduled: list[str] = []
     for presentation in schedulable_presentations:
@@ -1004,4 +755,3 @@ def solve_schedule(
         diagnostics=tuple(diagnostics),
         suggestions=suggestions,
     )
-

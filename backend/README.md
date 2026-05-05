@@ -182,7 +182,7 @@ GET endpoints are public. Write operations (POST/PUT/DELETE) require a JWT Beare
 
 | Path | Query Params | Description |
 |------|-------------|-------------|
-| `/api/events/symposiums` | — | All symposiums |
+| `/api/events/symposiums` | — | All symposia |
 | `/api/events/symposiums/{symposium_id}` | — | Single symposium + timeframes |
 | `/api/events/departments` | `symposium_id?`, `include?` | Departments (optional nested data) |
 | `/api/events/classes` | `department_id?`, `include?` | Classes (optional nested data) |

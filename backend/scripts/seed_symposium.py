@@ -2,17 +2,18 @@
 Seed script: inserts a symposium of the requested size alongside existing data.
 
 Usage (from the backend directory):
-    python seed_symposium.py --size small
-    python seed_symposium.py --size medium
-    python seed_symposium.py --size large
-    python seed_symposium.py --size massive --clear
+    python scripts/seed_symposium.py --size small
+    python scripts/seed_symposium.py --size medium
+    python scripts/seed_symposium.py --size large
+    python scripts/seed_symposium.py --size massive --clear
 
 --clear first deletes all existing data (children before parents). Previously
-only `seed_massive_symposium.py` did this; it's now available for any size.
+only `scripts/seed_massive_symposium.py` did this; it's now available for any size.
 """
 
 import argparse
 import os
+from pathlib import Path
 import random
 import uuid
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from supabase import create_client
 
