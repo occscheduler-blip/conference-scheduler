@@ -5,7 +5,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.116-009688)](https://fastapi.tiangolo.com)
 [![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3ECF8E)](https://supabase.com)
 
-> An automated scheduling tool for academic symposiums. Admins configure rooms and time windows; a constraint-programming solver assigns every presentation a room and time slot while respecting professor and student availability.
+> An automated scheduling tool for academic symposia. Admins configure rooms and time windows; a constraint-programming solver assigns every presentation a room and time slot while respecting professor and student availability.
 
 ---
 
@@ -38,7 +38,7 @@ The live app is hosted at: **https://conference-scheduler-black.vercel.app**
 | **Student** | Email OTP | View your assigned presentations, set availability |
 | **Professor** | Email OTP | Manage your class presentations, set availability |
 | **Department Head** | Email OTP | Create classes, manage professors and students |
-| **Admin** | Email + password | Full control: symposiums, rooms, scheduling, publishing |
+| **Admin** | Email + password | Full control: symposia, rooms, scheduling, publishing |
 
 ### How scheduling works
 

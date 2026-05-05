@@ -138,7 +138,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       const rows = await apiFetch<SymposiumOption>("/api/events/symposiums", { headers: authHeaders });
       setSymposiums(rows);
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to load symposiums.", "error");
+      showMessage(error instanceof Error ? error.message : "Failed to load symposia.", "error");
     } finally {
       setIsLoading(false);
     }
