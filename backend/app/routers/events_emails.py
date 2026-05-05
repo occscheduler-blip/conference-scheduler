@@ -21,7 +21,10 @@ router = APIRouter()
 
 
 def _login_url() -> str:
-    origins = get_settings().cors_origins
+    settings = get_settings()
+    if settings.site_url:
+        return settings.site_url
+    origins = settings.cors_origins
     return origins[0] if origins else "http://localhost:3000"
 
 

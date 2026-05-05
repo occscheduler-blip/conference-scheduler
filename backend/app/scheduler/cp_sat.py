@@ -148,7 +148,7 @@ def _build_admin_suggestions(
         if has_prof and has_student:
             suggestions.append(
                 f"{len(blocked_titles)} presentation(s) — {_title_list(blocked_titles)} — "
-                f"could not be placed because the presenter's and/or student's availability "
+                f"could not be placed because the professor's and/or student's availability "
                 f"windows have no overlap with the symposium schedule. "
                 f"Expand the relevant availability windows, or set 'Professor Availability' "
                 f"and/or 'Student Availability' to Soft and re-run."
@@ -156,8 +156,8 @@ def _build_admin_suggestions(
         elif has_prof:
             suggestions.append(
                 f"{len(blocked_titles)} presentation(s) — {_title_list(blocked_titles)} — "
-                f"could not be placed because the presenter's availability window has no overlap "
-                f"with the symposium schedule. Expand the presenter's availability window or set "
+                f"could not be placed because the professor's availability window has no overlap "
+                f"with the symposium schedule. Expand the professor's availability window or set "
                 f"'Professor Availability' to Soft and re-run."
             )
         else:

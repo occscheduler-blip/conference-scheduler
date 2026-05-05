@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
 
     backend_cors_origins: str = "http://localhost:3000"
+    site_url: str = ""  # public frontend URL used in emails; falls back to first CORS origin
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_db_url: str = ""
