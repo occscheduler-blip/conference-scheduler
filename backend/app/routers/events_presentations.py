@@ -12,6 +12,7 @@ import app.supabase_io.supabase_schemas as supabase_schemas
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
 from app.routers.events_helpers import (
+    _checked_update,
     _normalize_counts,
     _parse_uuid_list,
     _serialize_update_fields,
@@ -19,6 +20,7 @@ from app.routers.events_helpers import (
 )
 from app.supabase_io import delete, read, write
 from app.supabase_io.client import supabase
+from app.supabase_io.locks import maybe_symposium_lock, symposium_lock
 from app.utils import rows_affected as _rows_affected
 
 logger = logging.getLogger(__name__)
@@ -89,54 +91,61 @@ def add_presentation(
 @router.put("/update_presentation")
 def update_presentation(
     payload: request_schemas.UpdatePresentationRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
 ) -> dict[str, str | int | bool | list[str] | dict[str, int]]:
     try:
         logger.info("update_presentation: presentation_id=%s", payload.presentation_id)
         updates = payload.model_dump(
             exclude_none=True,
-            exclude={"presentation_id", "presenting_students"},
+            exclude={"presentation_id", "presenting_students", "expected_updated_at"},
         )
         update_payload = _serialize_update_fields(updates)
         presentations_updated = 0
         presenting_students_deleted = 0
         presenting_students_inserted = 0
 
-        if update_payload:
-            presentation_update_resp = (
-                supabase.table("presentations")
-                .update(update_payload)
-                .eq("id", str(payload.presentation_id))
-                .execute()
+        symposium_id = read.resolve_symposium_for_linked(payload.presentation_id)
+        if symposium_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Presentation {payload.presentation_id} not found.",
             )
-            presentations_updated = _rows_affected(presentation_update_resp)
 
-        if payload.presenting_students is not None:
-            presenting_students_delete_resp = (
-                supabase.table("presenting_students")
-                .delete()
-                .eq("presentation_id", str(payload.presentation_id))
-                .execute()
+        # Hold the symposium lock so the delete+insert of presenting_students
+        # is atomic and a concurrent scheduler / read never sees an empty
+        # presenter list mid-update.
+        with symposium_lock(symposium_id) as conn:
+            presentations_updated = _checked_update(
+                "presentations",
+                str(payload.presentation_id),
+                update_payload,
+                payload.expected_updated_at,
+                actor_id=claims.sub,
             )
-            presenting_students_deleted = _rows_affected(
-                presenting_students_delete_resp
-            )
-            presenting_students_payload = [
-                supabase_schemas.PresentingStudents(
-                    id=uuid4(),
-                    presentation_id=payload.presentation_id,
-                    student_id=student_id,
-                ).model_dump()
-                for student_id in payload.presenting_students
-            ]
-            if presenting_students_payload:
-                presenting_students_insert_resp = write.insert(
-                    "presenting_students", presenting_students_payload
-                )
-                presenting_students_inserted = _rows_affected(
-                    presenting_students_insert_resp,
-                    fallback=len(presenting_students_payload),
-                )
+
+            if payload.presenting_students is not None:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM public.presenting_students WHERE presentation_id = %s",
+                        (str(payload.presentation_id),),
+                    )
+                    presenting_students_deleted = cur.rowcount or 0
+
+                    rows = [
+                        (
+                            str(uuid4()),
+                            str(payload.presentation_id),
+                            str(student_id),
+                        )
+                        for student_id in payload.presenting_students
+                    ]
+                    if rows:
+                        cur.executemany(
+                            "INSERT INTO public.presenting_students (id, presentation_id, student_id)"
+                            " VALUES (%s, %s, %s)",
+                            rows,
+                        )
+                    presenting_students_inserted = len(rows)
 
         records_inserted = {"presenting_students": presenting_students_inserted}
         records_deleted = {"presenting_students": presenting_students_deleted}
@@ -172,9 +181,11 @@ def delete_presentation(
 ) -> dict[str, str | int | dict[str, int]]:
     try:
         logger.info("delete_presentation: presentation_id=%s", presentation_id)
-        counts = _normalize_counts(
-            delete.delete_presentation(presentation_id), {"presentations": 1}
-        )
+        sym_id = read.resolve_symposium_for_linked(presentation_id)
+        with maybe_symposium_lock(sym_id):
+            counts = _normalize_counts(
+                delete.delete_presentation(presentation_id), {"presentations": 1}
+            )
         logger.info("delete_presentation complete: counts=%s", counts)
         return {
             "status": "deleted",

@@ -29,10 +29,33 @@ from app.scheduler.conflicts import (
 from app.scheduler.models import ScheduleConstraints
 from app.supabase_io import delete, read, write
 from app.supabase_io.client import supabase
+from app.supabase_io.locks import symposium_lock
 from app.utils import ensure_app_timezone, parse_app_datetime
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+_SINGLETON_INDEX = "scheduler_jobs_active_singleton"
+
+
+def _is_singleton_violation(exc: Exception) -> bool:
+    """True if exc looks like a unique-violation on the active-job partial index."""
+    text = str(exc)
+    code = getattr(exc, "code", None)
+    return _SINGLETON_INDEX in text or code == "23505" or "23505" in text
+
+
+def _existing_active_job(symposium_id: str) -> dict[str, Any] | None:
+    resp = (
+        supabase.table("scheduler_jobs")
+        .select("id,status")
+        .eq("symposium_id", symposium_id)
+        .in_("status", ["pending", "running"])
+        .execute()
+    )
+    rows = cast(list[dict[str, Any]], resp.data or [])
+    return rows[0] if rows else None
 
 
 def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConstraints, slot_minutes: int, debug_mode: bool = False) -> None:
@@ -93,15 +116,32 @@ def run_schedule(
             balance_rooms=body.constraints.balance_rooms,
         )
         slot_minutes = max(1, body.constraints.slot_alignment)
+        symposium_id_str = str(body.symposium_id)
 
-        job_row = (
-            supabase.table("scheduler_jobs")
-            .insert({"symposium_id": str(body.symposium_id), "status": "pending"})
-            .execute()
-        )
-        job_id = cast(dict[str, Any], job_row.data[0])["id"]
+        with symposium_lock(symposium_id_str):
+            try:
+                job_row = (
+                    supabase.table("scheduler_jobs")
+                    .insert({"symposium_id": symposium_id_str, "status": "pending"})
+                    .execute()
+                )
+            except Exception as exc:
+                if _is_singleton_violation(exc):
+                    existing = _existing_active_job(symposium_id_str)
+                    if existing is not None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "code": "scheduler_busy",
+                                "message": "A scheduler run is already in progress for this symposium.",
+                                "job_id": existing["id"],
+                                "status": existing["status"],
+                            },
+                        ) from exc
+                raise
+            job_id = cast(dict[str, Any], job_row.data[0])["id"]
 
-        thread = threading.Thread(target=_run_schedule_job, args=(job_id, str(body.symposium_id), constraints, slot_minutes, body.debug_mode), daemon=True)
+        thread = threading.Thread(target=_run_schedule_job, args=(job_id, symposium_id_str, constraints, slot_minutes, body.debug_mode), daemon=True)
         thread.start()
 
         return {"job_id": job_id}
@@ -188,50 +228,54 @@ def publish_schedule(
     try:
         logger.info("publish_schedule: symposium_id=%s", body.symposium_id)
 
-        departments_resp = read.get_departments(symposium_id=body.symposium_id)
-        departments = cast(list[dict[str, Any]], departments_resp.data or [])
-        department_ids = [UUID(str(d["id"])) for d in departments if d.get("id")]
+        # Hold the symposium-level advisory lock so a concurrent solver save
+        # or manual edit cannot interleave with our four-step copy
+        # (read drafts → delete published → insert published → set room).
+        with symposium_lock(body.symposium_id):
+            departments_resp = read.get_departments(symposium_id=body.symposium_id)
+            departments = cast(list[dict[str, Any]], departments_resp.data or [])
+            department_ids = [UUID(str(d["id"])) for d in departments if d.get("id")]
 
-        presentation_ids: list[UUID] = []
-        all_presentations: list[dict[str, Any]] = []
-        if department_ids:
-            class_ids_list: list[UUID] = []
-            classes_resp = read.get_classes(department_id=department_ids)
-            for c in cast(list[dict[str, Any]], classes_resp.data or []):
-                if c.get("id"):
-                    class_ids_list.append(UUID(str(c["id"])))
-            if class_ids_list:
-                pres_resp = read.get_presentations(class_id=class_ids_list)
-                all_presentations = cast(list[dict[str, Any]], pres_resp.data or [])
-                presentation_ids = [UUID(str(p["id"])) for p in all_presentations if p.get("id")]
+            presentation_ids: list[UUID] = []
+            all_presentations: list[dict[str, Any]] = []
+            if department_ids:
+                class_ids_list: list[UUID] = []
+                classes_resp = read.get_classes(department_id=department_ids)
+                for c in cast(list[dict[str, Any]], classes_resp.data or []):
+                    if c.get("id"):
+                        class_ids_list.append(UUID(str(c["id"])))
+                if class_ids_list:
+                    pres_resp = read.get_presentations(class_id=class_ids_list)
+                    all_presentations = cast(list[dict[str, Any]], pres_resp.data or [])
+                    presentation_ids = [UUID(str(p["id"])) for p in all_presentations if p.get("id")]
 
-        if not presentation_ids:
-            return {"status": "published", "count": 0}
+            if not presentation_ids:
+                return {"status": "published", "count": 0}
 
-        temp_tf_resp = read.get_temporary_timeframes(linked_id=presentation_ids)
-        temp_tfs = cast(list[dict[str, Any]], temp_tf_resp.data or [])
+            temp_tf_resp = read.get_temporary_timeframes(linked_id=presentation_ids)
+            temp_tfs = cast(list[dict[str, Any]], temp_tf_resp.data or [])
 
-        delete.delete_timeframes(presentation_ids)
+            delete.delete_timeframes(presentation_ids)
 
-        if temp_tfs:
-            new_tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = [
-                {
-                    "id": uuid4(),
-                    "linked_id": UUID(str(tf["linked_id"])),
-                    "start_time": tf["start_time"],
-                    "end_time": tf["end_time"],
-                }
-                for tf in temp_tfs
-            ]
-            write.insert("timeframes", new_tf_rows)
+            if temp_tfs:
+                new_tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = [
+                    {
+                        "id": uuid4(),
+                        "linked_id": UUID(str(tf["linked_id"])),
+                        "start_time": tf["start_time"],
+                        "end_time": tf["end_time"],
+                    }
+                    for tf in temp_tfs
+                ]
+                write.insert("timeframes", new_tf_rows)
 
-        room_updates: dict[UUID, str | int | None] = {
-            UUID(str(p["id"])): p.get("temporary_room")
-            for p in all_presentations
-            if p.get("id")
-        }
-        if room_updates:
-            write.update_column_by_ids("presentations", "room", room_updates)
+            room_updates: dict[UUID, str | int | None] = {
+                UUID(str(p["id"])): p.get("temporary_room")
+                for p in all_presentations
+                if p.get("id")
+            }
+            if room_updates:
+                write.update_column_by_ids("presentations", "room", room_updates)
 
         logger.info("publish_schedule complete: symposium_id=%s  timeframes=%d", body.symposium_id, len(temp_tfs))
         return {"status": "published", "count": len(temp_tfs)}
@@ -251,86 +295,90 @@ def update_schedule_assignment(
     try:
         logger.info("update_schedule_assignment: presentation_id=%s  room=%s  symposium_id=%s", payload.presentation_id, payload.room, payload.symposium_id)
         presentation_id = str(payload.presentation_id)
-        room_names = _load_room_names(payload.symposium_id)
 
-        entities = load_symposium_entities(payload.symposium_id)
-        index = build_conflict_index(entities)
+        # Hold the symposium-level advisory lock across the load→check→write
+        # so the conflict check is not invalidated by a concurrent edit or solver save.
+        with symposium_lock(payload.symposium_id):
+            room_names = _load_room_names(payload.symposium_id)
 
-        target_pres = index.presentations_by_id.get(presentation_id)
-        if target_pres is None:
-            raise HTTPException(status_code=404, detail="Presentation not found in this symposium.")
+            entities = load_symposium_entities(payload.symposium_id)
+            index = build_conflict_index(entities)
 
-        target_resources = index.resources_for(target_pres)
+            target_pres = index.presentations_by_id.get(presentation_id)
+            if target_pres is None:
+                raise HTTPException(status_code=404, detail="Presentation not found in this symposium.")
 
-        new_start = ensure_app_timezone(payload.start_time)
-        new_end = ensure_app_timezone(payload.end_time)
-        _assert_within_symposium_windows(payload.symposium_id, new_start, new_end)
-        target_buffer = timedelta(minutes=int(target_pres.get("buffer") or 0))
-        new_buffered_end = new_end + target_buffer
+            target_resources = index.resources_for(target_pres)
 
-        other_pres_ids = [pid for pid in index.presentations_by_id if pid != presentation_id]
+            new_start = ensure_app_timezone(payload.start_time)
+            new_end = ensure_app_timezone(payload.end_time)
+            _assert_within_symposium_windows(payload.symposium_id, new_start, new_end)
+            target_buffer = timedelta(minutes=int(target_pres.get("buffer") or 0))
+            new_buffered_end = new_end + target_buffer
 
-        if other_pres_ids:
-            tf_resp = read.get_temporary_timeframes(
-                linked_id=[UUID(pid) for pid in other_pres_ids]
-            )
-            other_timeframes = list(getattr(tf_resp, "data", None) or [])
+            other_pres_ids = [pid for pid in index.presentations_by_id if pid != presentation_id]
 
-            tf_by_pres: dict[str, dict[str, Any]] = {}
-            for tf in other_timeframes:
-                linked = str(tf.get("linked_id", ""))
-                if linked:
-                    tf_by_pres[linked] = tf
+            if other_pres_ids:
+                tf_resp = read.get_temporary_timeframes(
+                    linked_id=[UUID(pid) for pid in other_pres_ids]
+                )
+                other_timeframes = list(getattr(tf_resp, "data", None) or [])
 
-            for other_id, other in index.presentations_by_id.items():
-                if other_id == presentation_id or other_id not in tf_by_pres:
-                    continue
+                tf_by_pres: dict[str, dict[str, Any]] = {}
+                for tf in other_timeframes:
+                    linked = str(tf.get("linked_id", ""))
+                    if linked:
+                        tf_by_pres[linked] = tf
 
-                other_tf = tf_by_pres[other_id]
-                other_start = parse_app_datetime(other_tf["start_time"])
-                other_end = parse_app_datetime(other_tf["end_time"])
-                other_buffer = timedelta(minutes=int(other.get("buffer") or 0))
-                other_buffered_end = other_end + other_buffer
-                times_overlap = new_start < other_buffered_end and new_buffered_end > other_start
+                for other_id, other in index.presentations_by_id.items():
+                    if other_id == presentation_id or other_id not in tf_by_pres:
+                        continue
 
-                if not times_overlap:
-                    continue
+                    other_tf = tf_by_pres[other_id]
+                    other_start = parse_app_datetime(other_tf["start_time"])
+                    other_end = parse_app_datetime(other_tf["end_time"])
+                    other_buffer = timedelta(minutes=int(other.get("buffer") or 0))
+                    other_buffered_end = other_end + other_buffer
+                    times_overlap = new_start < other_buffered_end and new_buffered_end > other_start
 
-                other_title = str(other.get("title", other_id))
-                other_room = other.get("temporary_room")
-                if other_room is not None and int(other_room) == payload.room:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=format_room_conflict_single(
-                            _room_label(room_names, payload.room), other_title,
-                        ),
-                    )
+                    if not times_overlap:
+                        continue
 
-                shared = target_resources & index.resources_for(other)
-                if shared:
-                    person_id = next(iter(shared))
-                    raise HTTPException(
-                        status_code=409,
-                        detail=format_person_conflict_single(
-                            index.person_role(person_id),
-                            index.person_name(person_id),
-                            other_title,
-                        ),
-                    )
+                    other_title = str(other.get("title", other_id))
+                    other_room = other.get("temporary_room")
+                    if other_room is not None and int(other_room) == payload.room:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=format_room_conflict_single(
+                                _room_label(room_names, payload.room), other_title,
+                            ),
+                        )
 
-        supabase.table("presentations").update(
-            {"temporary_room": payload.room}
-        ).eq("id", presentation_id).execute()
+                    shared = target_resources & index.resources_for(other)
+                    if shared:
+                        person_id = next(iter(shared))
+                        raise HTTPException(
+                            status_code=409,
+                            detail=format_person_conflict_single(
+                                index.person_role(person_id),
+                                index.person_name(person_id),
+                                other_title,
+                            ),
+                        )
 
-        delete.delete_temporary_timeframes(payload.presentation_id)
+            supabase.table("presentations").update(
+                {"temporary_room": payload.room}
+            ).eq("id", presentation_id).execute()
 
-        write.insert("temporary_timeframes", [{
-            "id": uuid4(),
-            "linked_id": payload.presentation_id,
-            "start_time": payload.start_time,
-            "end_time": payload.end_time,
-            "symposium_id": payload.symposium_id,
-        }])
+            delete.delete_temporary_timeframes(payload.presentation_id)
+
+            write.insert("temporary_timeframes", [{
+                "id": uuid4(),
+                "linked_id": payload.presentation_id,
+                "start_time": payload.start_time,
+                "end_time": payload.end_time,
+                "symposium_id": payload.symposium_id,
+            }])
 
         return {
             "status": "updated",
@@ -358,126 +406,129 @@ def bulk_update_schedule_assignments(
             "bulk_update_schedule_assignments: symposium_id=%s  assigned=%d  unscheduled=%d",
             payload.symposium_id, len(payload.assignments), len(payload.unscheduled_presentation_ids),
         )
-        room_names = _load_room_names(payload.symposium_id)
         assignment_map: dict[str, request_schemas.SingleScheduleAssignment] = {
             str(a.presentation_id): a for a in payload.assignments
         }
         unscheduled_set: set[str] = {str(pid) for pid in payload.unscheduled_presentation_ids}
 
-        entities = load_symposium_entities(payload.symposium_id)
-        index = build_conflict_index(entities)
+        # Hold the symposium-level advisory lock across the load→check→write
+        # so concurrent edits or solver saves can't invalidate our snapshot.
+        with symposium_lock(payload.symposium_id):
+            room_names = _load_room_names(payload.symposium_id)
+            entities = load_symposium_entities(payload.symposium_id)
+            index = build_conflict_index(entities)
 
-        for pid in assignment_map:
-            if pid not in index.presentations_by_id:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Presentation {pid} not found in this symposium.",
-                )
-        for pid in unscheduled_set:
-            if pid not in index.presentations_by_id:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Presentation {pid} not found in this symposium.",
-                )
-
-        EffSlot = tuple[int, datetime, datetime]  # (room, start, buffered_end)
-        effective: dict[str, EffSlot] = {}
-
-        non_batch_ids = [
-            UUID(pid) for pid in index.presentations_by_id
-            if pid not in assignment_map and pid not in unscheduled_set
-        ]
-        existing_tf: dict[str, dict[str, Any]] = {}
-        if non_batch_ids:
-            tf_resp = read.get_temporary_timeframes(linked_id=non_batch_ids)
-            for tf in list(getattr(tf_resp, "data", None) or []):
-                linked = str(tf.get("linked_id", ""))
-                if linked:
-                    existing_tf[linked] = tf
-
-        for pid, p in index.presentations_by_id.items():
-            if pid in unscheduled_set:
-                continue
-            buf = timedelta(minutes=int(p.get("buffer") or 0))
-            if pid in assignment_map:
-                a = assignment_map[pid]
-                start = ensure_app_timezone(a.start_time)
-                end = ensure_app_timezone(a.end_time)
-                _assert_within_symposium_windows(payload.symposium_id, start, end)
-                effective[pid] = (a.room, start, end + buf)
-            elif pid in existing_tf:
-                room_val = p.get("temporary_room")
-                if room_val is None:
-                    continue
-                tf = existing_tf[pid]
-                start = parse_app_datetime(tf["start_time"])
-                end = parse_app_datetime(tf["end_time"])
-                effective[pid] = (int(room_val), start, end + buf)
-
-        scheduled_ids = list(effective.keys())
-        for i, pid_a in enumerate(scheduled_ids):
-            room_a, start_a, buffered_end_a = effective[pid_a]
-            pres_a = index.presentations_by_id[pid_a]
-            resources_a = index.resources_for(pres_a)
-
-            for pid_b in scheduled_ids[i + 1:]:
-                room_b, start_b, buffered_end_b = effective[pid_b]
-                times_overlap = start_a < buffered_end_b and buffered_end_a > start_b
-                if not times_overlap:
-                    continue
-
-                if pid_a not in assignment_map and pid_b not in assignment_map:
-                    continue
-
-                pres_b = index.presentations_by_id[pid_b]
-                title_a = str(pres_a.get("title", pid_a))
-                title_b = str(pres_b.get("title", pid_b))
-
-                if room_a == room_b:
+            for pid in assignment_map:
+                if pid not in index.presentations_by_id:
                     raise HTTPException(
-                        status_code=409,
-                        detail=format_room_conflict_pair(
-                            _room_label(room_names, room_a), title_a, title_b,
-                        ),
+                        status_code=404,
+                        detail=f"Presentation {pid} not found in this symposium.",
+                    )
+            for pid in unscheduled_set:
+                if pid not in index.presentations_by_id:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Presentation {pid} not found in this symposium.",
                     )
 
-                shared = resources_a & index.resources_for(pres_b)
-                if shared:
-                    person_id = next(iter(shared))
-                    raise HTTPException(
-                        status_code=409,
-                        detail=format_person_conflict_pair(
-                            index.person_role(person_id),
-                            index.person_name(person_id),
-                            title_a, title_b,
-                        ),
-                    )
+            EffSlot = tuple[int, datetime, datetime]  # (room, start, buffered_end)
+            effective: dict[str, EffSlot] = {}
 
-        batch_pids = [UUID(pid) for pid in assignment_map]
-        unscheduled_pids = [UUID(pid) for pid in unscheduled_set]
-        delete.delete_temporary_timeframes(batch_pids + unscheduled_pids)
+            non_batch_ids = [
+                UUID(pid) for pid in index.presentations_by_id
+                if pid not in assignment_map and pid not in unscheduled_set
+            ]
+            existing_tf: dict[str, dict[str, Any]] = {}
+            if non_batch_ids:
+                tf_resp = read.get_temporary_timeframes(linked_id=non_batch_ids)
+                for tf in list(getattr(tf_resp, "data", None) or []):
+                    linked = str(tf.get("linked_id", ""))
+                    if linked:
+                        existing_tf[linked] = tf
 
-        tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
-        room_by_presentation: dict[UUID, str | int | None] = {}
-        for pid, a in assignment_map.items():
-            room_by_presentation[UUID(pid)] = a.room
-            tf_rows.append({
-                "id": uuid4(),
-                "linked_id": UUID(pid),
-                "start_time": a.start_time,
-                "end_time": a.end_time,
-                "symposium_id": payload.symposium_id,
-            })
-        for pid in unscheduled_set:
-            room_by_presentation[UUID(pid)] = None
+            for pid, p in index.presentations_by_id.items():
+                if pid in unscheduled_set:
+                    continue
+                buf = timedelta(minutes=int(p.get("buffer") or 0))
+                if pid in assignment_map:
+                    a = assignment_map[pid]
+                    start = ensure_app_timezone(a.start_time)
+                    end = ensure_app_timezone(a.end_time)
+                    _assert_within_symposium_windows(payload.symposium_id, start, end)
+                    effective[pid] = (a.room, start, end + buf)
+                elif pid in existing_tf:
+                    room_val = p.get("temporary_room")
+                    if room_val is None:
+                        continue
+                    tf = existing_tf[pid]
+                    start = parse_app_datetime(tf["start_time"])
+                    end = parse_app_datetime(tf["end_time"])
+                    effective[pid] = (int(room_val), start, end + buf)
 
-        if room_by_presentation:
-            write.update_column_by_ids(
-                "presentations", "temporary_room", room_by_presentation
-            )
+            scheduled_ids = list(effective.keys())
+            for i, pid_a in enumerate(scheduled_ids):
+                room_a, start_a, buffered_end_a = effective[pid_a]
+                pres_a = index.presentations_by_id[pid_a]
+                resources_a = index.resources_for(pres_a)
 
-        if tf_rows:
-            write.insert("temporary_timeframes", tf_rows)
+                for pid_b in scheduled_ids[i + 1:]:
+                    room_b, start_b, buffered_end_b = effective[pid_b]
+                    times_overlap = start_a < buffered_end_b and buffered_end_a > start_b
+                    if not times_overlap:
+                        continue
+
+                    if pid_a not in assignment_map and pid_b not in assignment_map:
+                        continue
+
+                    pres_b = index.presentations_by_id[pid_b]
+                    title_a = str(pres_a.get("title", pid_a))
+                    title_b = str(pres_b.get("title", pid_b))
+
+                    if room_a == room_b:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=format_room_conflict_pair(
+                                _room_label(room_names, room_a), title_a, title_b,
+                            ),
+                        )
+
+                    shared = resources_a & index.resources_for(pres_b)
+                    if shared:
+                        person_id = next(iter(shared))
+                        raise HTTPException(
+                            status_code=409,
+                            detail=format_person_conflict_pair(
+                                index.person_role(person_id),
+                                index.person_name(person_id),
+                                title_a, title_b,
+                            ),
+                        )
+
+            batch_pids = [UUID(pid) for pid in assignment_map]
+            unscheduled_pids = [UUID(pid) for pid in unscheduled_set]
+            delete.delete_temporary_timeframes(batch_pids + unscheduled_pids)
+
+            tf_rows: list[dict[str, str | int | UUID | datetime | date | None]] = []
+            room_by_presentation: dict[UUID, str | int | None] = {}
+            for pid, a in assignment_map.items():
+                room_by_presentation[UUID(pid)] = a.room
+                tf_rows.append({
+                    "id": uuid4(),
+                    "linked_id": UUID(pid),
+                    "start_time": a.start_time,
+                    "end_time": a.end_time,
+                    "symposium_id": payload.symposium_id,
+                })
+            for pid in unscheduled_set:
+                room_by_presentation[UUID(pid)] = None
+
+            if room_by_presentation:
+                write.update_column_by_ids(
+                    "presentations", "temporary_room", room_by_presentation
+                )
+
+            if tf_rows:
+                write.insert("temporary_timeframes", tf_rows)
 
         return {
             "status": "updated",

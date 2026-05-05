@@ -19,7 +19,7 @@ import {
   type ScheduleConstraints,
   type ConflictContext,
 } from "../lib/utils";
-import { apiFetch, apiGet, apiPost, apiPut } from "../lib/api";
+import { apiFetch, apiGet, apiPost, apiPut, ApiError } from "../lib/api";
 import { confirmDialog, alertDialog } from "../lib/dialog";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
 import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
@@ -389,25 +389,44 @@ export default function ScheduleTab({
     setDebuggerRecommendations({});
     setDebugBestAssignments([]);
     try {
-      const { raw: startRaw } = await apiPost("/api/events/schedule", {
-        symposium_id: selectedSymposiumId,
-        debug_mode: debugMode,
-        constraints: {
-          room_conflicts: constraints.roomConflicts,
-          person_conflicts: constraints.personConflicts,
-          symposium_windows: constraints.symposiumWindows,
-          professor_availability: constraints.professorAvailability,
-          student_availability: constraints.studentAvailability,
-          same_class_same_room: constraints.sameClassSameRoom,
-          slot_alignment: constraints.slotAlignment,
-          minimize_makespan: constraints.minimizeMakespan,
-          minimize_class_span: constraints.minimizeClassSpan,
-          minimize_professor_span: constraints.minimizeProfessorSpan,
-          balance_rooms: constraints.balanceRooms,
-        },
-      }, authHeaders);
-
-      const jobId = startRaw.job_id as string;
+      let jobId: string;
+      try {
+        const { raw: startRaw } = await apiPost("/api/events/schedule", {
+          symposium_id: selectedSymposiumId,
+          debug_mode: debugMode,
+          constraints: {
+            room_conflicts: constraints.roomConflicts,
+            person_conflicts: constraints.personConflicts,
+            symposium_windows: constraints.symposiumWindows,
+            professor_availability: constraints.professorAvailability,
+            student_availability: constraints.studentAvailability,
+            same_class_same_room: constraints.sameClassSameRoom,
+            slot_alignment: constraints.slotAlignment,
+            minimize_makespan: constraints.minimizeMakespan,
+            minimize_class_span: constraints.minimizeClassSpan,
+            minimize_professor_span: constraints.minimizeProfessorSpan,
+            balance_rooms: constraints.balanceRooms,
+          },
+        }, authHeaders);
+        jobId = startRaw.job_id as string;
+      } catch (err) {
+        // If a run is already in flight for this symposium (singleton index +
+        // 423 lock), attach to it instead of failing.
+        if (err instanceof ApiError && err.isSchedulerBusy()) {
+          const detail = (err.body as { detail?: { job_id?: string } }).detail;
+          const existingId = detail?.job_id;
+          if (typeof existingId === "string") {
+            setSchedulerMessage("A scheduler run is already in progress for this symposium. Tracking it…");
+            jobId = existingId;
+          } else {
+            throw err;
+          }
+        } else if (err instanceof ApiError && err.isBusy()) {
+          throw new Error("Symposium is busy with another change — please retry.");
+        } else {
+          throw err;
+        }
+      }
       setSchedulerMessage(debugMode ? "Testing all constraint combinations... (up to 10 minutes)" : "Scheduler running...");
 
       const POLL_TIMEOUT_MS = debugMode ? 10 * 60 * 1000 : 5 * 60 * 1000;

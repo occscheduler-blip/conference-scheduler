@@ -10,6 +10,7 @@ import app.supabase_io.supabase_schemas as supabase_schemas
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
 from app.routers.events_helpers import (
+    _checked_update,
     _normalize_counts,
     _parse_uuid_list,
     _serialize_update_fields,
@@ -17,6 +18,7 @@ from app.routers.events_helpers import (
 )
 from app.supabase_io import delete, read, write
 from app.supabase_io.client import supabase
+from app.supabase_io.locks import maybe_symposium_lock
 from app.utils import rows_affected as _rows_affected
 
 logger = logging.getLogger(__name__)
@@ -70,23 +72,23 @@ def add_students(
 @router.put("/update_student")
 def update_student(
     payload: request_schemas.UpdateStudentRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor", "student"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         logger.info("update_student: student_id=%s", payload.student_id)
         updates = payload.model_dump(
             exclude_none=True,
-            exclude={"student_id"},
+            exclude={"student_id", "expected_updated_at"},
         )
         update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("students")
-            .update(update_payload)
-            .eq("id", str(payload.student_id))
-            .execute()
-        )
         records_updated = {
-            "students": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+            "students": _checked_update(
+                "students",
+                str(payload.student_id),
+                update_payload,
+                payload.expected_updated_at,
+                actor_id=claims.sub,
+            )
         }
 
         return {
@@ -114,7 +116,9 @@ def delete_student(
 ) -> dict[str, str | int | dict[str, int]]:
     try:
         logger.info("delete_student: student_id=%s", student_id)
-        counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
+        sym_id = read.resolve_symposium_for_linked(student_id)
+        with maybe_symposium_lock(sym_id):
+            counts = _normalize_counts(delete.delete_student(student_id), {"students": 1})
         logger.info("delete_student complete: counts=%s", counts)
         return {
             "status": "deleted",
@@ -183,23 +187,23 @@ def add_professor(
 @router.put("/update_professor")
 def update_professor(
     payload: request_schemas.UpdateProfessorRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin", "department_head", "professor"])),
 ) -> dict[str, str | int | list[str] | dict[str, int]]:
     try:
         logger.info("update_professor: professor_id=%s", payload.professor_id)
         updates = payload.model_dump(
             exclude_none=True,
-            exclude={"professor_id"},
+            exclude={"professor_id", "expected_updated_at"},
         )
         update_payload = _serialize_update_fields(updates)
-        update_resp = (
-            supabase.table("professors")
-            .update(update_payload)
-            .eq("id", str(payload.professor_id))
-            .execute()
-        )
         records_updated = {
-            "professors": _rows_affected(update_resp, fallback=1 if update_payload else 0)
+            "professors": _checked_update(
+                "professors",
+                str(payload.professor_id),
+                update_payload,
+                payload.expected_updated_at,
+                actor_id=claims.sub,
+            )
         }
 
         return {
@@ -227,9 +231,11 @@ def delete_professor(
 ) -> dict[str, str | int | dict[str, int]]:
     try:
         logger.info("delete_professor: professor_id=%s", professor_id)
-        counts = _normalize_counts(
-            delete.delete_professor(professor_id), {"professors": 1}
-        )
+        sym_id = read.resolve_symposium_for_linked(professor_id)
+        with maybe_symposium_lock(sym_id):
+            counts = _normalize_counts(
+                delete.delete_professor(professor_id), {"professors": 1}
+            )
         logger.info("delete_professor complete: counts=%s", counts)
         return {
             "status": "deleted",

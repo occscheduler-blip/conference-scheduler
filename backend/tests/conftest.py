@@ -46,6 +46,9 @@ _service_key = _get_local_service_key()
 # Force-set — override any production values already in the environment.
 os.environ["SUPABASE_URL"] = _LOCAL_URL
 os.environ["SUPABASE_KEY"] = _service_key
+# Force the advisory-lock helper (psycopg) to talk to local Supabase, not whatever
+# SUPABASE_DB_URL the developer's shell has pointed at.
+os.environ["SUPABASE_DB_URL"] = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-key-for-testing-only")
 
 

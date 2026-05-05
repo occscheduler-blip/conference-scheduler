@@ -6,12 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from postgrest.base_request_builder import APIResponse
 
 import app.routers.request_schemas as request_schemas
-import app.supabase_io.supabase_schemas as supabase_schemas
 from app.auth.dependencies import require_jwt
 from app.auth.jwt_utils import JWTClaims
 from app.routers.events_helpers import _parse_uuid_list, _sum_counts
-from app.supabase_io import delete, read, write
-from app.utils import rows_affected as _rows_affected
+from app.supabase_io import read
+from app.supabase_io.locks import symposium_lock
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,22 +23,43 @@ def update_timeframes(
 ) -> dict[str, str | int | UUID | dict[str, int]]:
     try:
         logger.info("update_timeframes: linked_id=%s  count=%d", payload.linked_id, len(payload.timeframes))
-        deleted_timeframes = delete.delete_timeframes(payload.linked_id)
 
-        timeframes = [
-            supabase_schemas.Timeframe(
-                id=uuid4(),
-                linked_id=payload.linked_id,
-                start_time=timeframe.start_time,
-                end_time=timeframe.end_time,
+        symposium_id = read.resolve_symposium_for_linked(payload.linked_id)
+        if symposium_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail="linked_id does not match any symposium / professor / student / presentation.",
             )
-            for timeframe in payload.timeframes
-        ]
-        timeframe_payload = [item.model_dump() for item in timeframes]
-        timeframe_resp = write.insert("timeframes", timeframe_payload)
-        timeframes_inserted = _rows_affected(
-            timeframe_resp, fallback=len(timeframe_payload)
-        )
+
+        # Hold the symposium lock and do delete+insert in a single psycopg
+        # transaction so there is never an empty-availability window visible
+        # to a concurrent reader (scheduler, other tab) and crash recovery
+        # leaves the previous timeframes intact.
+        with symposium_lock(symposium_id) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM public.timeframes WHERE linked_id = %s",
+                    (str(payload.linked_id),),
+                )
+                deleted_timeframes = cur.rowcount or 0
+
+                rows = [
+                    (
+                        str(uuid4()),
+                        str(payload.linked_id),
+                        tf.start_time,
+                        tf.end_time,
+                    )
+                    for tf in payload.timeframes
+                ]
+                if rows:
+                    cur.executemany(
+                        "INSERT INTO public.timeframes (id, linked_id, start_time, end_time)"
+                        " VALUES (%s, %s, %s, %s)",
+                        rows,
+                    )
+                timeframes_inserted = len(rows)
+
         records_deleted = {"timeframes": deleted_timeframes}
         records_inserted = {"timeframes": timeframes_inserted}
 
