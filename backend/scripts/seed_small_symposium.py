@@ -1,17 +1,18 @@
 """
 Seed script: inserts a small symposium alongside existing data.
 1 day, 1 department, 3 classes, 3 professors, 4 students/class = 12 presentations, 2 rooms.
-Run from the backend directory: python seed_small_symposium.py
+Run from the backend directory: python scripts/seed_small_symposium.py
 """
 
 import os
+from pathlib import Path
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from supabase import create_client
 
