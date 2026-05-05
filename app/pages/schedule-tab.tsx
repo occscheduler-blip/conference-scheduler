@@ -1040,49 +1040,48 @@ export default function ScheduleTab({
                 </div>
               </div>
               <hr className="my-2 border-[#e5eaff]" />
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-2">
                 <p className="text-[11px] font-bold uppercase tracking-wide text-[#888]">
                   Optimization (auto-scheduler)
                 </p>
-                <div className="flex gap-[2px] text-[9px] font-bold uppercase tracking-wide text-[#aaa]">
-                  <span className="w-[34px] text-center">Off</span>
-                  <span className="w-[34px] text-center">Soft</span>
-                  <span className="w-[34px] text-center">Hard</span>
-                </div>
               </div>
               {([
                 { key: "minimizeMakespan" as const, label: "Minimize total duration", desc: "Finish the schedule as early as possible" },
                 { key: "minimizeClassSpan" as const, label: "Group class presentations", desc: "Keep same-class presentations close in time" },
                 { key: "minimizeProfessorSpan" as const, label: "Group professor presentations", desc: "Keep same-professor presentations close in time" },
                 { key: "balanceRooms" as const, label: "Balance room usage", desc: "Distribute presentations evenly across rooms" },
-              ]).map(({ key, label, desc }) => (
-                <div key={key} className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition hover:bg-[#f5f8ff]">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-[#111]">{label}</div>
-                    <div className="text-[11px] text-[#888]">{desc}</div>
+              ]).map(({ key, label, desc }) => {
+                const isOn = constraints[key] !== "off";
+                return (
+                  <div key={key} className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 transition hover:bg-[#f5f8ff]">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-[#111]">{label}</div>
+                      <div className="text-[11px] text-[#888]">{desc}</div>
+                    </div>
+                    <div className="flex shrink-0 overflow-hidden rounded-md border border-[#d0d8f0]">
+                      {(["off", "on"] as const).map((mode) => {
+                        const active = mode === "on" ? isOn : !isOn;
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setConstraints((prev) => ({ ...prev, [key]: mode === "on" ? "soft" : "off" }))}
+                            className={`w-[34px] py-0.5 text-[10px] font-semibold transition ${
+                              active
+                                ? mode === "off"
+                                  ? "bg-[#e0e0e0] text-[#555]"
+                                  : "bg-[#1635a7] text-white"
+                                : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
+                            }`}
+                          >
+                            {mode === "off" ? "Off" : "On"}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="flex shrink-0 overflow-hidden rounded-md border border-[#d0d8f0]">
-                    {(["off", "soft", "hard"] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => setConstraints((prev) => ({ ...prev, [key]: mode }))}
-                        className={`w-[34px] py-0.5 text-[10px] font-semibold transition ${
-                          constraints[key] === mode
-                            ? mode === "off"
-                              ? "bg-[#e0e0e0] text-[#555]"
-                              : mode === "soft"
-                                ? "bg-[#fff3cd] text-[#856404]"
-                                : "bg-[#1635a7] text-white"
-                            : "bg-white text-[#aaa] hover:bg-[#f5f5f5]"
-                        }`}
-                      >
-                        {mode === "off" ? "Off" : mode === "soft" ? "Soft" : "Hard"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             </>
           ) : null}
