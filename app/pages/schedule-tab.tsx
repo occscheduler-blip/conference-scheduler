@@ -415,7 +415,7 @@ export default function ScheduleTab({
       const raw = await new Promise<Record<string, unknown>>((resolve, reject) => {
         const poll = async () => {
           if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
-            reject(new Error("Scheduler timed out after 5 minutes."));
+            reject(new Error(debugMode ? "Debugger timed out after 10 minutes." : "Scheduler timed out after 5 minutes."));
             return;
           }
           try {
@@ -479,7 +479,17 @@ export default function ScheduleTab({
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      setSchedulerMessage(`Error: ${msg}`);
+      if (debugMode) {
+        setSchedulerMessage("Debugger did not complete.");
+        setDebuggerFindings([`The debugger encountered an error: ${msg}. No constraint recommendations could be generated.`]);
+      } else {
+        setSchedulerMessage("Scheduler did not complete.");
+        setSchedulerFailure({
+          unscheduledCount: 0,
+          diagnostics: [`The scheduler encountered an error: ${msg}`],
+          suggestions: ["Try running the scheduler again.", "If the problem persists, check that all presentations have valid durations and the symposium has time windows configured."],
+        });
+      }
     } finally {
       setIsRunningScheduler(false);
     }
@@ -650,6 +660,9 @@ export default function ScheduleTab({
       onClickBlock: handleOpenEditModal,
       onDropBlocked: (message) => {
         void alertDialog(message, "Cannot move presentation");
+      },
+      onDropWarning: (message) => {
+        void alertDialog(message, "Scheduling warning");
       },
     });
 
@@ -1147,17 +1160,6 @@ export default function ScheduleTab({
                 </button>
               );
             })}
-            <button
-              type="button"
-              onClick={() => setSelectedDay("unscheduled")}
-              className={`flex-1 whitespace-nowrap px-4 py-2.5 text-sm font-semibold ${
-                selectedDay === "unscheduled"
-                  ? "bg-white text-[#111]"
-                  : "bg-[#1635a7] text-white hover:bg-[#0b2a8d]"
-              }`}
-            >
-              Unscheduled{unscheduled.length > 0 ? ` (${unscheduled.length})` : ""}
-            </button>
           </div>
         </div>
       ) : null}
@@ -1196,18 +1198,19 @@ export default function ScheduleTab({
               into it to switch days. */}
           <div
             ref={unscheduledPanelRef}
-            className={`max-h-[calc(100vh-180px)] w-56 shrink-0 overflow-hidden rounded-lg border bg-white transition ${
+            className={`flex w-56 shrink-0 flex-col overflow-hidden rounded-lg border bg-white transition ${
               isDragging && dragState && !dragState.fromUnscheduled
                 ? dragState.overUnscheduled
                   ? "border-[#1635a7] ring-2 ring-[#1635a7]"
                   : "border-dashed border-[#1635a7]"
                 : "border-[#d8e2ff]"
             }`}
+            style={{ height: (maxSlot - minSlot) * SLOT_HEIGHT + 33 }}
           >
-            <div className="border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+            <div className="shrink-0 border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
               Unscheduled ({unscheduled.length})
             </div>
-            <div className="h-full overflow-y-auto p-2">
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {unscheduled.length > 0 ? (
                 <div className="space-y-1.5">
                   {unscheduled.map((pres) => {
@@ -1301,42 +1304,6 @@ export default function ScheduleTab({
         );
       })() : null}
 
-      {/* Unscheduled presentations (tab content) */}
-      {!isLoadingSchedule && selectedDay === "unscheduled" ? (
-        <div className="rounded-xl border border-[#d8e2ff] bg-white p-4">
-          {unscheduled.length > 0 ? (
-            <div className="space-y-2">
-              {unscheduled.map((pres) => (
-                <div
-                  key={pres.id}
-                  className="flex items-center justify-between rounded-lg border border-[#e5e7eb] bg-[#fefefe] px-4 py-2.5"
-                >
-                  <div>
-                    <span className="text-sm font-semibold text-[#111]">{pres.title}</span>
-                    <span className="ml-2 text-xs text-[#666]">
-                      ({pres.minutes} min) &mdash; {pres.departmentName || "No dept"}
-                    </span>
-                    {pres.presenterNames.length > 0 ? (
-                      <span className="ml-2 text-xs text-[#888]">
-                        {pres.presenterNames.join(", ")}
-                      </span>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleOpenEditModal(pres)}
-                    className="rounded-md border border-[#0f33a8] bg-white px-3 py-1 text-xs font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
-                  >
-                    Assign
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-[#555]">All presentations have been scheduled.</p>
-          )}
-        </div>
-      ) : null}
 
       {/* No presentations message */}
       {!isLoadingSchedule && selectedSymposiumId && presentations.length === 0 && !message ? (

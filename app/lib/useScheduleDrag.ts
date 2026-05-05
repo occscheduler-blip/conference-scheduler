@@ -54,6 +54,7 @@ type UseScheduleDragConfig = {
   onDropUnscheduled?: (presentationId: string) => void;
   onClickBlock: (pres: SchedulePresentation) => void;
   onDropBlocked?: (message: string) => void;
+  onDropWarning?: (message: string) => void;
 };
 
 function viewportToGridPosition(
@@ -212,6 +213,9 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
         if (!prev.conflict?.blocked) {
           const endTime = new Date(prev.snapTarget.startTime.getTime() + prev.presentation.minutes * 60 * 1000);
           configRef.current.onDrop(prev.presentation.id, prev.snapTarget.room, prev.snapTarget.startTime, endTime);
+          if (prev.conflict?.message) {
+            configRef.current.onDropWarning?.(prev.conflict.message);
+          }
         } else if (prev.conflict?.blocked) {
           configRef.current.onDropBlocked?.(prev.conflict.message);
         }
