@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 from math import ceil
 
 from ortools.sat.python import cp_model
@@ -19,6 +19,7 @@ from .cp_sat_helpers import (
 )
 from .models import (
     PresentationInput,
+    ScheduledPresentation,
     ScheduleProblem,
     ScheduleResult,
 )

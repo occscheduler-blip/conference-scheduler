@@ -40,7 +40,9 @@ function roomNamesForSave(roomNames: string[], roomCount: number): Array<string 
   return saved;
 }
 
-export default function AdminPage({ token, onSignOut }: { token: string; onSignOut: () => void }) {
+type AdminEntry = { id: string; email: string; is_superadmin: boolean };
+
+export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: { token: string; onSignOut: () => void; isSuperAdmin: boolean; entityId: string }) {
   const [activeTab, setActiveTab] = useState<AdminTab>("create");
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
@@ -107,6 +109,24 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
   const [isCreatingAdmin, setIsCreatingAdmin] = useState(false);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
   const [adminMessageKind, setAdminMessageKind] = useState<"success" | "error" | null>(null);
+
+  // Admin list state
+  const [adminList, setAdminList] = useState<AdminEntry[]>([]);
+  const [isLoadingAdmins, setIsLoadingAdmins] = useState(false);
+  const [adminListError, setAdminListError] = useState<string | null>(null);
+  const [editingAdminId, setEditingAdminId] = useState<string | null>(null);
+  const [editingAdminEmail, setEditingAdminEmail] = useState("");
+  const [isSavingAdminEdit, setIsSavingAdminEdit] = useState(false);
+  const [adminEditError, setAdminEditError] = useState<string | null>(null);
+  const [togglingAdminId, setTogglingAdminId] = useState<string | null>(null);
+  const [deletingAdminId, setDeletingAdminId] = useState<string | null>(null);
+  const [resetPasswordAdminId, setResetPasswordAdminId] = useState<string | null>(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [showResetPasswordConfirm, setShowResetPasswordConfirm] = useState(false);
+  const [isSavingResetPassword, setIsSavingResetPassword] = useState(false);
+  const [resetPasswordError, setResetPasswordError] = useState<string | null>(null);
 
   const isCreateTab = activeTab === "create";
   const isEditTab = activeTab === "edit";
@@ -528,6 +548,19 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setDepartmentMessageKind(null);
   };
 
+  const fetchAdminList = useCallback(async () => {
+    setIsLoadingAdmins(true);
+    setAdminListError(null);
+    try {
+      const rows = await apiFetch<AdminEntry>("/api/auth/admin/list", { headers: authHeaders });
+      setAdminList(rows);
+    } catch (err) {
+      setAdminListError(err instanceof Error ? err.message : "Failed to load admins.");
+    } finally {
+      setIsLoadingAdmins(false);
+    }
+  }, [authHeaders]);
+
   const handleCreateAdmin = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAdminMessage(null);
@@ -564,12 +597,83 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
       setNewAdminEmail("");
       setNewAdminPassword("");
       setNewAdminConfirmPassword("");
+      void fetchAdminList();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       setAdminMessage(message);
       setAdminMessageKind("error");
     } finally {
       setIsCreatingAdmin(false);
+    }
+  };
+
+  const handleUpdateAdminEmail = async (adminId: string) => {
+    const trimmed = editingAdminEmail.trim().toLowerCase();
+    if (!trimmed || !/^[^\s@]+@hamilton\.edu$/i.test(trimmed)) {
+      setAdminEditError("Enter a valid @hamilton.edu email.");
+      return;
+    }
+    setIsSavingAdminEdit(true);
+    setAdminEditError(null);
+    try {
+      await apiPut(`/api/auth/admin/${adminId}`, { email: trimmed }, authHeaders);
+      setAdminList((list) => list.map((a) => a.id === adminId ? { ...a, email: trimmed } : a));
+      setEditingAdminId(null);
+    } catch (err) {
+      setAdminEditError(err instanceof Error ? err.message : "Failed to update email.");
+    } finally {
+      setIsSavingAdminEdit(false);
+    }
+  };
+
+  const handleToggleSuperAdmin = async (adminId: string, current: boolean) => {
+    setTogglingAdminId(adminId);
+    try {
+      await apiPut(`/api/auth/admin/${adminId}`, { is_superadmin: !current }, authHeaders);
+      setAdminList((list) => list.map((a) => a.id === adminId ? { ...a, is_superadmin: !current } : a));
+    } catch (err) {
+      setAdminListError(err instanceof Error ? err.message : "Failed to update admin.");
+    } finally {
+      setTogglingAdminId(null);
+    }
+  };
+
+  const handleResetPassword = async (adminId: string) => {
+    if (resetPasswordValue.length < 8) {
+      setResetPasswordError("Password must be at least 8 characters.");
+      return;
+    }
+    if (resetPasswordValue !== resetPasswordConfirm) {
+      setResetPasswordError("Passwords do not match.");
+      return;
+    }
+    setIsSavingResetPassword(true);
+    setResetPasswordError(null);
+    try {
+      await apiPut(`/api/auth/admin/${adminId}`, { password: resetPasswordValue }, authHeaders);
+      setResetPasswordAdminId(null);
+      setResetPasswordValue("");
+      setResetPasswordConfirm("");
+      setShowResetPassword(false);
+      setShowResetPasswordConfirm(false);
+    } catch (err) {
+      setResetPasswordError(err instanceof Error ? err.message : "Failed to reset password.");
+    } finally {
+      setIsSavingResetPassword(false);
+    }
+  };
+
+  const handleDeleteAdmin = async (adminId: string, email: string) => {
+    const confirmed = await confirmDialog(`Delete admin ${email}? This cannot be undone.`);
+    if (!confirmed) return;
+    setDeletingAdminId(adminId);
+    try {
+      await apiDelete(`/api/auth/admin/${adminId}`, authHeaders);
+      setAdminList((list) => list.filter((a) => a.id !== adminId));
+    } catch (err) {
+      setAdminListError(err instanceof Error ? err.message : "Failed to delete admin.");
+    } finally {
+      setDeletingAdminId(null);
     }
   };
 
@@ -637,6 +741,21 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     setIsCreatingAdmin(false);
     setAdminMessage(null);
     setAdminMessageKind(null);
+    setAdminList([]);
+    setAdminListError(null);
+    setEditingAdminId(null);
+    setEditingAdminEmail("");
+    setIsSavingAdminEdit(false);
+    setAdminEditError(null);
+    setTogglingAdminId(null);
+    setDeletingAdminId(null);
+    setResetPasswordAdminId(null);
+    setResetPasswordValue("");
+    setResetPasswordConfirm("");
+    setShowResetPassword(false);
+    setShowResetPasswordConfirm(false);
+    setIsSavingResetPassword(false);
+    setResetPasswordError(null);
   };
 
   const handleTabSwitch = (tab: AdminTab) => {
@@ -647,6 +766,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
     }
     if (tab === "admins") {
       resetAdminsTabState();
+      void fetchAdminList();
       return;
     }
     if (tab === "records") {
@@ -677,7 +797,7 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           </h1>
         </header>
 
-        <nav className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-5">
+        <nav className={`mb-4 grid grid-cols-1 gap-3 ${isSuperAdmin ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
           <button
             type="button"
             onClick={() => handleTabSwitch("create")}
@@ -722,17 +842,19 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           >
             Manage Records
           </button>
-          <button
-            type="button"
-            onClick={() => handleTabSwitch("admins")}
-            className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
-              activeTab === "admins"
-                ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
-                : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
-            }`}
-          >
-            Manage Admins
-          </button>
+          {isSuperAdmin ? (
+            <button
+              type="button"
+              onClick={() => handleTabSwitch("admins")}
+              className={`rounded-xl border-2 px-4 py-3 text-lg font-semibold transition md:text-xl ${
+                activeTab === "admins"
+                  ? "border-[#0f33a8] bg-[#0f33a8] text-white shadow-[0_8px_20px_rgba(15,51,168,0.25)]"
+                  : "border-[#c6d2f6] bg-white text-[#111] hover:border-[#0f33a8]"
+              }`}
+            >
+              Manage Admins
+            </button>
+          ) : null}
         </nav>
 
         {activeTab === "schedule" ? (
@@ -749,91 +871,265 @@ export default function AdminPage({ token, onSignOut }: { token: string; onSignO
           </section>
         ) : null}
 
-        {activeTab === "admins" ? (
-          <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
-            <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Create New Admin</h2>
+        {activeTab === "admins" && isSuperAdmin ? (
+          <section className="space-y-6">
+            {/* Existing admins list */}
+            <div className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+              <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Manage Admins</h2>
 
-            <form onSubmit={handleCreateAdmin} className="max-w-md space-y-4">
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Email</span>
-                <input
-                  type="email"
-                  className={fieldClass}
-                  placeholder="name@hamilton.edu"
-                  value={newAdminEmail}
-                  onChange={(event) => setNewAdminEmail(event.target.value)}
+              {isLoadingAdmins ? (
+                <p className="text-sm text-[#555]">Loading admins...</p>
+              ) : adminListError ? (
+                <p className="text-sm font-semibold text-[#9a1f1f]">{adminListError}</p>
+              ) : adminList.length === 0 ? (
+                <p className="text-sm text-[#555]">No admins found.</p>
+              ) : (
+                <ul className="divide-y divide-[#e6ecff]">
+                  {adminList.map((admin) => {
+                    const isEditing = editingAdminId === admin.id;
+                    const isToggling = togglingAdminId === admin.id;
+                    const isDeleting = deletingAdminId === admin.id;
+                    const isResettingPassword = resetPasswordAdminId === admin.id;
+                    const isSelf = admin.id === entityId;
+                    return (
+                      <li key={admin.id} className="flex flex-col gap-2 py-3">
+                        <div className="flex items-center gap-4">
+                        {/* Email / edit input */}
+                        <div className="flex flex-1 items-center gap-2 min-w-0">
+                          {isEditing ? (
+                            <input
+                              type="email"
+                              className={fieldClass + " flex-1"}
+                              value={editingAdminEmail}
+                              onChange={(e) => setEditingAdminEmail(e.target.value)}
+                              disabled={isSavingAdminEdit}
+                              autoFocus
+                            />
+                          ) : (
+                            <span className="truncate text-sm font-medium text-[#111]">{admin.email}</span>
+                          )}
+                          {admin.is_superadmin ? (
+                            <span className="shrink-0 rounded-full bg-[#0f33a8] px-2 py-0.5 text-xs font-bold text-white">Super Admin</span>
+                          ) : null}
+                          {isSelf ? (
+                            <span className="shrink-0 rounded-full border border-[#c6d2f6] px-2 py-0.5 text-xs font-semibold text-[#2d3d7a]">You</span>
+                          ) : null}
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex shrink-0 items-center gap-2">
+                          {isEditing ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateAdminEmail(admin.id)}
+                                disabled={isSavingAdminEdit}
+                                className="rounded-md bg-[#0f33a8] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0b2a8d] disabled:opacity-60"
+                              >
+                                {isSavingAdminEdit ? "Saving..." : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => { setEditingAdminId(null); setAdminEditError(null); }}
+                                disabled={isSavingAdminEdit}
+                                className="rounded-md border border-[#c6d2f6] px-3 py-1.5 text-xs font-semibold text-[#111] transition hover:border-[#0f33a8] disabled:opacity-60"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => { setEditingAdminId(admin.id); setEditingAdminEmail(admin.email); setAdminEditError(null); }}
+                              disabled={!!editingAdminId || isToggling || isDeleting}
+                              className="rounded-md border border-[#c6d2f6] px-3 py-1.5 text-xs font-semibold text-[#111] transition hover:border-[#0f33a8] disabled:opacity-40"
+                            >
+                              Edit Email
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSuperAdmin(admin.id, admin.is_superadmin)}
+                            disabled={isToggling || isDeleting || !!editingAdminId || (isSelf && admin.is_superadmin)}
+                            title={isSelf && admin.is_superadmin ? "Cannot remove your own super admin status" : undefined}
+                            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition disabled:opacity-40 ${
+                              admin.is_superadmin
+                                ? "border border-[#c6d2f6] text-[#111] hover:border-[#9a1f1f] hover:text-[#9a1f1f]"
+                                : "border border-[#0f33a8] text-[#0f33a8] hover:bg-[#0f33a8] hover:text-white"
+                            }`}
+                          >
+                            {isToggling ? "..." : admin.is_superadmin ? "Demote" : "Promote"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setResetPasswordAdminId(isResettingPassword ? null : admin.id);
+                              setResetPasswordValue("");
+                              setResetPasswordConfirm("");
+                              setShowResetPassword(false);
+                              setShowResetPasswordConfirm(false);
+                              setResetPasswordError(null);
+                            }}
+                            disabled={isDeleting || isToggling || !!editingAdminId}
+                            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition disabled:opacity-40 ${isResettingPassword ? "border border-[#c6d2f6] text-[#111] hover:border-[#0f33a8]" : "border border-[#c6d2f6] text-[#111] hover:border-[#0f33a8]"}`}
+                          >
+                            {isResettingPassword ? "Cancel" : "Reset Password"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteAdmin(admin.id, admin.email)}
+                            disabled={isDeleting || isToggling || !!editingAdminId || isSelf}
+                            title={isSelf ? "Cannot delete your own account" : undefined}
+                            className="rounded-md border border-[#c6d2f6] px-3 py-1.5 text-xs font-semibold text-[#9a1f1f] transition hover:border-[#9a1f1f] hover:bg-[#9a1f1f] hover:text-white disabled:opacity-40"
+                          >
+                            {isDeleting ? "Deleting..." : "Delete"}
+                          </button>
+                        </div>
+                        </div>{/* end main row */}
+
+                        {/* Inline edit error */}
+                        {isEditing && adminEditError ? (
+                          <p className="text-xs font-semibold text-[#9a1f1f]">{adminEditError}</p>
+                        ) : null}
+
+                        {/* Inline password reset form */}
+                        {isResettingPassword ? (
+                          <div className="w-full rounded-xl border border-[#e6ecff] bg-[#fdfdff] p-3 sm:col-span-2">
+                            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">New Password for {admin.email}</p>
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                              <div className="relative flex-1">
+                                <input
+                                  type={showResetPassword ? "text" : "password"}
+                                  className={fieldClass + " pr-10 text-sm"}
+                                  placeholder="New password (min 8 chars)"
+                                  value={resetPasswordValue}
+                                  onChange={(e) => setResetPasswordValue(e.target.value)}
+                                  disabled={isSavingResetPassword}
+                                  autoFocus
+                                />
+                                <button type="button" onClick={() => setShowResetPassword((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]" tabIndex={-1}>
+                                  {showResetPassword ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}
+                                </button>
+                              </div>
+                              <div className="relative flex-1">
+                                <input
+                                  type={showResetPasswordConfirm ? "text" : "password"}
+                                  className={fieldClass + " pr-10 text-sm"}
+                                  placeholder="Confirm new password"
+                                  value={resetPasswordConfirm}
+                                  onChange={(e) => setResetPasswordConfirm(e.target.value)}
+                                  disabled={isSavingResetPassword}
+                                />
+                                <button type="button" onClick={() => setShowResetPasswordConfirm((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]" tabIndex={-1}>
+                                  {showResetPasswordConfirm ? <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>}
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleResetPassword(admin.id)}
+                                disabled={isSavingResetPassword}
+                                className="rounded-md bg-[#0f33a8] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#0b2a8d] disabled:opacity-60"
+                              >
+                                {isSavingResetPassword ? "Saving..." : "Save"}
+                              </button>
+                            </div>
+                            {resetPasswordError ? (
+                              <p className="mt-1.5 text-xs font-semibold text-[#9a1f1f]">{resetPasswordError}</p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            {/* Create new admin */}
+            <div className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
+              <h2 className="mb-5 text-xl font-bold text-[#111] md:text-2xl">Create New Admin</h2>
+
+              <form onSubmit={handleCreateAdmin} className="max-w-md space-y-4">
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Email</span>
+                  <input
+                    type="email"
+                    className={fieldClass}
+                    placeholder="name@hamilton.edu"
+                    value={newAdminEmail}
+                    onChange={(event) => setNewAdminEmail(event.target.value)}
+                    disabled={isCreatingAdmin}
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Password</span>
+                  <div className="relative">
+                    <input
+                      type={showAdminPassword ? "text" : "password"}
+                      className={fieldClass + " pr-10"}
+                      placeholder="At least 8 characters"
+                      value={newAdminPassword}
+                      onChange={(event) => setNewAdminPassword(event.target.value)}
+                      disabled={isCreatingAdmin}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowAdminPassword(!showAdminPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]"
+                      tabIndex={-1}
+                    >
+                      {showAdminPassword ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      )}
+                    </button>
+                  </div>
+                </label>
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Confirm Password</span>
+                  <div className="relative">
+                    <input
+                      type={showAdminConfirmPassword ? "text" : "password"}
+                      className={fieldClass + " pr-10"}
+                      placeholder="Re-enter password"
+                      value={newAdminConfirmPassword}
+                      onChange={(event) => setNewAdminConfirmPassword(event.target.value)}
+                      disabled={isCreatingAdmin}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowAdminConfirmPassword(!showAdminConfirmPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]"
+                      tabIndex={-1}
+                    >
+                      {showAdminConfirmPassword ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      )}
+                    </button>
+                  </div>
+                </label>
+
+                <button
+                  type="submit"
                   disabled={isCreatingAdmin}
-                />
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Password</span>
-                <div className="relative">
-                  <input
-                    type={showAdminPassword ? "text" : "password"}
-                    className={fieldClass + " pr-10"}
-                    placeholder="At least 8 characters"
-                    value={newAdminPassword}
-                    onChange={(event) => setNewAdminPassword(event.target.value)}
-                    disabled={isCreatingAdmin}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowAdminPassword(!showAdminPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]"
-                    tabIndex={-1}
-                  >
-                    {showAdminPassword ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    )}
-                  </button>
-                </div>
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a] md:text-sm">Confirm Password</span>
-                <div className="relative">
-                  <input
-                    type={showAdminConfirmPassword ? "text" : "password"}
-                    className={fieldClass + " pr-10"}
-                    placeholder="Re-enter password"
-                    value={newAdminConfirmPassword}
-                    onChange={(event) => setNewAdminConfirmPassword(event.target.value)}
-                    disabled={isCreatingAdmin}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowAdminConfirmPassword(!showAdminConfirmPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2d3d7a] hover:text-[#0f33a8]"
-                    tabIndex={-1}
-                  >
-                    {showAdminConfirmPassword ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    )}
-                  </button>
-                </div>
-              </label>
-
-              <button
-                type="submit"
-                disabled={isCreatingAdmin}
-                className="rounded-lg bg-[#0f33a8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60 md:text-base"
-              >
-                {isCreatingAdmin ? "Creating..." : "Create Admin"}
-              </button>
-
-              {adminMessage ? (
-                <p
-                  className={`text-sm font-semibold ${
-                    adminMessageKind === "error" ? "text-[#9a1f1f]" : "text-[#1f5132]"
-                  }`}
+                  className="rounded-lg bg-[#0f33a8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60 md:text-base"
                 >
-                  {adminMessage}
-                </p>
-              ) : null}
-            </form>
+                  {isCreatingAdmin ? "Creating..." : "Create Admin"}
+                </button>
+
+                {adminMessage ? (
+                  <p className={`text-sm font-semibold ${adminMessageKind === "error" ? "text-[#9a1f1f]" : "text-[#1f5132]"}`}>
+                    {adminMessage}
+                  </p>
+                ) : null}
+              </form>
+            </div>
           </section>
         ) : isCreateTab ? (
           <section className="rounded-2xl border border-[#d7bf92] bg-white p-4 shadow-[0_16px_30px_rgba(80,60,20,0.08)] md:p-6">
