@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 from math import ceil
 
 from ortools.sat.python import cp_model
@@ -19,6 +19,7 @@ from .cp_sat_helpers import (
 )
 from .models import (
     PresentationInput,
+    ScheduledPresentation,
     ScheduleProblem,
     ScheduleResult,
 )
@@ -126,6 +127,13 @@ def solve_schedule(
     unschedulable: list[str] = []
     diagnostics: list[str] = []
 
+    # Compute base_time up front so _eligible_starts can align candidates to
+    # the slot grid the model uses internally. (Previously base_time was
+    # computed later, and `int((t - base_time) / step)` truncated non-aligned
+    # candidates downward, silently shifting them before their resource
+    # window opens.)
+    base_time_for_align = min(window.start for window in symposium_windows)
+
     for presentation in problem.presentations:
         if presentation.duration_minutes < 1:
             return ScheduleResult(
@@ -140,6 +148,7 @@ def solve_schedule(
             symposium_windows=symposium_windows,
             resource_windows=resource_windows,
             slot_minutes=problem.slot_minutes,
+            base_time=base_time_for_align,
         )
         eligible_starts[presentation.id] = starts
         if not starts:

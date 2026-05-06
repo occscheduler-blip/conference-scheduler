@@ -65,8 +65,17 @@ def _eligible_starts(
     symposium_windows: tuple[AvailabilityWindow, ...],
     resource_windows: dict[str, tuple[AvailabilityWindow, ...]],
     slot_minutes: int,
+    base_time: datetime | None = None,
 ) -> tuple[datetime, ...]:
-    """Find all hard-window-valid start times for one presentation."""
+    """Find all hard-window-valid start times for one presentation.
+
+    Candidates are aligned to the ``base_time + N × slot_minutes`` grid that
+    the solver uses internally. If ``base_time`` is omitted we fall back to
+    each window's own start (matches earlier behaviour); pass it explicitly
+    when the model converts datetimes back to slot indices via
+    ``(t - base_time) / step`` so slot truncation can never silently shift
+    a candidate before the window opens.
+    """
     starts: list[datetime] = []
     duration = timedelta(minutes=presentation.duration_minutes)
     step = timedelta(minutes=slot_minutes)
@@ -74,7 +83,12 @@ def _eligible_starts(
     # Walk each symposium window at the chosen slot granularity. A candidate is
     # allowed only when every hard-constrained resource is also available.
     for window in symposium_windows:
-        candidate = window.start
+        if base_time is not None:
+            offset_min = (window.start - base_time).total_seconds() / 60.0
+            slot_idx = max(0, ceil(offset_min / slot_minutes))
+            candidate = base_time + timedelta(minutes=slot_idx * slot_minutes)
+        else:
+            candidate = window.start
         while candidate + duration <= window.end:
             end = candidate + duration
             if all(
