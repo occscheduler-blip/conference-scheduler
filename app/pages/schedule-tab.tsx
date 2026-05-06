@@ -77,6 +77,7 @@ export default function ScheduleTab({
   const [editStartTime, setEditStartTime] = useState("");
   const isSavingAssignment = false; // kept for disabled prop; modal save is now synchronous
   const [assignmentMessage, setAssignmentMessage] = useState<string | null>(null);
+  const [hasBlockedConflict, setHasBlockedConflict] = useState(false);
 
   // Person name lookup for conflict messages
   const [personNames, setPersonNames] = useState<Map<string, string>>(new Map());
@@ -626,6 +627,7 @@ export default function ScheduleTab({
       }
     }
     setAssignmentMessage(null);
+    setHasBlockedConflict(false);
   };
 
   // Drag-and-drop
@@ -687,15 +689,21 @@ export default function ScheduleTab({
       onDrop: handleDrop,
       onDropUnscheduled: handleDropUnscheduled,
       onClickBlock: handleOpenEditModal,
-      onDropBlocked: (message) => {
-        void alertDialog(message, "Cannot move presentation");
+      onDropBlocked: async (message, presentationId, room, startTime, endTime) => {
+        const override = await confirmDialog(
+          `${message}\n\nOverride this conflict and place the presentation anyway?`,
+          "Conflict detected — override?"
+        );
+        if (override) {
+          handleDrop(presentationId, room, startTime, endTime);
+        }
       },
       onDropWarning: (message) => {
         void alertDialog(message, "Scheduling warning");
       },
     });
 
-  const handleSaveAssignment = () => {
+  const handleSaveAssignment = (override = false) => {
     if (!editingPresentation || !selectedSymposiumId) return;
     if (!editStartTime) {
       setAssignmentMessage("Please select a start time.");
@@ -714,11 +722,13 @@ export default function ScheduleTab({
     const endISO = toBackendDateTime(endDate);
 
     const conflict = detectScheduleConflict(editingPresentation, room, startDate, conflictContext);
-    if (conflict?.blocked) {
+    if (conflict?.blocked && !override) {
       setAssignmentMessage(conflict.message);
+      setHasBlockedConflict(true);
       return;
     }
-    if (conflict) {
+    setHasBlockedConflict(false);
+    if (conflict && !override) {
       setAssignmentMessage(`Warning: ${conflict.message}`);
     }
 
@@ -1378,7 +1388,7 @@ export default function ScheduleTab({
                 </label>
                 <select
                   value={editRoom}
-                  onChange={(e) => setEditRoom(e.target.value)}
+                  onChange={(e) => { setEditRoom(e.target.value); setHasBlockedConflict(false); setAssignmentMessage(null); }}
                   className={fieldClass + " mt-1"}
                 >
                   {Array.from({ length: roomsAvailable }, (_, i) => (
@@ -1397,7 +1407,7 @@ export default function ScheduleTab({
                 <input
                   type="datetime-local"
                   value={editStartTime}
-                  onChange={(e) => setEditStartTime(e.target.value)}
+                  onChange={(e) => { setEditStartTime(e.target.value); setHasBlockedConflict(false); setAssignmentMessage(null); }}
                   step={geometry.slotMinutes * 60}
                   className={fieldClass + " mt-1"}
                 />
@@ -1416,15 +1426,24 @@ export default function ScheduleTab({
               ) : null}
 
               {/* Actions */}
-              <div className="flex gap-3 pt-1">
+              <div className="flex flex-wrap gap-3 pt-1">
                 <button
                   type="button"
-                  onClick={handleSaveAssignment}
+                  onClick={() => handleSaveAssignment()}
                   disabled={isSavingAssignment}
                   className="rounded-lg bg-[#0f33a8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1237af] disabled:opacity-50"
                 >
                   Apply
                 </button>
+                {hasBlockedConflict && (
+                  <button
+                    type="button"
+                    onClick={() => handleSaveAssignment(true)}
+                    className="rounded-lg bg-[#9a1f1f] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#b52424]"
+                  >
+                    Override & Place Anyway
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setEditingPresentation(null)}
