@@ -15,6 +15,7 @@ type AuthState = {
   token: string;
   role: string;
   entityId: string;
+  isSuperAdmin: boolean;
 };
 
 const ROLE_VIEW: Record<string, string> = {
@@ -52,6 +53,7 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
         token: (raw.access_token as string) ?? "",
         role: (raw.role as string) ?? "admin",
         entityId: (raw.entity_id as string) ?? "",
+        isSuperAdmin: Boolean(raw.is_superadmin),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reach the server.");
@@ -86,7 +88,7 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
         token: (raw.access_token as string) ?? "",
         role: (raw.role as string) ?? otpRole,
         entityId: (raw.entity_id as string) ?? "",
-
+        isSuperAdmin: false,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reach the server.");
@@ -262,7 +264,7 @@ function PagesRouterContent() {
 
   // Authenticated — render the page matching the user's role
   const roleView = ROLE_VIEW[auth.role] ?? "home";
-  if (roleView === "admin") return <AdminPage token={auth.token} onSignOut={handleSignOut} />;
+  if (roleView === "admin") return <AdminPage token={auth.token} onSignOut={handleSignOut} isSuperAdmin={auth.isSuperAdmin} entityId={auth.entityId} />;
   if (roleView === "department-head") return <DepartmentHeadPage token={auth.token} onSignOut={handleSignOut} entityId={auth.entityId} />;
   if (roleView === "professor") return <ProfessorPage token={auth.token} onSignOut={handleSignOut} entityId={auth.entityId} />;
   if (roleView === "student") return <StudentPage token={auth.token} onSignOut={handleSignOut} entityId={auth.entityId} />;
