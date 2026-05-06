@@ -14,6 +14,7 @@ import {
   timeLabel,
   normalizeId,
   detectScheduleConflict,
+  computeAllViolations,
   DEFAULT_CONSTRAINTS,
   type ScheduleConstraints,
   type ConflictContext,
@@ -388,6 +389,11 @@ export default function ScheduleTab({
     professorIds: allProfessorIds,
     slotMinutes: 1,
   }), [presentations, personNames, roomNames, constraints, symposiumTimeframes, resourceAvailability, allProfessorIds]);
+
+  // Live list of constraint violations across the current draft schedule.
+  // Recomputes whenever the schedule, constraints, or availability changes —
+  // covers scheduler runs, drag-drops, bulk saves, and constraint toggles.
+  const scheduleViolations = useMemo(() => computeAllViolations(conflictContext), [conflictContext]);
 
   // Handlers
   const handleRunScheduler = async (skipConfirm: boolean = false, debugMode: boolean = false) => {
@@ -1340,6 +1346,57 @@ export default function ScheduleTab({
         );
       })() : null}
 
+
+      {/* Constraint violations panel — live-updates as the schedule changes. */}
+      {!isLoadingSchedule && selectedSymposiumId && presentations.length > 0 ? (
+        <div className="rounded-lg border border-[#d8e2ff] bg-white">
+          <div className="flex items-center justify-between border-b border-[#d8e2ff] bg-[#f0f4ff] px-4 py-2">
+            <div className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+              Constraint violations
+            </div>
+            <div className="text-xs text-[#555]">
+              {scheduleViolations.length === 0 ? (
+                <span className="font-semibold text-[#1a7f1a]">All constraints satisfied</span>
+              ) : (
+                <>
+                  <span className="font-semibold text-[#9a1f1f]">
+                    {scheduleViolations.filter((v) => v.severity === "hard").length} hard
+                  </span>
+                  <span className="mx-2 text-[#aaa]">·</span>
+                  <span className="font-semibold text-[#856404]">
+                    {scheduleViolations.filter((v) => v.severity === "soft").length} soft
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+          {scheduleViolations.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-[#555]">
+              The current schedule does not violate any of the configured constraints.
+            </p>
+          ) : (
+            <ul className="max-h-64 divide-y divide-[#eee] overflow-y-auto">
+              {scheduleViolations.map((v, i) => (
+                <li
+                  key={i}
+                  className="flex items-start gap-3 px-4 py-2 text-sm"
+                >
+                  <span
+                    className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                      v.severity === "hard"
+                        ? "bg-[#fde2e2] text-[#9a1f1f]"
+                        : "bg-[#fff3cd] text-[#856404]"
+                    }`}
+                  >
+                    {v.severity}
+                  </span>
+                  <span className="text-[#333]">{v.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
 
       {/* No presentations message */}
       {!isLoadingSchedule && selectedSymposiumId && presentations.length === 0 && !message ? (

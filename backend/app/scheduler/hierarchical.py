@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
+from dataclasses import replace as dc_replace
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from ortools.sat.python import cp_model
@@ -352,7 +353,32 @@ def place_blocks(
 
     sym_windows = _normalize(problem.symposium_windows)
     base_time = min(w.start for w in sym_windows)
-    slot_minutes = max(1, problem.slot_minutes)
+
+    # Adaptive slot coarsening. The CP-SAT model has one boolean per
+    # (block, start_slot, room) — its size scales linearly with 1/slot_minutes.
+    # The UI defaults `slot_alignment` to 1 which creates a ~5× bigger model
+    # than slot=5, and on a 20-block symposium that's the difference between a
+    # 5s solve and a 60s+ timeout. For big problems we coarsen the placement
+    # grid: block starts move to the coarser grid, but presentations *within*
+    # a block still flow contiguously based on their own durations + buffers
+    # (handled in expand_blocks), so the user-visible cost is just that the
+    # first presentation of each class lands on a coarser boundary.
+    user_slot_minutes = max(1, problem.slot_minutes)
+    n_blocks_initial = sum(
+        1 for b in blocks if _enumerate_block_starts(b, base_time, user_slot_minutes)
+    )
+    if n_blocks_initial > 30:
+        slot_minutes = max(user_slot_minutes, 10)
+    elif n_blocks_initial > 15:
+        slot_minutes = max(user_slot_minutes, 5)
+    else:
+        slot_minutes = user_slot_minutes
+    if slot_minutes != user_slot_minutes:
+        logger.info(
+            "place_blocks: %d blocks — coarsening slot grid from %d to %d minutes for tractability",
+            n_blocks_initial, user_slot_minutes, slot_minutes,
+        )
+
     horizon_slots = max(
         int((w.end - base_time).total_seconds() / 60 / slot_minutes) for w in sym_windows
     )
@@ -369,6 +395,33 @@ def place_blocks(
 
     if not schedulable:
         return [], list(blocks), "infeasible"
+
+    # Above this many blocks, soft span/balance objectives push CP-SAT from
+    # ~10s into >2 minutes — they each add per-group IntVars and an
+    # AddMin/MaxEquality with N inputs, and the resulting multi-term
+    # objective is much harder than a plain makespan minimisation. Downgrade
+    # them to "off" only for big problems and only when the user left them at
+    # the default "soft"; "hard" and explicit "off" are honored as-is.
+    _LARGE_BLOCK_THRESHOLD = 20
+    if len(schedulable) > _LARGE_BLOCK_THRESHOLD:
+        downgraded: list[str] = []
+        if constraints.minimize_department_span == "soft":
+            constraints = dc_replace(constraints, minimize_department_span="off")
+            downgraded.append("minimize_department_span")
+        if constraints.minimize_class_span == "soft":
+            constraints = dc_replace(constraints, minimize_class_span="off")
+            downgraded.append("minimize_class_span")
+        if constraints.minimize_professor_span == "soft":
+            constraints = dc_replace(constraints, minimize_professor_span="off")
+            downgraded.append("minimize_professor_span")
+        if constraints.balance_rooms == "soft":
+            constraints = dc_replace(constraints, balance_rooms="off")
+            downgraded.append("balance_rooms")
+        if downgraded:
+            logger.info(
+                "place_blocks: %d blocks > threshold %d — disabling soft objectives: %s",
+                len(schedulable), _LARGE_BLOCK_THRESHOLD, ", ".join(downgraded),
+            )
 
     rooms = problem.rooms_available
 
@@ -418,40 +471,58 @@ def place_blocks(
         is_scheduled[block.id] = sched
         model.Add(sum(per_block_vars) == sched)
 
-    # Per-block start_slot, end_slot, plus sentinel "effective" copies that
-    # collapse to safe bounds when the block is unscheduled. Used by every
-    # span minimisation term below; the sentinel pattern matches cp_sat.py so
-    # AddMin/MaxEquality stay correct in mixed-scheduled cases.
-    start_slot_var: dict[str, cp_model.IntVar] = {}
+    # Per-block end_slot — always built, used by makespan. Sums to 0 when the
+    # block is unscheduled (no assign var chosen), which is fine for makespan
+    # because max(0, scheduled_ends) = max(scheduled_ends).
     end_slot_var: dict[str, cp_model.IntVar] = {}
-    eff_start_for_min: dict[str, cp_model.IntVar] = {}
-    eff_end_for_max: dict[str, cp_model.IntVar] = {}
     for block in schedulable:
         max_start = max(block_starts[block.id])
         dur = block_duration_slots[block.id]
-        ss = model.NewIntVar(0, max_start, f"ss_{block.id[:8]}")
         es = model.NewIntVar(0, max_start + dur, f"es_{block.id[:8]}")
-        start_slot_var[block.id] = ss
-        end_slot_var[block.id] = es
-        # ss = sum(s × assign[(b,s,r)] for s,r); zero when unscheduled.
         model.Add(
-            ss
+            es
             == sum(
-                s * assign[(block.id, s, r)]
+                (s + dur) * assign[(block.id, s, r)]
                 for s in block_starts[block.id]
                 for r in range(rooms)
             )
         )
-        model.Add(es == ss + dur)
+        end_slot_var[block.id] = es
 
-        eff_smin = model.NewIntVar(0, horizon_slots, f"esm_{block.id[:8]}")
-        model.Add(eff_smin == ss + horizon_slots - horizon_slots * is_scheduled[block.id])
-        eff_start_for_min[block.id] = eff_smin
+    # Sentinel-aware "effective" start/end vars are needed only by department /
+    # class / professor span minimisation, which uses AddMin/MaxEquality and
+    # therefore must ignore unscheduled blocks. Skip them entirely otherwise —
+    # each block adds 2 IntVars + 3 channeling constraints, plus an
+    # `ss = Σ s × assign[...]` summation that's the heaviest single constraint
+    # in the model.
+    spans_active = (
+        constraints.minimize_department_span != "off"
+        or constraints.minimize_class_span != "off"
+        or constraints.minimize_professor_span != "off"
+    )
+    eff_start_for_min: dict[str, cp_model.IntVar] = {}
+    eff_end_for_max: dict[str, cp_model.IntVar] = {}
+    if spans_active:
+        for block in schedulable:
+            max_start = max(block_starts[block.id])
+            ss = model.NewIntVar(0, max_start, f"ss_{block.id[:8]}")
+            model.Add(
+                ss
+                == sum(
+                    s * assign[(block.id, s, r)]
+                    for s in block_starts[block.id]
+                    for r in range(rooms)
+                )
+            )
+            eff_smin = model.NewIntVar(0, horizon_slots, f"esm_{block.id[:8]}")
+            model.Add(eff_smin == ss + horizon_slots - horizon_slots * is_scheduled[block.id])
+            eff_start_for_min[block.id] = eff_smin
 
-        eff_emax = model.NewIntVar(0, horizon_slots, f"eem_{block.id[:8]}")
-        model.Add(eff_emax <= es)
-        model.Add(eff_emax >= es - horizon_slots + horizon_slots * is_scheduled[block.id])
-        eff_end_for_max[block.id] = eff_emax
+            eff_emax = model.NewIntVar(0, horizon_slots, f"eem_{block.id[:8]}")
+            es = end_slot_var[block.id]
+            model.Add(eff_emax <= es)
+            model.Add(eff_emax >= es - horizon_slots + horizon_slots * is_scheduled[block.id])
+            eff_end_for_max[block.id] = eff_emax
 
     # ── Hard / soft constraints (room, person, same-class-same-room) ────────
     soft_violation_terms: list[cp_model.IntVar] = []
@@ -701,7 +772,7 @@ def place_blocks(
 
     # ── Makespan ────────────────────────────────────────────────────────────
     makespan = model.NewIntVar(0, horizon_slots, "makespan")
-    model.AddMaxEquality(makespan, list(eff_end_for_max.values()))
+    model.AddMaxEquality(makespan, list(end_slot_var.values()))
     makespan_for_obj: cp_model.IntVar | cp_model.LinearExpr = (
         makespan if constraints.minimize_makespan == "soft" else model.NewConstant(0)
     )

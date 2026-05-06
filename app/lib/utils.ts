@@ -363,6 +363,173 @@ export function detectScheduleConflict(
   return null;
 }
 
+export type Violation = {
+  severity: "hard" | "soft";
+  message: string;
+};
+
+/**
+ * Sweep the current schedule and return every constraint violation, respecting
+ * the user's hard/soft/off mode for each constraint. Unscheduled presentations
+ * are skipped. Pairwise conflicts (room/person) are emitted once per pair.
+ */
+export function computeAllViolations(ctx: ConflictContext): Violation[] {
+  const { allPresentations, personNames, constraints, professorIds } = ctx;
+
+  const violations: Violation[] = [];
+  const seen = new Set<string>();
+  function push(severity: "hard" | "soft" | "off", message: string) {
+    if (severity === "off") return;
+    const key = `${severity}::${message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    violations.push({ severity, message });
+  }
+
+  function roomLabel(roomIndex: number): string {
+    const roomName = ctx.roomNames?.[roomIndex];
+    return typeof roomName === "string" && roomName.trim() ? roomName.trim() : `Room ${roomIndex + 1}`;
+  }
+
+  const scheduled = allPresentations
+    .filter((p) => p.room !== null && p.timeframe)
+    .map((p) => {
+      const start = parseBackendDateTime(p.timeframe!.start_time).getTime();
+      const end = parseBackendDateTime(p.timeframe!.end_time).getTime();
+      const bufferedEnd = end + p.buffer * 60 * 1000;
+      return { p, start, end, bufferedEnd };
+    });
+
+  // Single-presentation checks
+  for (const { p, start, end } of scheduled) {
+    const startDate = new Date(start);
+
+    // Slot alignment
+    if (constraints.slotAlignment > 1) {
+      const m = startDate.getUTCHours() * 60 + startDate.getUTCMinutes();
+      if (m % constraints.slotAlignment !== 0) {
+        push("hard", `"${p.title}" does not align to ${constraints.slotAlignment}-minute intervals.`);
+      }
+    }
+
+    // Symposium window
+    if (constraints.symposiumWindows !== "off" && ctx.symposiumTimeframes.length > 0) {
+      const day = dayKey(startDate);
+      const dayTfs = ctx.symposiumTimeframes.filter(
+        (tf) => dayKey(parseBackendDateTime(tf.start_time)) === day,
+      );
+      const within = dayTfs.some((tf) => {
+        const s = parseBackendDateTime(tf.start_time).getTime();
+        const e = parseBackendDateTime(tf.end_time).getTime();
+        return start >= s && end <= e;
+      });
+      if (!within) {
+        push(constraints.symposiumWindows, `"${p.title}" falls outside symposium hours.`);
+      }
+    }
+
+    // Professor availability
+    if (constraints.professorAvailability !== "off") {
+      for (const rid of p.resourceIds) {
+        if (!professorIds.has(rid)) continue;
+        const avail = ctx.resourceAvailability.get(rid);
+        if (!avail || avail.length === 0) continue;
+        const within = avail.some((tf) => {
+          const s = parseBackendDateTime(tf.start_time).getTime();
+          const e = parseBackendDateTime(tf.end_time).getTime();
+          return start >= s && end <= e;
+        });
+        if (!within) {
+          const name = personNames.get(rid) ?? "A professor";
+          push(constraints.professorAvailability, `${name} is scheduled outside their availability for "${p.title}".`);
+        }
+      }
+    }
+
+    // Student availability
+    if (constraints.studentAvailability !== "off") {
+      for (const rid of p.resourceIds) {
+        if (professorIds.has(rid)) continue;
+        const avail = ctx.resourceAvailability.get(rid);
+        if (!avail || avail.length === 0) continue;
+        const within = avail.some((tf) => {
+          const s = parseBackendDateTime(tf.start_time).getTime();
+          const e = parseBackendDateTime(tf.end_time).getTime();
+          return start >= s && end <= e;
+        });
+        if (!within) {
+          const name = personNames.get(rid) ?? "A student";
+          push(constraints.studentAvailability, `${name} is scheduled outside their availability for "${p.title}".`);
+        }
+      }
+    }
+  }
+
+  // Pairwise checks (room overlap, person conflict)
+  for (let i = 0; i < scheduled.length; i++) {
+    const a = scheduled[i];
+    const aResources = new Set(a.p.resourceIds);
+    for (let j = i + 1; j < scheduled.length; j++) {
+      const b = scheduled[j];
+      const overlap = a.start < b.bufferedEnd && a.bufferedEnd > b.start;
+      if (!overlap) continue;
+
+      if (constraints.roomConflicts !== "off" && a.p.room === b.p.room && a.p.room !== null) {
+        push(
+          constraints.roomConflicts,
+          `Room conflict: ${roomLabel(a.p.room)} is double-booked by "${a.p.title}" and "${b.p.title}".`,
+        );
+      }
+
+      if (constraints.personConflicts !== "off") {
+        for (const rid of b.p.resourceIds) {
+          if (aResources.has(rid)) {
+            const name = personNames.get(rid) ?? "Someone";
+            push(
+              constraints.personConflicts,
+              `Scheduling conflict: ${name} is required at both "${a.p.title}" and "${b.p.title}".`,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // Same class → same room (one violation per class with split rooms)
+  if (constraints.sameClassSameRoom !== "off") {
+    const roomsByClass = new Map<string, Set<number>>();
+    const titlesByClass = new Map<string, string[]>();
+    for (const { p } of scheduled) {
+      if (p.room === null || !p.class_id) continue;
+      let rooms = roomsByClass.get(p.class_id);
+      if (!rooms) {
+        rooms = new Set();
+        roomsByClass.set(p.class_id, rooms);
+      }
+      rooms.add(p.room);
+      const titles = titlesByClass.get(p.class_id) ?? [];
+      titles.push(p.title);
+      titlesByClass.set(p.class_id, titles);
+    }
+    for (const [cid, rooms] of roomsByClass) {
+      if (rooms.size > 1) {
+        const titles = titlesByClass.get(cid) ?? [];
+        const sample = titles.slice(0, 2).map((t) => `"${t}"`).join(" and ");
+        const more = titles.length > 2 ? ` (+${titles.length - 2} more)` : "";
+        const roomList = Array.from(rooms).sort((x, y) => x - y).map((r) => roomLabel(r)).join(", ");
+        push(
+          constraints.sameClassSameRoom,
+          `Class split across rooms: ${sample}${more} are in ${roomList}.`,
+        );
+      }
+    }
+  }
+
+  // Hard violations first
+  violations.sort((x, y) => (x.severity === y.severity ? 0 : x.severity === "hard" ? -1 : 1));
+  return violations;
+}
+
 export function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
   let current = "";
