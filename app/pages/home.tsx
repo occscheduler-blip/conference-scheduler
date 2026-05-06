@@ -15,6 +15,7 @@ import { apiFetch, BACKEND_URL } from "../lib/api";
 import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 import { buildPresentationColorMap, COLOR_SHADES, rgbToHex, getTextColor } from "../lib/scheduleColors";
 import { ScheduleGrid, getRoomLabel, type GridBlock } from "../lib/ScheduleGrid";
+import { useGridGeometry } from "../lib/useGridGeometry";
 
 type ItineraryDetailItem = {
   presentation_id: string;
@@ -350,21 +351,30 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
     [cards]
   );
 
-  // Calendar view: slot bounds derived from the selected day's symposium timeframes
-  const { calendarMinSlot, calendarMaxSlot } = useMemo(() => {
-    const activeSlots = new Set<number>();
-    for (const tf of visibleRows) {
-      const s = parseBackendDateTime(tf.start_time);
-      const e = parseBackendDateTime(tf.end_time);
-      const startSlot = Math.floor((s.getUTCHours() * 60 + s.getUTCMinutes() - 9 * 60) / 15);
-      const endSlot = Math.ceil((e.getUTCHours() * 60 + e.getUTCMinutes() - 9 * 60) / 15);
-      for (let i = startSlot; i < endSlot; i++) activeSlots.add(i);
-    }
-    return {
-      calendarMinSlot: activeSlots.size > 0 ? Math.min(...activeSlots) : 0,
-      calendarMaxSlot: activeSlots.size > 0 ? Math.max(...activeSlots) + 1 : 36,
-    };
-  }, [visibleRows]);
+  // Calendar view: grid dimensions derived from the selected day's symposium timeframes
+  // and presentation durations/buffers — replaces the old fixed 9 AM / 15-min grid.
+  const calendarPresentationTimeframes = useMemo(
+    () =>
+      presentations
+        .filter((p) => p.timeframe && dayKey(parseBackendDateTime(p.timeframe.start_time)) === selectedDay)
+        .map((p) => p.timeframe)
+        .filter((tf): tf is NonNullable<typeof tf> => tf !== null),
+    [presentations, selectedDay],
+  );
+  const calendarPresentationDurations = useMemo(
+    () => presentations.map((p) => p.minutes).filter((m): m is number => typeof m === "number" && m > 0),
+    [presentations],
+  );
+  const calendarPresentationBuffers = useMemo(
+    () => presentations.map((p) => p.buffer).filter((b): b is number => typeof b === "number" && b > 0),
+    [presentations],
+  );
+  const calendarGeometry = useGridGeometry({
+    timeframes: visibleRows,
+    presentationTimeframes: calendarPresentationTimeframes,
+    presentationDurations: calendarPresentationDurations,
+    presentationBuffers: calendarPresentationBuffers,
+  });
 
   // Calendar view: scheduled cards shaped as GridBlocks
   const calendarBlocks = useMemo<GridBlock[]>(() => {
@@ -641,8 +651,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
               <ScheduleGrid
                 roomsAvailable={roomsAvailable}
                 roomNames={roomNames}
-                minSlot={calendarMinSlot}
-                maxSlot={calendarMaxSlot}
+                geometry={calendarGeometry}
                 blocks={calendarBlocks}
                 onBlockClick={(id) => {
                   const card = filteredCards.find((c) => c.presentationId === id);

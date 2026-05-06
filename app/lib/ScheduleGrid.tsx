@@ -2,7 +2,13 @@
 
 import type { RefObject } from "react";
 import type { Timeframe } from "../pages/types";
-import { formatTimeLabel, parseBackendDateTime } from "./utils";
+import { parseBackendDateTime } from "./utils";
+import {
+  formatMinutesOfDay,
+  slotIsHalfHourBoundary,
+  slotIsHourBoundary,
+  type GridGeometry,
+} from "./useGridGeometry";
 
 export const SLOT_HEIGHT = 24;
 
@@ -34,8 +40,7 @@ export type GridSnapTarget = {
 type Props = {
   roomsAvailable: number;
   roomNames: Array<string | null>;
-  minSlot: number;
-  maxSlot: number;
+  geometry: GridGeometry;
   blocks: GridBlock[];
   gridRef?: RefObject<HTMLDivElement | null>;
   onBlockClick?: (id: string) => void;
@@ -45,11 +50,21 @@ type Props = {
   snapTarget?: GridSnapTarget | null;
 };
 
+function pickLabelStride(geometry: GridGeometry): (slotIndex: number) => boolean {
+  if (geometry.slotMinutes >= 60) return () => true;
+  if (60 % geometry.slotMinutes === 0) {
+    return (slotIndex) => slotIsHourBoundary(geometry, slotIndex);
+  }
+  if (30 % geometry.slotMinutes === 0) {
+    return (slotIndex) => slotIsHalfHourBoundary(geometry, slotIndex);
+  }
+  return (slotIndex) => slotIndex % Math.max(1, Math.round(60 / geometry.slotMinutes)) === 0;
+}
+
 export function ScheduleGrid({
   roomsAvailable,
   roomNames,
-  minSlot,
-  maxSlot,
+  geometry,
   blocks,
   gridRef,
   onBlockClick,
@@ -58,7 +73,8 @@ export function ScheduleGrid({
   isDragging,
   snapTarget,
 }: Props) {
-  const visibleSlotCount = maxSlot - minSlot;
+  const { slotsPerDay, slotMinutes, slotPx, gridStartMinutes } = geometry;
+  const showLabel = pickLabelStride(geometry);
 
   return (
     <div
@@ -66,7 +82,7 @@ export function ScheduleGrid({
       className="grid"
       style={{
         gridTemplateColumns: `72px repeat(${roomsAvailable}, minmax(140px, 1fr))`,
-        gridTemplateRows: `auto repeat(${visibleSlotCount}, ${SLOT_HEIGHT}px)`,
+        gridTemplateRows: `auto repeat(${slotsPerDay}, ${slotPx}px)`,
       }}
     >
       {/* Header row */}
@@ -86,27 +102,32 @@ export function ScheduleGrid({
         </div>
       ))}
 
-      {/* Time slot background cells */}
-      {Array.from({ length: visibleSlotCount }, (_, i) => {
-        const slotIndex = minSlot + i;
-        const showLabel = slotIndex % 2 === 0;
+      {/* Time slot background cells.
+       * The lattice has `slotsPerDay` rows so cards can sit at slot-aligned
+       * positions, but borders only render on 15-minute boundaries (and
+       * hour-boundary rows pick up the legacy gray background) — this keeps
+       * the grid visually identical to the old 15-min look regardless of the
+       * underlying granularity. */}
+      {Array.from({ length: slotsPerDay }, (_, i) => {
+        const minuteAtSlot = gridStartMinutes + i * slotMinutes;
+        const nextMinute = minuteAtSlot + slotMinutes;
+        const onHour = minuteAtSlot % 60 === 0;
+        const showBorder = nextMinute % 15 === 0 || i === slotsPerDay - 1;
         const gridRow = i + 2;
+        const borderClass = showBorder ? "border-b border-[#e5e7eb]" : "";
+        const bgClass = onHour ? "bg-[#f9fafb]" : "bg-white";
         return (
-          <div key={`time-${slotIndex}`} className="contents">
+          <div key={`time-${i}`} className="contents">
             <div
-              className={`flex items-center justify-end border-b border-r border-[#e5e7eb] px-1 text-[11px] leading-none text-[#888] ${
-                slotIndex % 4 === 0 ? "bg-[#f9fafb]" : "bg-white"
-              }`}
+              className={`flex items-center justify-end border-r border-[#e5e7eb] px-1 text-[11px] leading-none text-[#888] ${borderClass} ${bgClass}`}
               style={{ gridRow, gridColumn: 1 }}
             >
-              {showLabel ? formatTimeLabel(slotIndex) : ""}
+              {showLabel(i) ? formatMinutesOfDay(minuteAtSlot) : ""}
             </div>
             {Array.from({ length: roomsAvailable }, (_, roomIdx) => (
               <div
                 key={roomIdx}
-                className={`border-b border-r border-[#e5e7eb] last:border-r-0 ${
-                  slotIndex % 4 === 0 ? "bg-[#f9fafb]" : "bg-white"
-                }`}
+                className={`border-r border-[#e5e7eb] last:border-r-0 ${borderClass} ${bgClass}`}
                 style={{ gridRow, gridColumn: roomIdx + 2 }}
               />
             ))}
@@ -114,25 +135,26 @@ export function ScheduleGrid({
         );
       })}
 
-      {/* Presentation blocks */}
+      {/* Presentation blocks — positioned by minute offset, not slot index */}
       {blocks.map((block) => {
         const start = parseBackendDateTime(block.timeframe.start_time);
         const end = parseBackendDateTime(block.timeframe.end_time);
         const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
         const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
-        const startSlotRaw = (startMinutes - 9 * 60) / 15;
-        const endSlotRaw = (endMinutes - 9 * 60) / 15;
+        const durationMinutes = Math.max(0, endMinutes - startMinutes);
+        const offsetFromGrid = startMinutes - gridStartMinutes;
 
-        const gridRowStart = Math.floor(startSlotRaw - minSlot) + 2;
-        const gridRowEnd = Math.ceil(endSlotRaw - minSlot) + 2;
+        const startRowFloat = offsetFromGrid / slotMinutes;
+        const endRowFloat = (offsetFromGrid + durationMinutes) / slotMinutes;
+        const gridRowStart = Math.floor(startRowFloat) + 2;
+        const gridRowEnd = Math.max(gridRowStart + 1, Math.ceil(endRowFloat) + 2);
         const gridCol = block.roomIndex + 2;
 
-        const fracStart = startSlotRaw - minSlot - Math.floor(startSlotRaw - minSlot);
         const verticalInset = 1;
-        const topOffset = fracStart * SLOT_HEIGHT + verticalInset;
-        const blockHeight = Math.max(8, (endSlotRaw - startSlotRaw) * SLOT_HEIGHT - verticalInset * 2);
-        const durationSlots = endSlotRaw - startSlotRaw;
+        const topOffset = (offsetFromGrid / slotMinutes - Math.floor(startRowFloat)) * slotPx + verticalInset;
+        const blockHeight = Math.max(8, (durationMinutes / slotMinutes) * slotPx - verticalInset * 2);
         const isBeingDragged = draggingId === block.id;
+        const isShortBlock = durationMinutes < slotMinutes * 2;
 
         return (
           <div
@@ -155,12 +177,12 @@ export function ScheduleGrid({
             title={`${block.title}\n${block.presenterNames.join(", ")}`}
           >
             <div className="truncate text-xs font-semibold leading-tight">{block.title}</div>
-            {durationSlots > 1 ? (
+            {!isShortBlock ? (
               <div className="truncate text-[10px] leading-tight opacity-80">
                 {block.presenterNames.join(", ") || "No presenters"}
               </div>
             ) : null}
-            {durationSlots > 2 && block.durationMinutes !== undefined ? (
+            {durationMinutes >= slotMinutes * 3 && block.durationMinutes !== undefined ? (
               <div className="truncate text-[10px] leading-tight opacity-60">
                 {block.durationMinutes} min
               </div>
@@ -169,16 +191,17 @@ export function ScheduleGrid({
         );
       })}
 
-      {/* Snap-target highlight during drag (schedule editor only) */}
+      {/* Snap-target highlight during drag */}
       {snapTarget ? (() => {
         const { room, minuteInDay, durationMinutes, conflict } = snapTarget;
-        const relativeSlot = (minuteInDay - 9 * 60) / 15 - minSlot;
-        const durationSlots = durationMinutes / 15;
-        const gridRowStart = Math.floor(relativeSlot) + 2;
-        const gridRowEnd = Math.ceil(relativeSlot + durationSlots) + 2;
+        const offsetFromGrid = minuteInDay - gridStartMinutes;
+        const startRowFloat = offsetFromGrid / slotMinutes;
+        const endRowFloat = (offsetFromGrid + durationMinutes) / slotMinutes;
+        const gridRowStart = Math.floor(startRowFloat) + 2;
+        const gridRowEnd = Math.max(gridRowStart + 1, Math.ceil(endRowFloat) + 2);
         const gridCol = room + 2;
-        const topOffset = (relativeSlot - Math.floor(relativeSlot)) * SLOT_HEIGHT;
-        const blockHeight = durationSlots * SLOT_HEIGHT;
+        const topOffset = (startRowFloat - Math.floor(startRowFloat)) * slotPx;
+        const blockHeight = (durationMinutes / slotMinutes) * slotPx;
         const isBlocked = conflict?.blocked === true;
         const isWarning = conflict !== null && conflict !== undefined && !conflict.blocked;
 

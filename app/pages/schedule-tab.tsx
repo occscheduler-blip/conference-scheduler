@@ -7,7 +7,6 @@ import type {
   Timeframe,
 } from "./types";
 import {
-  totalSlots,
   parseBackendDateTime,
   toBackendDateTime,
   dayKey,
@@ -19,6 +18,7 @@ import {
   type ScheduleConstraints,
   type ConflictContext,
 } from "../lib/utils";
+import { useGridGeometry } from "../lib/useGridGeometry";
 import { apiFetch, apiGet, apiPost, apiPut, ApiError } from "../lib/api";
 import { confirmDialog, alertDialog } from "../lib/dialog";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
@@ -38,7 +38,7 @@ import {
   getTextColor,
   buildPresentationColorMap,
 } from "../lib/scheduleColors";
-import { ScheduleGrid, getRoomLabel, SLOT_HEIGHT, type GridBlock } from "../lib/ScheduleGrid";
+import { ScheduleGrid, getRoomLabel, type GridBlock } from "../lib/ScheduleGrid";
 
 export default function ScheduleTab({
   token,
@@ -306,26 +306,12 @@ export default function ScheduleTab({
     [symposiumTimeframes]
   );
 
-  // Compute which time slots are active on the selected day (from symposium timeframes)
-  const activeSlots = useMemo(() => {
-    const slots = new Set<number>();
-    for (const tf of symposiumTimeframes) {
-      const start = parseBackendDateTime(tf.start_time);
-      if (dayKey(start) !== selectedDay) continue;
-      const end = parseBackendDateTime(tf.end_time);
-      const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
-      const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
-      const firstSlot = Math.floor((startMinutes - 9 * 60) / 15);
-      const lastSlot = Math.ceil((endMinutes - 9 * 60) / 15);
-      for (let s = firstSlot; s < lastSlot; s++) {
-        if (s >= 0 && s < totalSlots) slots.add(s);
-      }
-    }
-    return slots;
-  }, [symposiumTimeframes, selectedDay]);
-
-  const minSlot = useMemo(() => (activeSlots.size > 0 ? Math.min(...activeSlots) : 0), [activeSlots]);
-  const maxSlot = useMemo(() => (activeSlots.size > 0 ? Math.max(...activeSlots) + 1 : totalSlots), [activeSlots]);
+  // Symposium timeframes filtered to the selected day — drives the grid's vertical extent.
+  const dayTimeframes = useMemo(
+    () => symposiumTimeframes.filter((tf) => dayKey(parseBackendDateTime(tf.start_time)) === selectedDay),
+    [symposiumTimeframes, selectedDay],
+  );
+  const hasActiveDay = dayTimeframes.length > 0;
   // Scheduled presentations for the selected day
   const scheduledForDay = useMemo(() => {
     return presentations.filter((p) => {
@@ -333,6 +319,31 @@ export default function ScheduleTab({
       return dayKey(parseBackendDateTime(p.timeframe.start_time)) === selectedDay;
     });
   }, [presentations, selectedDay]);
+
+  // Per-day grid geometry derived from the symposium's actual timeframes,
+  // presentation durations, and buffers — replaces the old 9 AM / 15-min constants.
+  const dayPresentationTimeframes = useMemo(
+    () =>
+      scheduledForDay
+        .map((p) => p.timeframe)
+        .filter((tf): tf is NonNullable<typeof tf> => tf !== null),
+    [scheduledForDay],
+  );
+  const presentationDurations = useMemo(
+    () => presentations.map((p) => p.minutes).filter((m) => Number.isFinite(m) && m > 0),
+    [presentations],
+  );
+  const presentationBuffers = useMemo(
+    () => presentations.map((p) => p.buffer).filter((b) => Number.isFinite(b) && b > 0),
+    [presentations],
+  );
+  const geometry = useGridGeometry({
+    timeframes: dayTimeframes,
+    presentationTimeframes: dayPresentationTimeframes,
+    presentationDurations,
+    presentationBuffers,
+    defaultBuffer,
+  });
 
   // Unscheduled presentations (no room or no timeframe)
   const unscheduled = useMemo(() => {
@@ -668,8 +679,7 @@ export default function ScheduleTab({
   const { dragState, isDragging, handleBlockPointerDown, handleUnscheduledPointerDown } =
     useScheduleDrag({
       roomsAvailable,
-      minSlot,
-      maxSlot,
+      geometry,
       selectedDay,
       conflictContext,
       gridRef,
@@ -1183,14 +1193,13 @@ export default function ScheduleTab({
       ) : null}
 
       {/* Schedule grid + unscheduled side panel */}
-      {!isLoadingSchedule && selectedDay && selectedDay !== "unscheduled" && activeSlots.size > 0 ? (
+      {!isLoadingSchedule && selectedDay && selectedDay !== "unscheduled" && hasActiveDay ? (
         <div className="flex gap-3">
           <div className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
             <ScheduleGrid
               roomsAvailable={roomsAvailable}
               roomNames={roomNames}
-              minSlot={minSlot}
-              maxSlot={maxSlot}
+              geometry={geometry}
               blocks={gridBlocks}
               gridRef={gridRef}
               onBlockPointerDown={(e, id) => {
@@ -1223,7 +1232,7 @@ export default function ScheduleTab({
                   : "border-dashed border-[#1635a7]"
                 : "border-[#d8e2ff]"
             }`}
-            style={{ height: (maxSlot - minSlot) * SLOT_HEIGHT + 33 }}
+            style={{ height: geometry.totalPx + 33 }}
           >
             <div className="shrink-0 border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
               Unscheduled ({unscheduled.length})
@@ -1273,8 +1282,7 @@ export default function ScheduleTab({
       {isDragging && dragState ? (() => {
         const defaultColor = COLOR_SHADES[0][0];
         const color = colorMap.get(dragState.presentation.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) };
-        const durationSlots = Math.ceil(dragState.presentation.minutes / 15);
-        const blockHeight = durationSlots * SLOT_HEIGHT;
+        const blockHeight = (dragState.presentation.minutes / geometry.slotMinutes) * geometry.slotPx;
         const snap = dragState.snapTarget;
         const timeLabel = snap ? formatMinuteTime(snap.minuteInDay) : null;
         const endMinute = snap ? snap.minuteInDay + dragState.presentation.minutes : null;
@@ -1390,7 +1398,7 @@ export default function ScheduleTab({
                   type="datetime-local"
                   value={editStartTime}
                   onChange={(e) => setEditStartTime(e.target.value)}
-                  step={900}
+                  step={geometry.slotMinutes * 60}
                   className={fieldClass + " mt-1"}
                 />
               </div>
