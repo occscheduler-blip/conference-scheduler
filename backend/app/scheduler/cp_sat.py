@@ -127,6 +127,13 @@ def solve_schedule(
     unschedulable: list[str] = []
     diagnostics: list[str] = []
 
+    # Compute base_time up front so _eligible_starts can align candidates to
+    # the slot grid the model uses internally. (Previously base_time was
+    # computed later, and `int((t - base_time) / step)` truncated non-aligned
+    # candidates downward, silently shifting them before their resource
+    # window opens.)
+    base_time_for_align = min(window.start for window in symposium_windows)
+
     for presentation in problem.presentations:
         if presentation.duration_minutes < 1:
             return ScheduleResult(
@@ -141,6 +148,7 @@ def solve_schedule(
             symposium_windows=symposium_windows,
             resource_windows=resource_windows,
             slot_minutes=problem.slot_minutes,
+            base_time=base_time_for_align,
         )
         eligible_starts[presentation.id] = starts
         if not starts:
@@ -285,6 +293,14 @@ def solve_schedule(
     # Phase 4: build lookup groups used by constraints.
     # These indexes let later sections talk in domain terms: same department,
     # same class, or same person/resource.
+    #
+    # `presentations_by_resource` is keyed by *canonical* identity (typically
+    # email) rather than raw row-id, so a professor cross-listed across two
+    # classes — or a double-major student in two classes — is recognised as
+    # one person. Without this, the no-overlap constraint below would only
+    # forbid each row-id from double-booking *itself*, allowing the same
+    # underlying person to appear in two rooms simultaneously. The hierarchical
+    # solver does the same canonicalisation in `_identity_for`.
     presentations_by_department: dict[str, list[PresentationInput]] = defaultdict(list)
     presentations_by_class: dict[str, list[PresentationInput]] = defaultdict(list)
     presentations_by_resource: dict[str, list[PresentationInput]] = defaultdict(list)
@@ -293,8 +309,12 @@ def solve_schedule(
             presentations_by_department[presentation.department_id].append(presentation)
         if presentation.class_id:
             presentations_by_class[presentation.class_id].append(presentation)
-        for resource_id in presentation.resource_ids:
-            presentations_by_resource[resource_id].append(presentation)
+        canonicals_for_pres = {
+            problem.resource_identity.get(resource_id, resource_id)
+            for resource_id in presentation.resource_ids
+        }
+        for canonical in canonicals_for_pres:
+            presentations_by_resource[canonical].append(presentation)
 
     soft_violation_terms: list[cp_model.IntVar] = []
     _soft_violation_counter = 0
@@ -463,20 +483,26 @@ def solve_schedule(
                     )
 
             if problem.constraints.person_conflicts == "soft":
+                # Canonicalise so two row-ids that map to the same identity
+                # share one penalty group — matches the hard-mode dedup above.
                 resources_at_time: dict[str, list[cp_model.IntVar]] = defaultdict(list)
                 for presentation in schedulable_presentations:
-                    for resource_id in presentation.resource_ids:
+                    canonicals_for_pres = {
+                        problem.resource_identity.get(resource_id, resource_id)
+                        for resource_id in presentation.resource_ids
+                    }
+                    for canonical in canonicals_for_pres:
                         for option_index in range(len(eligible_starts[presentation.id])):
                             for room_index in range(problem.rooms_available):
                                 key = (presentation.id, option_index, room_index)
                                 start_time, end_time = option_lookup[key]
                                 if start_time <= instant < end_time:
-                                    resources_at_time[resource_id].append(
+                                    resources_at_time[canonical].append(
                                         assignment_vars[key]
                                     )
-                for resource_id, overlapping_res in resources_at_time.items():
+                for canonical, overlapping_res in resources_at_time.items():
                     _add_soft_at_most_one_penalty(
-                        overlapping_res, f"person_{resource_id}_{instant}"
+                        overlapping_res, f"person_{canonical}_{instant}"
                     )
 
     logger.info("[solve-timing] conflict constraints: %.3fs", time.perf_counter() - t_slow)
@@ -560,18 +586,25 @@ def solve_schedule(
 
     professor_span_terms: list[cp_model.IntVar] = []
     if problem.constraints.minimize_professor_span != "off":
+        # Iterate canonical identities so a cross-listed professor isn't
+        # double-counted (presentations_by_resource is canonical-keyed).
+        seen_prof_canonicals: set[str] = set()
         for resource_id in problem.professor_resource_ids:
-            resource_presentations = presentations_by_resource.get(resource_id, [])
+            canonical = problem.resource_identity.get(resource_id, resource_id)
+            if canonical in seen_prof_canonicals:
+                continue
+            seen_prof_canonicals.add(canonical)
+            resource_presentations = presentations_by_resource.get(canonical, [])
             if len(resource_presentations) < 2:
                 continue
             professor_start = model.NewIntVar(
-                0, horizon_slots, f"professor_start_{resource_id}"
+                0, horizon_slots, f"professor_start_{canonical}"
             )
             professor_end = model.NewIntVar(
-                0, horizon_slots, f"professor_end_{resource_id}"
+                0, horizon_slots, f"professor_end_{canonical}"
             )
             professor_span = model.NewIntVar(
-                0, horizon_slots, f"professor_span_{resource_id}"
+                0, horizon_slots, f"professor_span_{canonical}"
             )
             model.AddMinEquality(
                 professor_start,

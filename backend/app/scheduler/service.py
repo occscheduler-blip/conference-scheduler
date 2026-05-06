@@ -135,12 +135,19 @@ def build_problem_from_symposium(
     person_ids: set[str] = set()
     professor_ids: set[str] = set()
     student_ids: set[str] = set()
+    resource_identity: dict[str, str] = {}
+    resource_name: dict[str, str] = {}
     for professor in professors:
         professor_id = str(professor["id"])
         class_id = str(professor["class_id"])
         professors_by_class[class_id].append(professor_id)
         person_ids.add(professor_id)
         professor_ids.add(professor_id)
+        email = str(professor.get("email") or "").strip().lower()
+        resource_identity[professor_id] = email or professor_id
+        name = str(professor.get("name") or "").strip()
+        if name:
+            resource_name[professor_id] = name
 
     scheduler_presentations: list[PresentationInput] = []
     for presentation in presentations:
@@ -155,6 +162,12 @@ def build_problem_from_symposium(
             resource_ids.append(student_id)
             person_ids.add(student_id)
             student_ids.add(student_id)
+            student_email = str(student.get("email") or "").strip().lower()
+            if student_id not in resource_identity:
+                resource_identity[student_id] = student_email or student_id
+            student_name = str(student.get("name") or "").strip()
+            if student_name and student_id not in resource_name:
+                resource_name[student_id] = student_name
 
         scheduler_presentations.append(
             PresentationInput(
@@ -220,6 +233,8 @@ def build_problem_from_symposium(
         resource_windows=resource_windows,
         soft_resource_windows=soft_resource_windows,
         professor_resource_ids=tuple(sorted(professor_ids)),
+        resource_identity=resource_identity,
+        resource_name=resource_name,
         slot_minutes=slot_minutes,
         constraints=constraints,
     )
@@ -267,6 +282,24 @@ def _save_assignments(
     logger.info("Draft schedule assignments saved successfully")
 
 
+_HIERARCHICAL_PRESENTATION_THRESHOLD = 100
+_HIERARCHICAL_CLASS_THRESHOLD = 15
+
+
+def _should_use_hierarchical(problem: ScheduleProblem) -> bool:
+    """Heuristic: dispatch to the hierarchical solver for symposia where the flat
+    CP-SAT model would either build too slowly or solve too slowly. Conservative
+    thresholds — small symposia continue using the existing flat solver so the
+    behavior the test suite locks in stays unchanged.
+    """
+    if len(problem.presentations) > _HIERARCHICAL_PRESENTATION_THRESHOLD:
+        return True
+    classes = {p.class_id for p in problem.presentations if p.class_id}
+    if len(classes) > _HIERARCHICAL_CLASS_THRESHOLD:
+        return True
+    return False
+
+
 def build_schedule_for_symposium(
     symposium_id: str | UUID,
     slot_minutes: int = 5,
@@ -282,7 +315,35 @@ def build_schedule_for_symposium(
         slot_minutes=slot_minutes,
         constraints=constraints,
     )
-    result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
+
+    from app.scheduler.hierarchical import solve_hierarchical, verify_assignments
+
+    if _should_use_hierarchical(problem):
+        logger.info(
+            "Dispatching to hierarchical scheduler: presentations=%d  classes=%d",
+            len(problem.presentations),
+            len({p.class_id for p in problem.presentations if p.class_id}),
+        )
+        result = solve_hierarchical(problem, time_limit_seconds=time_limit_seconds)
+    else:
+        result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
+        # Run the cross-block verification sweep on the flat solver's output too.
+        # Catches double-major / cross-listed-faculty conflicts that the flat
+        # solver doesn't model (it groups by row-id, not by email-identity).
+        if result.status in ("optimal", "feasible") and result.assignments:
+            sweep_issues = verify_assignments(result.assignments, problem)
+            if sweep_issues:
+                logger.error(
+                    "Flat solver produced a schedule that failed verification (%d issues)",
+                    len(sweep_issues),
+                )
+                result = ScheduleResult(
+                    status="invalid",
+                    assignments=(),
+                    unscheduled_presentations=tuple(p.id for p in problem.presentations),
+                    diagnostics=tuple(sweep_issues) + result.diagnostics,
+                    suggestions=result.suggestions,
+                )
     if result.status in ("optimal", "feasible") and not _assignments_within_symposium_windows(problem, result):
         logger.error("Scheduler returned an assignment outside the symposium windows: symposium_id=%s", symposium_id)
         return ScheduleResult(

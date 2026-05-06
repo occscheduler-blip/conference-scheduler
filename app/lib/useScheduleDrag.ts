@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SchedulePresentation } from "../pages/types";
 import { type ConflictContext, type ConflictResult, detectScheduleConflict } from "./utils";
+import type { GridGeometry } from "./useGridGeometry";
 
 const DRAG_THRESHOLD = 5; // px — movement before we treat pointerdown as a drag
-const SLOT_HEIGHT = 24;
 const TIME_COL_WIDTH = 72;
 
 export type SnapTarget = {
@@ -44,8 +44,7 @@ type PendingDrag = {
 
 type UseScheduleDragConfig = {
   roomsAvailable: number;
-  minSlot: number;
-  maxSlot: number;
+  geometry: GridGeometry;
   selectedDay: string;
   conflictContext: ConflictContext;
   gridRef: React.RefObject<HTMLDivElement | null>;
@@ -62,8 +61,7 @@ function viewportToGridPosition(
   clientY: number,
   gridElement: HTMLDivElement,
   roomsAvailable: number,
-  minSlot: number,
-  maxSlot: number,
+  geometry: GridGeometry,
 ): { room: number; minuteInDay: number } | null {
   const rect = gridElement.getBoundingClientRect();
   const scrollLeft = gridElement.parentElement?.scrollLeft ?? 0;
@@ -86,11 +84,9 @@ function viewportToGridPosition(
   const room = Math.floor((x - TIME_COL_WIDTH) / roomWidth);
   if (room < 0 || room >= roomsAvailable) return null;
 
-  const slotFloat = (y - headerHeight) / SLOT_HEIGHT;
-  const minuteInDay = Math.round(9 * 60 + (slotFloat + minSlot) * 15);
-  const minMinute = 9 * 60 + minSlot * 15;
-  const maxMinute = 9 * 60 + maxSlot * 15;
-  if (minuteInDay < minMinute || minuteInDay >= maxMinute) return null;
+  const slotFloat = (y - headerHeight) / geometry.slotPx;
+  const minuteInDay = Math.round(geometry.gridStartMinutes + slotFloat * geometry.slotMinutes);
+  if (minuteInDay < geometry.gridStartMinutes || minuteInDay >= geometry.gridEndMinutes) return null;
 
   return { room, minuteInDay };
 }
@@ -165,7 +161,7 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
 
       setDragState((prev) => {
         if (!prev) return prev;
-        const { roomsAvailable: rooms, minSlot: min, maxSlot: max, selectedDay: day, conflictContext, gridRef: gRef, unscheduledPanelRef: uRef } = configRef.current;
+        const { roomsAvailable: rooms, geometry: geom, selectedDay: day, conflictContext, gridRef: gRef, unscheduledPanelRef: uRef } = configRef.current;
         const grid = gRef.current;
         let snapTarget: SnapTarget | null = null;
         let conflict: ConflictResult | null = null;
@@ -179,7 +175,7 @@ export function useScheduleDrag(config: UseScheduleDragConfig) {
         }
 
         if (grid && !overUnscheduled) {
-          const pos = viewportToGridPosition(e.clientX, e.clientY, grid, rooms, min, max);
+          const pos = viewportToGridPosition(e.clientX, e.clientY, grid, rooms, geom);
           if (pos) {
             const startTime = minuteToDate(day, pos.minuteInDay);
             snapTarget = { room: pos.room, minuteInDay: pos.minuteInDay, startTime };

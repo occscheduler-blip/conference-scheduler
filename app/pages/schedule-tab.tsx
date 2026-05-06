@@ -7,7 +7,6 @@ import type {
   Timeframe,
 } from "./types";
 import {
-  totalSlots,
   parseBackendDateTime,
   toBackendDateTime,
   dayKey,
@@ -15,10 +14,12 @@ import {
   timeLabel,
   normalizeId,
   detectScheduleConflict,
+  computeAllViolations,
   DEFAULT_CONSTRAINTS,
   type ScheduleConstraints,
   type ConflictContext,
 } from "../lib/utils";
+import { useGridGeometry } from "../lib/useGridGeometry";
 import { apiFetch, apiGet, apiPost, apiPut, ApiError } from "../lib/api";
 import { confirmDialog, alertDialog } from "../lib/dialog";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
@@ -45,7 +46,7 @@ import {
   getTextColor,
   buildPresentationColorMap,
 } from "../lib/scheduleColors";
-import { ScheduleGrid, getRoomLabel, SLOT_HEIGHT, type GridBlock } from "../lib/ScheduleGrid";
+import { ScheduleGrid, getRoomLabel, type GridBlock } from "../lib/ScheduleGrid";
 
 export default function ScheduleTab({
   token,
@@ -314,26 +315,12 @@ export default function ScheduleTab({
     [symposiumTimeframes]
   );
 
-  // Compute which time slots are active on the selected day (from symposium timeframes)
-  const activeSlots = useMemo(() => {
-    const slots = new Set<number>();
-    for (const tf of symposiumTimeframes) {
-      const start = parseBackendDateTime(tf.start_time);
-      if (dayKey(start) !== selectedDay) continue;
-      const end = parseBackendDateTime(tf.end_time);
-      const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
-      const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
-      const firstSlot = Math.floor((startMinutes - 9 * 60) / 15);
-      const lastSlot = Math.ceil((endMinutes - 9 * 60) / 15);
-      for (let s = firstSlot; s < lastSlot; s++) {
-        if (s >= 0 && s < totalSlots) slots.add(s);
-      }
-    }
-    return slots;
-  }, [symposiumTimeframes, selectedDay]);
-
-  const minSlot = useMemo(() => (activeSlots.size > 0 ? Math.min(...activeSlots) : 0), [activeSlots]);
-  const maxSlot = useMemo(() => (activeSlots.size > 0 ? Math.max(...activeSlots) + 1 : totalSlots), [activeSlots]);
+  // Symposium timeframes filtered to the selected day — drives the grid's vertical extent.
+  const dayTimeframes = useMemo(
+    () => symposiumTimeframes.filter((tf) => dayKey(parseBackendDateTime(tf.start_time)) === selectedDay),
+    [symposiumTimeframes, selectedDay],
+  );
+  const hasActiveDay = dayTimeframes.length > 0;
   // Scheduled presentations for the selected day
   const scheduledForDay = useMemo(() => {
     return presentations.filter((p) => {
@@ -341,6 +328,31 @@ export default function ScheduleTab({
       return dayKey(parseBackendDateTime(p.timeframe.start_time)) === selectedDay;
     });
   }, [presentations, selectedDay]);
+
+  // Per-day grid geometry derived from the symposium's actual timeframes,
+  // presentation durations, and buffers — replaces the old 9 AM / 15-min constants.
+  const dayPresentationTimeframes = useMemo(
+    () =>
+      scheduledForDay
+        .map((p) => p.timeframe)
+        .filter((tf): tf is NonNullable<typeof tf> => tf !== null),
+    [scheduledForDay],
+  );
+  const presentationDurations = useMemo(
+    () => presentations.map((p) => p.minutes).filter((m) => Number.isFinite(m) && m > 0),
+    [presentations],
+  );
+  const presentationBuffers = useMemo(
+    () => presentations.map((p) => p.buffer).filter((b) => Number.isFinite(b) && b > 0),
+    [presentations],
+  );
+  const geometry = useGridGeometry({
+    timeframes: dayTimeframes,
+    presentationTimeframes: dayPresentationTimeframes,
+    presentationDurations,
+    presentationBuffers,
+    defaultBuffer,
+  });
 
   // Unscheduled presentations (no room or no timeframe)
   const unscheduled = useMemo(() => {
@@ -384,6 +396,11 @@ export default function ScheduleTab({
     professorIds: allProfessorIds,
     slotMinutes: 1,
   }), [presentations, personNames, roomNames, constraints, symposiumTimeframes, resourceAvailability, allProfessorIds]);
+
+  // Live list of constraint violations across the current draft schedule.
+  // Recomputes whenever the schedule, constraints, or availability changes —
+  // covers scheduler runs, drag-drops, bulk saves, and constraint toggles.
+  const scheduleViolations = useMemo(() => computeAllViolations(conflictContext), [conflictContext]);
 
   // Handlers
   const handleRunScheduler = async (skipConfirm: boolean = false, debugMode: boolean = false) => {
@@ -689,8 +706,7 @@ export default function ScheduleTab({
   const { dragState, isDragging, handleBlockPointerDown, handleUnscheduledPointerDown } =
     useScheduleDrag({
       roomsAvailable,
-      minSlot,
-      maxSlot,
+      geometry,
       selectedDay,
       conflictContext,
       gridRef,
@@ -1225,14 +1241,13 @@ export default function ScheduleTab({
       ) : null}
 
       {/* Schedule grid + unscheduled side panel */}
-      {!isLoadingSchedule && selectedDay && selectedDay !== "unscheduled" && activeSlots.size > 0 ? (
+      {!isLoadingSchedule && selectedDay && selectedDay !== "unscheduled" && hasActiveDay ? (
         <div className="flex gap-3">
           <div className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-[#d8e2ff] bg-white">
             <ScheduleGrid
               roomsAvailable={roomsAvailable}
               roomNames={roomNames}
-              minSlot={minSlot}
-              maxSlot={maxSlot}
+              geometry={geometry}
               blocks={gridBlocks}
               gridRef={gridRef}
               onBlockPointerDown={(e, id) => {
@@ -1265,7 +1280,7 @@ export default function ScheduleTab({
                   : "border-dashed border-[#1635a7]"
                 : "border-[#d8e2ff]"
             }`}
-            style={{ height: (maxSlot - minSlot) * SLOT_HEIGHT + 33 }}
+            style={{ height: geometry.totalPx + 33 }}
           >
             <div className="shrink-0 border-b border-[#d8e2ff] bg-[#f0f4ff] px-3 py-2 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
               Unscheduled ({unscheduled.length})
@@ -1315,8 +1330,7 @@ export default function ScheduleTab({
       {isDragging && dragState ? (() => {
         const defaultColor = COLOR_SHADES[0][0];
         const color = colorMap.get(dragState.presentation.id) ?? { bg: rgbToHex(defaultColor.r, defaultColor.g, defaultColor.b), text: getTextColor(defaultColor) };
-        const durationSlots = Math.ceil(dragState.presentation.minutes / 15);
-        const blockHeight = durationSlots * SLOT_HEIGHT;
+        const blockHeight = (dragState.presentation.minutes / geometry.slotMinutes) * geometry.slotPx;
         const snap = dragState.snapTarget;
         const timeLabel = snap ? formatMinuteTime(snap.minuteInDay) : null;
         const endMinute = snap ? snap.minuteInDay + dragState.presentation.minutes : null;
@@ -1364,6 +1378,57 @@ export default function ScheduleTab({
         );
       })() : null}
 
+
+      {/* Constraint violations panel — live-updates as the schedule changes. */}
+      {!isLoadingSchedule && selectedSymposiumId && presentations.length > 0 ? (
+        <div className="rounded-lg border border-[#d8e2ff] bg-white">
+          <div className="flex items-center justify-between border-b border-[#d8e2ff] bg-[#f0f4ff] px-4 py-2">
+            <div className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+              Constraint violations
+            </div>
+            <div className="text-xs text-[#555]">
+              {scheduleViolations.length === 0 ? (
+                <span className="font-semibold text-[#1a7f1a]">All constraints satisfied</span>
+              ) : (
+                <>
+                  <span className="font-semibold text-[#9a1f1f]">
+                    {scheduleViolations.filter((v) => v.severity === "hard").length} hard
+                  </span>
+                  <span className="mx-2 text-[#aaa]">·</span>
+                  <span className="font-semibold text-[#856404]">
+                    {scheduleViolations.filter((v) => v.severity === "soft").length} soft
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+          {scheduleViolations.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-[#555]">
+              The current schedule does not violate any of the configured constraints.
+            </p>
+          ) : (
+            <ul className="max-h-64 divide-y divide-[#eee] overflow-y-auto">
+              {scheduleViolations.map((v, i) => (
+                <li
+                  key={i}
+                  className="flex items-start gap-3 px-4 py-2 text-sm"
+                >
+                  <span
+                    className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                      v.severity === "hard"
+                        ? "bg-[#fde2e2] text-[#9a1f1f]"
+                        : "bg-[#fff3cd] text-[#856404]"
+                    }`}
+                  >
+                    {v.severity}
+                  </span>
+                  <span className="text-[#333]">{v.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
 
       {/* No presentations message */}
       {!isLoadingSchedule && selectedSymposiumId && presentations.length === 0 && !message ? (
@@ -1432,7 +1497,7 @@ export default function ScheduleTab({
                   type="datetime-local"
                   value={editStartTime}
                   onChange={(e) => updateEditStartTime(e.target.value)}
-                  step={900}
+                  step={geometry.slotMinutes * 60}
                   className={fieldClass + " mt-1"}
                 />
               </div>

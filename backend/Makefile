@@ -21,3 +21,6 @@ test:
 	@nc -z 127.0.0.1 54321 2>/dev/null || ($(MAKE) supabase-start && $(MAKE) supabase-migrate)
 	$(MYPY) app
 	$(PYTEST) -q tests
+
+run:
+	uvicorn app.main:app --reload --port 8000

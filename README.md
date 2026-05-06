@@ -38,6 +38,7 @@ The live app is hosted at: **https://conference-scheduler-black.vercel.app**
 | **Professor** | Email OTP | Manage your class presentations, set availability |
 | **Department Head** | Email OTP | Create classes, manage professors and students |
 | **Admin** | Email + password | Full control: symposia, rooms, scheduling, publishing |
+| **Super Admin** | Email + password | Everything an admin can do, plus create/edit/delete other admins and reset their passwords |
 
 ### How scheduling works
 
@@ -59,6 +60,10 @@ Conference Scheduler automates the most tedious part of running an academic symp
 
 The core solver uses **Google OR-Tools CP-SAT** — a constraint-programming optimizer — to find a schedule that maximizes the number of presentations placed while minimizing quality penalties (availability violations, department fragmentation, room imbalance).
 
+For symposia with more than ~100 presentations or ~15 classes, a **hierarchical scheduler** kicks in automatically: it bundles each class into a single block, places the blocks with a small CP-SAT model, then expands each block into its individual presentations and runs an identity-keyed verification sweep so the same person entered into multiple classes (a double-major student or cross-listed professor) is still treated as one body. This keeps a 300+ presentation symposium tractable in seconds rather than minutes.
+
+Every constraint is configurable per run as **hard / soft / off** (room conflicts, person conflicts, professor availability, student availability, same-class-same-room, makespan, department span, class span, professor span, room balance). When the solver can't place every presentation, an opt-in **debug mode** runs every combination of hard-constraint relaxations in parallel and tells the admin which switch to flip to schedule the most presentations.
+
 ### Tech stack
 
 | Layer | Technology |
@@ -73,10 +78,13 @@ The core solver uses **Google OR-Tools CP-SAT** — a constraint-programming opt
 
 ### Key features
 
-- **Constraint-programming scheduler** — hard and soft constraints are configurable per symposium; the solver guarantees no room or person conflicts
-- **Role-based access** — five distinct roles with JWT authentication and per-endpoint enforcement
-- **Department and class grouping** — the scheduler preferentially clusters presentations by department, then by class
-- **Drag-and-drop manual adjustments** — admins can override any solver assignment
+- **Two-tier constraint-programming scheduler** — a flat CP-SAT model for small/medium symposia and a hierarchical class-block solver that takes over above ~100 presentations or ~15 classes; the dispatch is automatic
+- **Configurable constraint modes** — every hard/soft/off setting (room, person, professor and student availability, same-class-same-room, makespan, department/class/professor span, room balance) is tunable per run
+- **Debug mode** — when a run leaves presentations unscheduled, opt in to an exhaustive parallel probe that tells the admin which constraint relaxation would schedule the most presentations
+- **Identity-keyed person tracking** — double-major students and cross-listed faculty are deduplicated by email so they can never be double-booked, even across classes
+- **Role-based access** — six roles (attendee, student, professor, department head, admin, super admin) with JWT authentication and per-endpoint enforcement; only super admins can manage other admins
+- **Drag-and-drop manual adjustments** — admins can drag presentations on a calendar grid; conflicts surface a confirmation dialog letting an admin override and place the presentation anyway
+- **Adaptive grid** — the schedule editor's grid auto-fits the symposium's actual time windows and presentation durations rather than a hardcoded 9 AM / 15-minute lattice
 - **Export** — publish schedule as `.xlsx` or `.ics` calendar
 
 ---
@@ -184,9 +192,17 @@ Full list of backend environment variables:
 
 ```bash
 cd backend
+# Plain admin (cannot manage other admins)
 python scripts/create_admin.py --email you@example.com
-# Prompted for a password
+
+# Super admin — bootstrap account that can create/edit/delete other admins
+python scripts/create_superadmin.py --email you@example.com
+
+# Promote an existing admin to super admin
+python scripts/create_superadmin.py --email existing@hamilton.edu --promote-existing
 ```
+
+Both scripts prompt for a password if `--password` isn't supplied.
 
 ### 7 — Run the app
 
@@ -310,12 +326,17 @@ conference-scheduler/
 │   │   ├── auth/               # JWT, bcrypt, OTP, Resend email
 │   │   ├── routers/            # API route handlers (one file per entity)
 │   │   ├── scheduler/          # CP-SAT optimizer
-│   │   │   ├── models.py       # Pure-Python dataclasses (solver boundary)
-│   │   │   ├── cp_sat.py       # OR-Tools CP-SAT solver
-│   │   │   └── service.py      # Loads DB data → builds problem → saves result
-│   │   └── supabase_io/        # DB layer (read, write, delete, nested_read)
+│   │   │   ├── models.py        # Pure-Python dataclasses + ScheduleConstraints
+│   │   │   ├── cp_sat.py        # Flat OR-Tools CP-SAT solver (small/medium symposia)
+│   │   │   ├── cp_sat_helpers.py # Window utilities + parallel exhaustive debug probe
+│   │   │   ├── hierarchical.py  # Class-block decomposition solver (300+ presentations)
+│   │   │   └── service.py       # Loads DB data → builds problem → dispatches solver → saves result
+│   │   └── supabase_io/         # DB layer (read, write, delete, nested_read)
 │   ├── scripts/
-│   │   └── create_admin.py     # Bootstrap script
+│   │   ├── create_admin.py         # Bootstrap script (plain admin)
+│   │   ├── create_superadmin.py    # Bootstrap script (super admin / promote existing)
+│   │   ├── seed_*_symposium.py     # Demo data: debug, small, medium, large, massive
+│   │   └── seed_all_symposia.py    # Wipe + reseed every demo symposium
 │   ├── tests/                  # Integration tests (real local Supabase)
 │   ├── requirements.txt
 │   └── Makefile                # make test → mypy + pytest

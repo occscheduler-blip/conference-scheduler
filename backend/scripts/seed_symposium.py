@@ -117,9 +117,9 @@ PRESETS: dict[str, Preset] = {
         email_prefix="",
         seed=42,
         day_bounds=[
-            _day(2024, 1, 1, 14, 23),
-            _day(2024, 1, 2, 14, 23),
-            _day(2024, 1, 3, 14, 23),
+            _day(2024, 1, 1, 12, 21),
+            _day(2024, 1, 2, 12, 21),
+            _day(2024, 1, 3, 12, 21),
         ],
         num_professors=15,
         num_classes=20,

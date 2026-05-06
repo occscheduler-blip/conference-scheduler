@@ -58,9 +58,9 @@ def generate_data():
     rng = random.Random(42)
 
     day_bounds = [
-        (datetime(2024, 1, 1, 14, 0, tzinfo=timezone.utc), datetime(2024, 1, 1, 23, 0, tzinfo=timezone.utc)),
-        (datetime(2024, 1, 2, 14, 0, tzinfo=timezone.utc), datetime(2024, 1, 2, 23, 0, tzinfo=timezone.utc)),
-        (datetime(2024, 1, 3, 14, 0, tzinfo=timezone.utc), datetime(2024, 1, 3, 23, 0, tzinfo=timezone.utc)),
+        (datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc), datetime(2024, 1, 1, 21, 0, tzinfo=timezone.utc)),
+        (datetime(2024, 1, 2, 12, 0, tzinfo=timezone.utc), datetime(2024, 1, 2, 21, 0, tzinfo=timezone.utc)),
+        (datetime(2024, 1, 3, 12, 0, tzinfo=timezone.utc), datetime(2024, 1, 3, 21, 0, tzinfo=timezone.utc)),
     ]
 
     def random_availability(coverage: float) -> list:
@@ -294,6 +294,5 @@ def seed(data: dict):
 
 
 if __name__ == "__main__":
-    delete_all()
     data = generate_data()
     seed(data)

@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, apiPut, ApiError } from "../lib/api";
+import { toBackendDateTime } from "../lib/utils";
 import {
-  buildCalendarFromTimeframes,
-  formatTimeLabel,
-  toBackendDateTime,
-  totalSlots,
-} from "../lib/utils";
+  buildCalendarWithGeometry,
+  computeGridGeometry,
+  formatMinutesOfDay,
+  slotIsHourBoundary,
+  type GridGeometry,
+  type TimeframeLite,
+} from "../lib/useGridGeometry";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
 import type { CalendarDay } from "./types";
@@ -32,6 +35,11 @@ export default function AvailabilityEditor({
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
   const [editableSlots, setEditableSlots] = useState<boolean[][]>([]);
+  const FALLBACK_GEOMETRY: GridGeometry = useMemo(
+    () => computeGridGeometry({ timeframes: [] }),
+    [],
+  );
+  const [geometry, setGeometry] = useState<GridGeometry>(FALLBACK_GEOMETRY);
   const { availability, setAvailability, handleCellMouseDown, handleCellMouseEnter } =
     useCalendarGrid(calendarDays.length, editableSlots);
   const weekPagination = useWeekPagination(calendarDays.map((day) => day.key));
@@ -71,8 +79,16 @@ export default function AvailabilityEditor({
             { headers: authHeaders, cache: "no-store" }
           ),
         ]);
-        const built = buildCalendarFromTimeframes(symposiumRows, entityRows);
+        const symTfs: TimeframeLite[] = symposiumRows
+          .filter((r): r is { start_time: string; end_time?: string } => Boolean(r.start_time))
+          .map((r) => ({ start_time: r.start_time, end_time: r.end_time ?? null }));
+        const entTfs: TimeframeLite[] = entityRows
+          .filter((r): r is { start_time: string; end_time?: string } => Boolean(r.start_time))
+          .map((r) => ({ start_time: r.start_time, end_time: r.end_time ?? null }));
+        const newGeometry = computeGridGeometry({ timeframes: symTfs });
+        const built = buildCalendarWithGeometry(symTfs, entTfs, newGeometry);
         if (ignore) return;
+        setGeometry(newGeometry);
         setCalendarDays(built.calendarDays);
         setEditableSlots(built.editableSlots);
         setAvailability(built.availability);
@@ -101,6 +117,9 @@ export default function AvailabilityEditor({
     }
 
     const timeframes: Array<{ start_time: string; end_time: string }> = [];
+    const slotMinutesAtIndex = (slotIndex: number) =>
+      geometry.gridStartMinutes + slotIndex * geometry.slotMinutes;
+
     for (let dayIndex = 0; dayIndex < calendarDays.length; dayIndex += 1) {
       const day = calendarDays[dayIndex];
       const [year, month, dayOfMonth] = day.key.split("-").map((part) => Number.parseInt(part, 10));
@@ -109,15 +128,17 @@ export default function AvailabilityEditor({
       let rangeStart: Date | null = null;
       let rangeEnd: Date | null = null;
 
-      for (let slotIndex = 0; slotIndex < totalSlots; slotIndex += 1) {
+      for (let slotIndex = 0; slotIndex < geometry.slotsPerDay; slotIndex += 1) {
         const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
         const available = availability[dayIndex]?.[slotIndex] ?? false;
 
         if (editable && available) {
-          const slotStart = new Date(Date.UTC(year, month - 1, dayOfMonth, 9, 0, 0, 0));
-          slotStart.setUTCMinutes(slotStart.getUTCMinutes() + slotIndex * 15);
-          const slotEnd = new Date(slotStart);
-          slotEnd.setUTCMinutes(slotEnd.getUTCMinutes() + 15);
+          const startMin = slotMinutesAtIndex(slotIndex);
+          const endMin = startMin + geometry.slotMinutes;
+          const slotStart = new Date(Date.UTC(year, month - 1, dayOfMonth, 0, 0, 0, 0));
+          slotStart.setUTCMinutes(startMin);
+          const slotEnd = new Date(Date.UTC(year, month - 1, dayOfMonth, 0, 0, 0, 0));
+          slotEnd.setUTCMinutes(endMin);
           if (!rangeStart) {
             rangeStart = slotStart;
             rangeEnd = slotEnd;
@@ -247,35 +268,39 @@ export default function AvailabilityEditor({
                       className="grid"
                       style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
                     >
-                      {Array.from({ length: totalSlots }, (_, slotIndex) => (
-                        <div key={slotIndex} className="contents">
-                          <div className="h-6 overflow-hidden pr-2 text-right text-sm leading-6 font-semibold text-[#444]">
-                            {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
+                      {Array.from({ length: geometry.slotsPerDay }, (_, slotIndex) => {
+                        const minuteAtSlot = geometry.gridStartMinutes + slotIndex * geometry.slotMinutes;
+                        const showHourLine = slotIsHourBoundary(geometry, slotIndex);
+                        const labelText = showHourLine ? formatMinutesOfDay(minuteAtSlot) : "";
+                        return (
+                          <div key={slotIndex} className="contents">
+                            <div className="h-6 overflow-hidden pr-2 text-right text-sm leading-6 font-semibold text-[#444]">
+                              {labelText}
+                            </div>
+                            {weekPagination.visibleDayIndices.map((dayIndex) => {
+                              const day = calendarDays[dayIndex];
+                              const available = availability[dayIndex]?.[slotIndex] ?? false;
+                              const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
+                              return (
+                                <button
+                                  key={`${dayIndex}-${slotIndex}`}
+                                  type="button"
+                                  onMouseDown={() => handleCellMouseDown(dayIndex, slotIndex)}
+                                  onMouseEnter={() => handleCellMouseEnter(dayIndex, slotIndex)}
+                                  onDragStart={(event) => event.preventDefault()}
+                                  disabled={!editable}
+                                  className={`h-6 border-r border-l border-b border-[#333] ${
+                                    showHourLine ? "border-t border-t-[#333]" : ""
+                                  } ${
+                                    !editable ? "cursor-not-allowed bg-[#d1d5db]" : available ? "bg-[#38a000]" : "bg-[#f0d7d9]"
+                                  }`}
+                                  aria-label={`${day.label} ${formatMinutesOfDay(minuteAtSlot)}`}
+                                />
+                              );
+                            })}
                           </div>
-                          {weekPagination.visibleDayIndices.map((dayIndex) => {
-                            const day = calendarDays[dayIndex];
-                            const available = availability[dayIndex]?.[slotIndex] ?? false;
-                            const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
-                            const showHourLine = slotIndex % 4 === 0;
-                            return (
-                              <button
-                                key={`${dayIndex}-${slotIndex}`}
-                                type="button"
-                                onMouseDown={() => handleCellMouseDown(dayIndex, slotIndex)}
-                                onMouseEnter={() => handleCellMouseEnter(dayIndex, slotIndex)}
-                                onDragStart={(event) => event.preventDefault()}
-                                disabled={!editable}
-                                className={`h-6 border-r border-l border-b border-[#333] ${
-                                  showHourLine ? "border-t border-t-[#333]" : ""
-                                } ${
-                                  !editable ? "cursor-not-allowed bg-[#d1d5db]" : available ? "bg-[#38a000]" : "bg-[#f0d7d9]"
-                                }`}
-                                aria-label={`${day.label} ${formatTimeLabel(slotIndex)}`}
-                              />
-                            );
-                          })}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
