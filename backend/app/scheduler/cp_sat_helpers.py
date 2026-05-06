@@ -71,8 +71,7 @@ def _eligible_starts(
     duration = timedelta(minutes=presentation.duration_minutes)
     step = timedelta(minutes=slot_minutes)
 
-    # Walk each symposium window at the chosen slot granularity. A candidate is
-    # allowed only when every hard-constrained resource is also available.
+    # A candidate is allowed only when every hard-constrained resource is also available.
     for window in symposium_windows:
         candidate = window.start
         while candidate + duration <= window.end:
@@ -107,7 +106,7 @@ def _build_admin_suggestions(
         p.duration_minutes + p.buffer_minutes for p in problem.presentations
     )
 
-    # --- Extract blocked presentation titles from diagnostics ---
+    # Extract blocked presentation titles from diagnostics 
     blocked_titles: list[str] = []
     for msg in diagnostics:
         if "could not be scheduled" in msg and msg.startswith('"'):
@@ -121,7 +120,7 @@ def _build_admin_suggestions(
         suffix = f" and {rest} more" if rest > 0 else ""
         return ", ".join(shown) + suffix
 
-    # --- Suggestion: availability bottleneck ---
+    # Suggestion: availability bottleneck 
     if blocked_titles:
         blocked_ids = set(unscheduled_presentations)
         blocked_pres = [p for p in problem.presentations if p.id in blocked_ids]
@@ -152,7 +151,7 @@ def _build_admin_suggestions(
                 f"'Student Availability' to Soft and re-run."
             )
 
-    # --- Suggestion: overloaded classes (same-class-same-room hard) ---
+    # Suggestion: overloaded classes (same-class-same-room hard)
     if problem.constraints.same_class_same_room == "hard":
         class_load: dict[str, list[PresentationInput]] = defaultdict(list)
         for p in problem.presentations:
@@ -183,7 +182,7 @@ def _build_admin_suggestions(
                 f"Set it to Soft so the scheduler can spread presentations across rooms."
             )
 
-    # --- Suggestion: overall capacity ---
+    # Suggestion: overall capacity
     if total_required_minutes > total_room_minutes:
         shortage = total_required_minutes - total_room_minutes
         extra_rooms = ceil(total_required_minutes / total_sym_minutes) - problem.rooms_available
@@ -194,7 +193,7 @@ def _build_admin_suggestions(
             f"{room_advice} or extending the symposium window would resolve this."
         )
 
-    # --- Suggestion: buffers adding significant dead time ---
+    # Suggestion: buffers adding significant dead time
     buffered = [p for p in problem.presentations if p.buffer_minutes > 0]
     if buffered and unscheduled_presentations:
         total_buf = sum(p.buffer_minutes for p in buffered)
