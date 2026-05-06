@@ -496,6 +496,7 @@ class UpdateScheduleAssignmentRequest(BaseModel):
     room: int
     start_time: datetime
     end_time: datetime
+    override_constraints: bool = False
 
     @field_validator("room")
     @classmethod
@@ -516,6 +517,7 @@ class SingleScheduleAssignment(BaseModel):
     room: int
     start_time: datetime
     end_time: datetime
+    override_constraints: bool = False
 
     @field_validator("room")
     @classmethod

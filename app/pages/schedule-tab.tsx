@@ -31,6 +31,13 @@ function toDatetimeLocal(d: Date): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
+type PendingScheduleChange = {
+  room: number;
+  start_time: string;
+  end_time: string;
+  override_constraints?: boolean;
+};
+
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
 import {
   DEPARTMENT_BASE_COLORS,
@@ -78,7 +85,7 @@ export default function ScheduleTab({
   const [editStartTime, setEditStartTime] = useState("");
   const isSavingAssignment = false; // kept for disabled prop; modal save is now synchronous
   const [assignmentMessage, setAssignmentMessage] = useState<string | null>(null);
-  const [hasBlockedConflict, setHasBlockedConflict] = useState(false);
+  const [canOverrideAssignment, setCanOverrideAssignment] = useState(false);
 
   // Person name lookup for conflict messages
   const [personNames, setPersonNames] = useState<Map<string, string>>(new Map());
@@ -95,7 +102,7 @@ export default function ScheduleTab({
 
   // Pending changes (batched saves). null entry = pending unschedule.
   const [pendingChanges, setPendingChanges] = useState<
-    Map<string, { room: number; start_time: string; end_time: string } | null>
+    Map<string, PendingScheduleChange | null>
   >(new Map());
   const [isBulkSaving, setIsBulkSaving] = useState(false);
   const [bulkSaveMessage, setBulkSaveMessage] = useState<string | null>(null);
@@ -633,7 +640,19 @@ export default function ScheduleTab({
       }
     }
     setAssignmentMessage(null);
-    setHasBlockedConflict(false);
+    setCanOverrideAssignment(false);
+  };
+
+  const updateEditRoom = (value: string) => {
+    setEditRoom(value);
+    setAssignmentMessage(null);
+    setCanOverrideAssignment(false);
+  };
+
+  const updateEditStartTime = (value: string) => {
+    setEditStartTime(value);
+    setAssignmentMessage(null);
+    setCanOverrideAssignment(false);
   };
 
   // Drag-and-drop
@@ -709,16 +728,18 @@ export default function ScheduleTab({
       },
     });
 
-  const handleSaveAssignment = (override = false) => {
+  const handleSaveAssignment = (overrideConstraints: boolean = false) => {
     if (!editingPresentation || !selectedSymposiumId) return;
     if (!editStartTime) {
       setAssignmentMessage("Please select a start time.");
+      setCanOverrideAssignment(false);
       return;
     }
 
     const startDate = new Date(`${editStartTime}:00Z`);
     if (Number.isNaN(startDate.getTime())) {
       setAssignmentMessage("Invalid start time.");
+      setCanOverrideAssignment(false);
       return;
     }
 
@@ -728,20 +749,28 @@ export default function ScheduleTab({
     const endISO = toBackendDateTime(endDate);
 
     const conflict = detectScheduleConflict(editingPresentation, room, startDate, conflictContext);
-    if (conflict?.blocked && !override) {
+    if (conflict?.blocked && !overrideConstraints) {
       setAssignmentMessage(conflict.message);
-      setHasBlockedConflict(true);
+      setCanOverrideAssignment(true);
       return;
     }
-    setHasBlockedConflict(false);
-    if (conflict && !override) {
-      setAssignmentMessage(`Warning: ${conflict.message}`);
+    if (conflict) {
+      setAssignmentMessage(
+        overrideConstraints
+          ? `Override applied: ${conflict.message}`
+          : `Warning: ${conflict.message}`
+      );
     }
 
     // Store in pending changes
     setPendingChanges((prev) => {
       const next = new Map(prev);
-      next.set(editingPresentation.id, { room, start_time: startISO, end_time: endISO });
+      next.set(editingPresentation.id, {
+        room,
+        start_time: startISO,
+        end_time: endISO,
+        override_constraints: overrideConstraints || undefined,
+      });
       return next;
     });
 
@@ -759,6 +788,7 @@ export default function ScheduleTab({
     );
 
     setBulkSaveMessage(null);
+    setCanOverrideAssignment(false);
     setEditingPresentation(null);
   };
 
@@ -871,6 +901,7 @@ export default function ScheduleTab({
         room: number;
         start_time: string;
         end_time: string;
+        override_constraints?: boolean;
       }> = [];
       const unscheduled_presentation_ids: string[] = [];
       for (const [presId, change] of pendingChanges.entries()) {
@@ -882,6 +913,7 @@ export default function ScheduleTab({
             room: change.room,
             start_time: change.start_time,
             end_time: change.end_time,
+            override_constraints: change.override_constraints,
           });
         }
       }
@@ -1445,7 +1477,7 @@ export default function ScheduleTab({
                 </label>
                 <select
                   value={editRoom}
-                  onChange={(e) => { setEditRoom(e.target.value); setHasBlockedConflict(false); setAssignmentMessage(null); }}
+                  onChange={(e) => updateEditRoom(e.target.value)}
                   className={fieldClass + " mt-1"}
                 >
                   {Array.from({ length: roomsAvailable }, (_, i) => (
@@ -1464,7 +1496,7 @@ export default function ScheduleTab({
                 <input
                   type="datetime-local"
                   value={editStartTime}
-                  onChange={(e) => { setEditStartTime(e.target.value); setHasBlockedConflict(false); setAssignmentMessage(null); }}
+                  onChange={(e) => updateEditStartTime(e.target.value)}
                   step={geometry.slotMinutes * 60}
                   className={fieldClass + " mt-1"}
                 />
@@ -1492,15 +1524,16 @@ export default function ScheduleTab({
                 >
                   Apply
                 </button>
-                {hasBlockedConflict && (
+                {canOverrideAssignment ? (
                   <button
                     type="button"
                     onClick={() => handleSaveAssignment(true)}
-                    className="rounded-lg bg-[#9a1f1f] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#b52424]"
+                    disabled={isSavingAssignment}
+                    className="rounded-lg bg-[#9a4d00] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#7a3d00] disabled:opacity-50"
                   >
-                    Override & Place Anyway
+                    Override & Apply
                   </button>
-                )}
+                ) : null}
                 <button
                   type="button"
                   onClick={() => setEditingPresentation(null)}

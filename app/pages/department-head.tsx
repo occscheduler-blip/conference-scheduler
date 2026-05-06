@@ -216,13 +216,55 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
 
   const canSubmit = useMemo(() => {
     if (!selectedDepartmentId || !className.trim()) return false;
-    if (isSelfProfessor) return Boolean(departmentHeadById.get(selectedDepartmentId));
     return professors.some((prof) => prof.name.trim() && prof.email.trim());
-  }, [className, departmentHeadById, isSelfProfessor, professors, selectedDepartmentId]);
+  }, [className, professors, selectedDepartmentId]);
 
   const handleSelfProfessorChange = (checked: boolean) => {
     setIsSelfProfessor(checked);
+    const headInfo = departmentHeadById.get(selectedDepartmentId);
+    if (!headInfo) return;
+
+    const selfProfessorRow = {
+      name: headInfo.name,
+      email: headInfo.email.trim().toLowerCase(),
+    };
+
+    setProfessors((current) => {
+      if (checked) {
+        if (current.length === 0) return [selfProfessorRow];
+
+        const [firstProfessor, ...remainingProfessors] = current;
+        const firstProfessorIsBlank = !firstProfessor.name.trim() && !firstProfessor.email.trim();
+        const firstProfessorMatchesSelf =
+          firstProfessor.name === selfProfessorRow.name &&
+          firstProfessor.email.trim().toLowerCase() === selfProfessorRow.email;
+        if (firstProfessorIsBlank || firstProfessorMatchesSelf) {
+          return [{ ...firstProfessor, ...selfProfessorRow }, ...remainingProfessors];
+        }
+        return [selfProfessorRow, ...current];
+      }
+
+      const [firstProfessor, ...remainingProfessors] = current;
+      const firstProfessorMatchesSelf =
+        firstProfessor?.name === selfProfessorRow.name &&
+        firstProfessor.email.trim().toLowerCase() === selfProfessorRow.email;
+      if (!firstProfessorMatchesSelf) return current;
+      return remainingProfessors.length > 0 ? [{ name: "", email: "" }, ...remainingProfessors] : [{ name: "", email: "" }];
+    });
   };
+
+  useEffect(() => {
+    if (!isSelfProfessor) return;
+    const headInfo = departmentHeadById.get(selectedDepartmentId);
+    if (!headInfo) return;
+
+    const selfProfessorRow = {
+      name: headInfo.name,
+      email: headInfo.email.trim().toLowerCase(),
+    };
+
+    setProfessors((current) => (current.length > 0 ? [{ ...current[0], ...selfProfessorRow }, ...current.slice(1)] : [selfProfessorRow]));
+  }, [departmentHeadById, isSelfProfessor, selectedDepartmentId]);
 
 
   const setProfessorField = (index: number, field: keyof ProfessorRow, value: string) => {
@@ -374,17 +416,24 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
     setMessage("");
 
     const headInfo = isSelfProfessor ? departmentHeadById.get(selectedDepartmentId) : undefined;
-    const headId = departmentIdFromLink || selectedDepartmentId;
-    const selfProfessorRow = headInfo ? { id: headId, name: headInfo.name, email: headInfo.email.trim().toLowerCase() } : null;
+    const professorRows =
+      headInfo && professors.length > 0
+        ? [
+            {
+              ...professors[0],
+              name: headInfo.name,
+              email: headInfo.email.trim().toLowerCase(),
+            },
+            ...professors.slice(1),
+          ]
+        : professors;
 
-    const otherProfessors = professors
+    const cleanProfessors = professorRows
       .map((professor) => ({
         name: professor.name.trim(),
         email: professor.email.trim().toLowerCase(),
       }))
       .filter((professor) => professor.name && professor.email);
-
-    const cleanProfessors = selfProfessorRow ? [selfProfessorRow, ...otherProfessors] : otherProfessors;
 
     if (!selectedDepartmentId) {
       setMessage("Select a department.");

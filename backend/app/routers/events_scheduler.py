@@ -312,13 +312,14 @@ def update_schedule_assignment(
 
             new_start = ensure_app_timezone(payload.start_time)
             new_end = ensure_app_timezone(payload.end_time)
-            _assert_within_symposium_windows(payload.symposium_id, new_start, new_end)
+            if not payload.override_constraints:
+                _assert_within_symposium_windows(payload.symposium_id, new_start, new_end)
             target_buffer = timedelta(minutes=int(target_pres.get("buffer") or 0))
             new_buffered_end = new_end + target_buffer
 
             other_pres_ids = [pid for pid in index.presentations_by_id if pid != presentation_id]
 
-            if other_pres_ids:
+            if other_pres_ids and not payload.override_constraints:
                 tf_resp = read.get_temporary_timeframes(
                     linked_id=[UUID(pid) for pid in other_pres_ids]
                 )
@@ -454,7 +455,8 @@ def bulk_update_schedule_assignments(
                     a = assignment_map[pid]
                     start = ensure_app_timezone(a.start_time)
                     end = ensure_app_timezone(a.end_time)
-                    _assert_within_symposium_windows(payload.symposium_id, start, end)
+                    if not a.override_constraints:
+                        _assert_within_symposium_windows(payload.symposium_id, start, end)
                     effective[pid] = (a.room, start, end + buf)
                 elif pid in existing_tf:
                     room_val = p.get("temporary_room")
@@ -478,6 +480,13 @@ def bulk_update_schedule_assignments(
                         continue
 
                     if pid_a not in assignment_map and pid_b not in assignment_map:
+                        continue
+                    assignment_a = assignment_map.get(pid_a)
+                    assignment_b = assignment_map.get(pid_b)
+                    if (
+                        (assignment_a is not None and assignment_a.override_constraints)
+                        or (assignment_b is not None and assignment_b.override_constraints)
+                    ):
                         continue
 
                     pres_b = index.presentations_by_id[pid_b]
