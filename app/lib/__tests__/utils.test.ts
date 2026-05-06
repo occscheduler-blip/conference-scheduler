@@ -309,6 +309,7 @@ function makePresentation(overrides: Partial<SchedulePresentation> = {}): Schedu
     id: "p1",
     title: "Test Presentation",
     class_id: "c1",
+    className: "CS101",
     minutes: 30,
     buffer: 0,
     room: null,

@@ -135,6 +135,7 @@ export type SchedulePresentation = {
   id: string;
   title: string;
   class_id: string;
+  className: string;
   minutes: number;
   /** Buffer time in minutes after this presentation */
   buffer: number;

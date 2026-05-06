@@ -163,9 +163,10 @@ export default function ScheduleTab({
           return;
         }
 
-        // Department lookup
+        // Department + class lookups
         const deptById = new Map(schedule.departments.map((d) => [d.id, d]));
         const deptIdByClassId = new Map(schedule.classes.map((c) => [c.id, c.department_id]));
+        const classNameById = new Map(schedule.classes.map((c) => [c.id, c.name]));
 
         // Professor IDs grouped by class_id (all professors in a class are resources for all its presentations)
         const professorIdsByClass = new Map<string, string[]>();
@@ -233,6 +234,7 @@ export default function ScheduleTab({
               id: row.id ?? "",
               title: row.title?.trim() ?? "",
               class_id: row.class_id ?? "",
+              className: classNameById.get(row.class_id ?? "") ?? "",
               minutes: row.minutes ?? 0,
               buffer: row.buffer ?? 0,
               room: row.temporary_room ?? null,
@@ -1407,22 +1409,31 @@ export default function ScheduleTab({
               The current schedule does not violate any of the configured constraints.
             </p>
           ) : (
-            <ul className="max-h-64 divide-y divide-[#eee] overflow-y-auto">
+            <ul className="max-h-80 divide-y divide-[#eee] overflow-y-auto">
               {scheduleViolations.map((v, i) => (
-                <li
-                  key={i}
-                  className="flex items-start gap-3 px-4 py-2 text-sm"
-                >
-                  <span
-                    className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
-                      v.severity === "hard"
-                        ? "bg-[#fde2e2] text-[#9a1f1f]"
-                        : "bg-[#fff3cd] text-[#856404]"
-                    }`}
-                  >
-                    {v.severity}
-                  </span>
-                  <span className="text-[#333]">{v.message}</span>
+                <li key={i} className="px-4 py-2 text-sm">
+                  <div className="flex items-start gap-3">
+                    <span
+                      className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+                        v.severity === "hard"
+                          ? "bg-[#fde2e2] text-[#9a1f1f]"
+                          : "bg-[#fff3cd] text-[#856404]"
+                      }`}
+                    >
+                      {v.severity}
+                    </span>
+                    <span className="text-[#333]">{v.message}</span>
+                  </div>
+                  {v.presentations.length > 0 ? (
+                    <ul className="mt-1 ml-12 space-y-0.5">
+                      {v.presentations.map((p) => (
+                        <li key={p.id} className="text-xs text-[#555]">
+                          <span className="font-semibold text-[#333]">{p.title}</span>
+                          <span className="text-[#888]"> · {p.className} · {p.departmentName} · {p.roomLabel} · {p.timeLabel}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </li>
               ))}
             </ul>

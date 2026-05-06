@@ -363,32 +363,64 @@ export function detectScheduleConflict(
   return null;
 }
 
+export type ViolationPresentationContext = {
+  id: string;
+  title: string;
+  className: string;
+  departmentName: string;
+  roomLabel: string;
+  timeLabel: string;
+};
+
 export type Violation = {
   severity: "hard" | "soft";
   message: string;
+  presentations: ViolationPresentationContext[];
 };
 
 /**
  * Sweep the current schedule and return every constraint violation, respecting
  * the user's hard/soft/off mode for each constraint. Unscheduled presentations
  * are skipped. Pairwise conflicts (room/person) are emitted once per pair.
+ * Each violation carries a `presentations` array with the class/department/
+ * room/time of every presentation involved, so the UI can show the admin
+ * exactly where to look.
  */
 export function computeAllViolations(ctx: ConflictContext): Violation[] {
   const { allPresentations, personNames, constraints, professorIds } = ctx;
 
   const violations: Violation[] = [];
   const seen = new Set<string>();
-  function push(severity: "hard" | "soft" | "off", message: string) {
+  function push(
+    severity: "hard" | "soft" | "off",
+    message: string,
+    presentations: ViolationPresentationContext[],
+  ) {
     if (severity === "off") return;
     const key = `${severity}::${message}`;
     if (seen.has(key)) return;
     seen.add(key);
-    violations.push({ severity, message });
+    violations.push({ severity, message, presentations });
   }
 
   function roomLabel(roomIndex: number): string {
     const roomName = ctx.roomNames?.[roomIndex];
     return typeof roomName === "string" && roomName.trim() ? roomName.trim() : `Room ${roomIndex + 1}`;
+  }
+
+  function presentationContext(p: SchedulePresentation): ViolationPresentationContext {
+    const tf = p.timeframe;
+    const time = tf
+      ? `${formatCalendarDate(parseBackendDateTime(tf.start_time))} · ${timeLabel(tf.start_time, tf.end_time)}`
+      : "Unscheduled";
+    return {
+      id: p.id,
+      title: p.title || "Untitled",
+      className: p.className || "—",
+      departmentName: p.departmentName || "—",
+      roomLabel: p.room === null ? "—" : roomLabel(p.room),
+      timeLabel: time,
+    };
   }
 
   const scheduled = allPresentations
@@ -403,12 +435,13 @@ export function computeAllViolations(ctx: ConflictContext): Violation[] {
   // Single-presentation checks
   for (const { p, start, end } of scheduled) {
     const startDate = new Date(start);
+    const ctxRow = presentationContext(p);
 
     // Slot alignment
     if (constraints.slotAlignment > 1) {
       const m = startDate.getUTCHours() * 60 + startDate.getUTCMinutes();
       if (m % constraints.slotAlignment !== 0) {
-        push("hard", `"${p.title}" does not align to ${constraints.slotAlignment}-minute intervals.`);
+        push("hard", `"${p.title}" does not align to ${constraints.slotAlignment}-minute intervals.`, [ctxRow]);
       }
     }
 
@@ -424,7 +457,7 @@ export function computeAllViolations(ctx: ConflictContext): Violation[] {
         return start >= s && end <= e;
       });
       if (!within) {
-        push(constraints.symposiumWindows, `"${p.title}" falls outside symposium hours.`);
+        push(constraints.symposiumWindows, `"${p.title}" falls outside symposium hours.`, [ctxRow]);
       }
     }
 
@@ -441,7 +474,7 @@ export function computeAllViolations(ctx: ConflictContext): Violation[] {
         });
         if (!within) {
           const name = personNames.get(rid) ?? "A professor";
-          push(constraints.professorAvailability, `${name} is scheduled outside their availability for "${p.title}".`);
+          push(constraints.professorAvailability, `${name} is scheduled outside their availability for "${p.title}".`, [ctxRow]);
         }
       }
     }
@@ -459,7 +492,7 @@ export function computeAllViolations(ctx: ConflictContext): Violation[] {
         });
         if (!within) {
           const name = personNames.get(rid) ?? "A student";
-          push(constraints.studentAvailability, `${name} is scheduled outside their availability for "${p.title}".`);
+          push(constraints.studentAvailability, `${name} is scheduled outside their availability for "${p.title}".`, [ctxRow]);
         }
       }
     }
@@ -474,10 +507,13 @@ export function computeAllViolations(ctx: ConflictContext): Violation[] {
       const overlap = a.start < b.bufferedEnd && a.bufferedEnd > b.start;
       if (!overlap) continue;
 
+      const pair = [presentationContext(a.p), presentationContext(b.p)];
+
       if (constraints.roomConflicts !== "off" && a.p.room === b.p.room && a.p.room !== null) {
         push(
           constraints.roomConflicts,
           `Room conflict: ${roomLabel(a.p.room)} is double-booked by "${a.p.title}" and "${b.p.title}".`,
+          pair,
         );
       }
 
@@ -488,6 +524,7 @@ export function computeAllViolations(ctx: ConflictContext): Violation[] {
             push(
               constraints.personConflicts,
               `Scheduling conflict: ${name} is required at both "${a.p.title}" and "${b.p.title}".`,
+              pair,
             );
           }
         }
@@ -497,29 +534,27 @@ export function computeAllViolations(ctx: ConflictContext): Violation[] {
 
   // Same class → same room (one violation per class with split rooms)
   if (constraints.sameClassSameRoom !== "off") {
-    const roomsByClass = new Map<string, Set<number>>();
-    const titlesByClass = new Map<string, string[]>();
+    const presByClass = new Map<string, SchedulePresentation[]>();
     for (const { p } of scheduled) {
       if (p.room === null || !p.class_id) continue;
-      let rooms = roomsByClass.get(p.class_id);
-      if (!rooms) {
-        rooms = new Set();
-        roomsByClass.set(p.class_id, rooms);
-      }
-      rooms.add(p.room);
-      const titles = titlesByClass.get(p.class_id) ?? [];
-      titles.push(p.title);
-      titlesByClass.set(p.class_id, titles);
+      const list = presByClass.get(p.class_id) ?? [];
+      list.push(p);
+      presByClass.set(p.class_id, list);
     }
-    for (const [cid, rooms] of roomsByClass) {
+    for (const [, list] of presByClass) {
+      const rooms = new Set(list.map((p) => p.room));
       if (rooms.size > 1) {
-        const titles = titlesByClass.get(cid) ?? [];
-        const sample = titles.slice(0, 2).map((t) => `"${t}"`).join(" and ");
-        const more = titles.length > 2 ? ` (+${titles.length - 2} more)` : "";
-        const roomList = Array.from(rooms).sort((x, y) => x - y).map((r) => roomLabel(r)).join(", ");
+        const sample = list.slice(0, 2).map((p) => `"${p.title}"`).join(" and ");
+        const more = list.length > 2 ? ` (+${list.length - 2} more)` : "";
+        const roomList = Array.from(rooms)
+          .filter((r): r is number => r !== null)
+          .sort((x, y) => x - y)
+          .map((r) => roomLabel(r))
+          .join(", ");
         push(
           constraints.sameClassSameRoom,
           `Class split across rooms: ${sample}${more} are in ${roomList}.`,
+          list.map(presentationContext),
         );
       }
     }
