@@ -1,16 +1,39 @@
-"""Benchmark orchestration: build fixtures, run solver, collect metrics."""
+"""Benchmark orchestration: build fixtures, run solver, collect metrics.
+
+The runner mirrors the production dispatch in
+`app.scheduler.service.build_schedule_for_symposium`: large problems
+(over `_HIERARCHICAL_PRESENTATION_THRESHOLD` presentations or
+`_HIERARCHICAL_CLASS_THRESHOLD` classes) go to the hierarchical solver;
+smaller ones stay on the flat CP-SAT solver. Without this, benchmarks would
+exercise the wrong codepath for any large symposium and miss the speedup the
+hierarchical solver was built to deliver.
+"""
 from __future__ import annotations
 
 import time
 
 from app.scheduler import solve_schedule
-from app.scheduler.models import ScheduleResult
+from app.scheduler.models import ScheduleProblem, ScheduleResult
+from app.scheduler.service import _should_use_hierarchical
 
 from .fixtures import Fixture
 from .quality import measure_quality, score_soft_constraints
 from .reporting import ScenarioResult
 from .scenarios import Scenario
 from .verification import verify
+
+
+def _solve(
+    problem: ScheduleProblem, time_limit_seconds: float
+) -> tuple[ScheduleResult, str]:
+    """Pick flat or hierarchical to match production. Returns (result, label)."""
+    if _should_use_hierarchical(problem):
+        # Lazy import: hierarchical pulls in OR-Tools state we don't need
+        # for small-problem benchmarks.
+        from app.scheduler.hierarchical import solve_hierarchical
+
+        return solve_hierarchical(problem, time_limit_seconds=time_limit_seconds), "hierarchical"
+    return solve_schedule(problem, time_limit_seconds=time_limit_seconds), "flat"
 
 
 def _expected_match(expected: str | None, actual: str) -> bool:
@@ -26,9 +49,7 @@ def run_scenario(scenario: Scenario) -> ScenarioResult:
     meta = fixture.meta
 
     t0 = time.perf_counter()
-    result: ScheduleResult = solve_schedule(
-        problem, time_limit_seconds=scenario.time_limit_seconds
-    )
+    result, solver_label = _solve(problem, scenario.time_limit_seconds)
     wall = time.perf_counter() - t0
 
     quality = measure_quality(problem, result, wall)
@@ -59,6 +80,7 @@ def run_scenario(scenario: Scenario) -> ScenarioResult:
         time_limit_seconds=scenario.time_limit_seconds,
         slot_minutes=problem.slot_minutes,
         solver_status=result.status,
+        solver_label=solver_label,
         expected_status=meta.expected_status,
         expected_match=expected_match,
         quality=quality,
@@ -75,5 +97,12 @@ def run_scenarios(scenarios: list[Scenario]) -> list[ScenarioResult]:
     out: list[ScenarioResult] = []
     for s in scenarios:
         print(f"  running {s.name} (time_limit={s.time_limit_seconds}s) ...", flush=True)
-        out.append(run_scenario(s))
+        result = run_scenario(s)
+        print(
+            f"    -> solver={result.solver_label} status={result.solver_status} "
+            f"sched={result.quality.scheduled_count}/{result.quality.total_count} "
+            f"wall={result.quality.wall_time_seconds:.2f}s",
+            flush=True,
+        )
+        out.append(result)
     return out

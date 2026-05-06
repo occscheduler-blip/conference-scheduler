@@ -25,6 +25,7 @@ class ScenarioResult:
     time_limit_seconds: float
     slot_minutes: int
     solver_status: str
+    solver_label: str  # "flat" | "hierarchical" — which dispatch path was taken
     expected_status: str | None
     expected_match: bool
     quality: QualityMetrics
@@ -55,6 +56,7 @@ class ScenarioResult:
             },
             "result": {
                 "solver_status": self.solver_status,
+                "solver_label": self.solver_label,
                 "expected_status": self.expected_status,
                 "expected_match": self.expected_match,
             },
@@ -120,6 +122,7 @@ def render_table(
     if detail:
         header = (
             "scenario",
+            "solver",
             "status",
             "sched%",
             "wall(s)",
@@ -137,6 +140,7 @@ def render_table(
     else:
         header = (
             "scenario",
+            "solver",
             "status",
             "sched%",
             "wall(s)",
@@ -153,6 +157,7 @@ def render_table(
         if detail:
             return (
                 r.scenario,
+                r.solver_label,
                 r.solver_status,
                 sched_pct,
                 f"{r.quality.wall_time_seconds:.2f}",
@@ -169,6 +174,7 @@ def render_table(
             )
         return (
             r.scenario,
+            r.solver_label,
             r.solver_status,
             sched_pct,
             f"{r.quality.wall_time_seconds:.2f}",

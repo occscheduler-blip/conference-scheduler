@@ -28,6 +28,14 @@ Exit codes:
   but a hard-constraint check found a real violation (room overlap, double-booking,
   etc.). This is a correctness bug.
 
+## Solver dispatch
+
+The runner mirrors `app.scheduler.service.build_schedule_for_symposium`:
+problems above the hierarchical thresholds (>100 presentations or >15 classes)
+go to `solve_hierarchical`, smaller ones stay on the flat `solve_schedule`.
+The `solver` column in the report shows which path each scenario took, so it
+is obvious whether the hierarchical work is being exercised.
+
 ## What it measures
 
 For every scenario:
