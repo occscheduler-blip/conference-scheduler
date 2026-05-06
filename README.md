@@ -5,12 +5,11 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.116-009688)](https://fastapi.tiangolo.com)
 [![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3ECF8E)](https://supabase.com)
 
-> An automated scheduling tool for academic symposia. Admins configure rooms and time windows; a constraint-programming solver assigns every presentation a room and time slot while respecting professor and student availability.
+> An automated scheduling tool for the Hamilton College Oral Communication Center thesis symposia. Admins configure rooms and time windows; a constraint-programming solver assigns every presentation a room and time slot while respecting professor and student availability.
 
 ---
 
-<!-- Replace with a screenshot or GIF of the schedule grid -->
-![Schedule grid placeholder](docs/database_diagram.png)
+![Schedule grid](docs/schedule-screenshot.jpeg)
 
 ---
 
