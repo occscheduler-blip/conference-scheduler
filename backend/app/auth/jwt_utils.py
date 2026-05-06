@@ -13,17 +13,19 @@ class JWTClaims(BaseModel):
     sub: str    # admin UUID as string
     email: str
     role: str   # "admin" (only role issued here for now)
+    is_superadmin: bool = False
     iat: int
     exp: int
 
 
-def encode_jwt(entity_id: str, email: str, role: str) -> str:
+def encode_jwt(entity_id: str, email: str, role: str, is_superadmin: bool = False) -> str:
     settings = get_settings()
     now = int(time.time())
     claims = {
         "sub": entity_id,
         "email": email,
         "role": role,
+        "is_superadmin": is_superadmin,
         "iat": now,
         "exp": now + settings.jwt_ttl_hours * 3600,
     }

@@ -37,11 +37,13 @@ class CreateAdminRequest(BaseModel):
 
 
 class UpdateAdminRequest(BaseModel):
-    email: str
+    email: str | None = None
+    is_superadmin: bool | None = None
+    password: str | None = None
 
 
 @router.post("/admin/login")
-def admin_login(body: LoginRequest) -> dict[str, str]:
+def admin_login(body: LoginRequest) -> dict[str, str | bool]:
     logger.info("Admin login attempt for email=%s", body.email)
     resp = supabase.table("admins").select("*").eq("email", body.email).execute()
     rows = cast(list[dict[str,object]], resp.data or [])
@@ -54,21 +56,25 @@ def admin_login(body: LoginRequest) -> dict[str, str]:
         )
 
     admin = rows[0]
-    token = encode_jwt(str(admin["id"]), str(admin["email"]), "admin")
-    logger.info("Admin login successful for email=%s  admin_id=%s", body.email, admin["id"])
+    is_superadmin = bool(admin.get("is_superadmin", False))
+    token = encode_jwt(str(admin["id"]), str(admin["email"]), "admin", is_superadmin=is_superadmin)
+    logger.info("Admin login successful for email=%s  admin_id=%s  is_superadmin=%s", body.email, admin["id"], is_superadmin)
     return {
         "access_token": token,
         "token_type": "bearer",
         "role": "admin",
         "entity_id": str(admin["id"]),
+        "is_superadmin": is_superadmin,
     }
 
 
 @router.post("/admin/create", status_code=status.HTTP_200_OK)
 def admin_create(
     body: CreateAdminRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str]:
+    if not claims.is_superadmin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin access required.")
     password_hash = hash_password(body.password)
     logger.info("Creating new admin with email=%s", body.email)
     resp = (
@@ -89,23 +95,39 @@ def admin_create(
 
 @router.get("/admin/list")
 def admin_list(
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
-) -> list[dict[str, str]]:
-    resp = supabase.table("admins").select("id, email").order("email").execute()
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> list[dict[str, str | bool]]:
+    if not claims.is_superadmin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin access required.")
+    resp = supabase.table("admins").select("id, email, is_superadmin").order("email").execute()
     rows = cast(list[dict[str, object]], resp.data or [])
-    return [{"id": str(row["id"]), "email": str(row["email"])} for row in rows]
+    return [{"id": str(row["id"]), "email": str(row["email"]), "is_superadmin": bool(row.get("is_superadmin", False))} for row in rows]
 
 
 @router.put("/admin/{admin_id}", status_code=status.HTTP_200_OK)
 def admin_update(
     admin_id: str,
     body: UpdateAdminRequest,
-    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+    claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str]:
-    trimmed = body.email.strip().lower()
+    if not claims.is_superadmin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin access required.")
+    patch: dict[str, Any] = {}
+    if body.email is not None:
+        patch["email"] = body.email.strip().lower()
+    if body.password is not None:
+        if len(body.password) < 8:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters.")
+        patch["password_hash"] = hash_password(body.password)
+    if body.is_superadmin is not None:
+        if admin_id == claims.sub and body.is_superadmin is False:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove your own super admin status.")
+        patch["is_superadmin"] = body.is_superadmin
+    if not patch:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update.")
     resp = (
         supabase.table("admins")
-        .update({"email": trimmed})
+        .update(patch)
         .eq("id", admin_id)
         .execute()
     )
@@ -115,7 +137,7 @@ def admin_update(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Admin not found.",
         )
-    return {"admin_id": admin_id, "email": trimmed}
+    return {"admin_id": admin_id}
 
 
 @router.delete("/admin/{admin_id}", status_code=status.HTTP_200_OK)
@@ -123,6 +145,8 @@ def admin_delete(
     admin_id: str,
     claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
 ) -> dict[str, str]:
+    if not claims.is_superadmin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin access required.")
     if admin_id == claims.sub:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
