@@ -301,8 +301,9 @@ Expected suggestions:
   • Change same-class-same-room from hard to soft.
   • Reduce required room buffer or make that rule softer.
 
-All defaults (professor_availability=hard, student_availability=hard,
-same_class_same_room=hard) must be left unchanged for the failures to appear.
+For the failures to appear, run with professor_availability=hard,
+student_availability=hard, and same_class_same_room=hard (student_availability
+now defaults to soft, so flip it back to hard before running this scenario).
 """)
 
 
