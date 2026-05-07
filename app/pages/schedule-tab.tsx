@@ -592,6 +592,10 @@ export default function ScheduleTab({
       }, authHeaders);
       setRoomsAvailable(pendingRooms);
       setPendingRooms(null);
+      // Reducing rooms server-side unschedules presentations whose
+      // temporary_room is now out of range — refetch so the local
+      // presentations state reflects those clears.
+      await fetchScheduleData(selectedSymposiumId);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to update rooms.");
     } finally {

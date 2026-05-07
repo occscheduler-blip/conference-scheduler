@@ -31,6 +31,7 @@ SEED_SCRIPTS: list[str] = [
     "seed_medium_symposium.py",
     "seed_large_symposium.py",
     "seed_massive_symposium.py",
+    "seed_uniform_symposium.py"
 ]
 
 

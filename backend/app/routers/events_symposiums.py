@@ -135,7 +135,66 @@ def update_symposium(
                     )
                 timeframes_inserted = len(rows)
 
-        records_deleted = {"timeframes": deleted_timeframes}
+                # Reducing rooms_available or shrinking/changing the symposium
+                # timeframes leaves orphan draft assignments that no longer
+                # fit. Unschedule them so the manual scheduler doesn't render
+                # them into CSS Grid implicit columns past the rightmost room
+                # or as blocks floating outside the day grid — the user can
+                # re-place them from the Unscheduled panel.
+                cur.execute(
+                    """
+                    SELECT p.id
+                    FROM public.presentations p
+                    JOIN public.classes c ON p.class_id = c.id
+                    JOIN public.departments d ON c.department_id = d.id
+                    LEFT JOIN public.temporary_timeframes tt ON tt.linked_id = p.id
+                    WHERE d.symposium_id = %(sym_id)s
+                      AND (
+                        (p.temporary_room IS NOT NULL AND p.temporary_room >= %(rooms)s)
+                        OR (
+                          tt.id IS NOT NULL
+                          AND NOT EXISTS (
+                            SELECT 1 FROM public.timeframes sym_tf
+                            WHERE sym_tf.linked_id = %(sym_id)s
+                              AND tt.start_time >= sym_tf.start_time
+                              AND tt.end_time <= sym_tf.end_time
+                          )
+                        )
+                      )
+                    GROUP BY p.id
+                    """,
+                    {
+                        "sym_id": str(payload.symposium_id),
+                        "rooms": payload.rooms_available,
+                    },
+                )
+                stale_presentation_ids = [row[0] for row in cur.fetchall()]
+                if stale_presentation_ids:
+                    cur.execute(
+                        "UPDATE public.presentations SET temporary_room = NULL"
+                        " WHERE id = ANY(%s)",
+                        (stale_presentation_ids,),
+                    )
+                    presentations_unscheduled = cur.rowcount or 0
+                    cur.execute(
+                        "DELETE FROM public.temporary_timeframes"
+                        " WHERE linked_id = ANY(%s)",
+                        (stale_presentation_ids,),
+                    )
+                    deleted_temporary_timeframes = cur.rowcount or 0
+                    logger.info(
+                        "update_symposium: %s — unscheduled %d presentation(s) whose room or time no longer fits",
+                        payload.symposium_id, presentations_unscheduled,
+                    )
+                else:
+                    presentations_unscheduled = 0
+                    deleted_temporary_timeframes = 0
+
+        records_deleted = {
+            "timeframes": deleted_timeframes,
+            "temporary_timeframes": deleted_temporary_timeframes,
+        }
+        records_updated["presentations"] = presentations_unscheduled
         records_inserted = {"timeframes": timeframes_inserted}
 
         return {
