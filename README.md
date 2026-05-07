@@ -9,7 +9,7 @@
 
 ---
 
-![Schedule grid](docs/schedule-screenshot.jpeg)
+![Schedule grid](schedule-screenshot.jpeg)
 
 ---
 
@@ -122,7 +122,6 @@ cp .env.example .env.local
 
 ```env
 BACKEND_URL=http://localhost:8000
-BACKEND_API_KEY=any-secret-you-choose
 ```
 
 ### 3 — Set up the backend Python environment
@@ -181,12 +180,15 @@ Full list of backend environment variables:
 | `SUPABASE_URL` | Yes | — | Supabase project URL |
 | `SUPABASE_KEY` | Yes | — | Supabase service role key |
 | `JWT_SECRET_KEY` | Yes | — | HS256 signing secret |
-| `SUPABASE_DB_URL` | Tests only | — | Direct PostgreSQL URL |
-| `RESEND_API_KEY` | No | — | Email OTP delivery |
-| `RESEND_FROM` | No | `noreply@hamilton.edu` | OTP sender address |
+| `SUPABASE_DB_URL` | Tests only | — | Direct PostgreSQL URL (used by `tests/db_helper.py`) |
+| `RESEND_API_KEY` | No | — | Email OTP delivery; if unset, OTPs are logged at WARNING instead of sent |
+| `RESEND_FROM` | No | `noreply@hamilton.edu` | OTP sender address (must be a Resend-verified domain) |
 | `BACKEND_CORS_ORIGINS` | No | `http://localhost:3000` | Comma-separated allowed origins |
+| `SITE_URL` | No | first CORS origin | Public frontend URL embedded in OTP emails |
 | `JWT_TTL_HOURS` | No | `24` | Token lifetime |
+| `APP_NAME` | No | `Conference Scheduler API` | Title shown in Swagger |
 | `APP_ENV` | No | `development` | Environment label |
+| `APP_PORT` | No | `8000` | Server port (uvicorn `--port` overrides) |
 
 ### 6 — Create the first admin user
 
@@ -321,23 +323,49 @@ conference-scheduler/
 │       └── __tests__/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py             # FastAPI app, CORS
+│   │   ├── main.py             # FastAPI app, CORS, request logging, health + diagnostics
 │   │   ├── config.py           # Env var schema (Pydantic Settings)
+│   │   ├── request_context.py  # Per-request id middleware + log filter
+│   │   ├── utils.py            # force_uuid helper
 │   │   ├── auth/               # JWT, bcrypt, OTP, Resend email
-│   │   ├── routers/            # API route handlers (one file per entity)
+│   │   │   ├── password.py      # hash_password / verify_password (bcrypt)
+│   │   │   ├── jwt_utils.py     # encode_jwt / decode_jwt, JWTClaims
+│   │   │   ├── dependencies.py  # require_jwt() FastAPI dependency factory
+│   │   │   ├── otp.py           # OTP generation + verification
+│   │   │   └── email.py         # OTP email delivery (Resend)
+│   │   ├── routers/            # API route handlers, split by entity
+│   │   │   ├── events.py            # Aggregator: imports + mounts the per-entity routers below
+│   │   │   ├── events_symposiums.py # /add_symposium, /update_symposium, /delete_symposium, /symposiums
+│   │   │   ├── events_departments.py# /add_department, /update_department, /delete_department, /departments
+│   │   │   ├── events_classes.py    # /add_class, /update_class, /delete_class, /classes
+│   │   │   ├── events_people.py     # students + professors + requests CRUD
+│   │   │   ├── events_presentations.py # presentation CRUD + buffers
+│   │   │   ├── events_timeframes.py # /update_timeframes, /timeframes
+│   │   │   ├── events_scheduler.py  # /schedule, /schedule/apply-debug, /schedule_job/{id},
+│   │   │   │                        # /publish_schedule, /update_schedule_assignment,
+│   │   │   │                        # /bulk_update_schedule_assignments, /temporary_timeframes
+│   │   │   ├── events_emails.py     # /email_symposium, /email_classes, /email_students
+│   │   │   ├── events_helpers.py    # Shared validators / helpers used across the event routers
+│   │   │   ├── auth.py              # Admin login + admin mgmt + OTP + attendee register/itinerary
+│   │   │   └── request_schemas.py   # Pydantic request models
 │   │   ├── scheduler/          # CP-SAT optimizer
 │   │   │   ├── models.py        # Pure-Python dataclasses + ScheduleConstraints
 │   │   │   ├── cp_sat.py        # Flat OR-Tools CP-SAT solver (small/medium symposia)
 │   │   │   ├── cp_sat_helpers.py # Window utilities + parallel exhaustive debug probe
 │   │   │   ├── hierarchical.py  # Class-block decomposition solver (300+ presentations)
+│   │   │   ├── conflicts.py     # Conflict detection used by manual schedule edits
 │   │   │   └── service.py       # Loads DB data → builds problem → dispatches solver → saves result
-│   │   └── supabase_io/         # DB layer (read, write, delete, nested_read)
+│   │   └── supabase_io/         # DB layer (read, write, delete, nested_read, locks)
 │   ├── scripts/
-│   │   ├── create_admin.py         # Bootstrap script (plain admin)
-│   │   ├── create_superadmin.py    # Bootstrap script (super admin / promote existing)
-│   │   ├── seed_*_symposium.py     # Demo data: debug, small, medium, large, massive
-│   │   └── seed_all_symposia.py    # Wipe + reseed every demo symposium
-│   ├── tests/                  # Integration tests (real local Supabase)
+│   │   ├── create_admin.py                   # Bootstrap script (plain admin)
+│   │   ├── create_superadmin.py              # Bootstrap script (super admin / promote existing)
+│   │   ├── repair_out_of_window_assignments.py # One-off cleanup for stale assignments
+│   │   ├── seed_symposium.py                 # Generic seeder
+│   │   ├── seed_{debug,small,medium,large,large_failing,massive,uniform}_symposium.py # Demo data
+│   │   └── seed_all_symposia.py              # Wipe + reseed every demo symposium
+│   ├── tests/                  # Integration tests (real local Supabase) + builders.py + TESTS.md
+│   ├── desktop_main.py         # PyInstaller entry point for the bundled backend
+│   ├── desktop.spec            # PyInstaller spec
 │   ├── requirements.txt
 │   └── Makefile                # make test → mypy + pytest
 ├── supabase/
@@ -349,10 +377,7 @@ conference-scheduler/
 ├── scripts/                    # Desktop build helpers
 │   ├── build-desktop-frontend.mjs  # Static-export wrapper
 │   └── copy-sidecar.mjs            # Copies PyInstaller output to src-tauri/binaries/
-├── docs/                       # Architecture diagrams and walkthroughs
 ├── public/                     # Static assets (incl. desktop loader splash)
-├── backend/desktop_main.py     # PyInstaller entry point for the bundled backend
-├── backend/desktop.spec        # PyInstaller spec
 ├── package.json
 ├── .env.example                # Frontend env template
 ├── CITATIONS.md
