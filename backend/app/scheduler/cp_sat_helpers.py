@@ -74,8 +74,7 @@ def _eligible_starts(
     each window's own start (matches earlier behaviour); pass it explicitly
     when the model converts datetimes back to slot indices via
     ``(t - base_time) / step`` so slot truncation can never silently shift
-    a candidate before the window opens.
-    """
+    a candidate before the window opens. """
     starts: list[datetime] = []
     duration = timedelta(minutes=presentation.duration_minutes)
     step = timedelta(minutes=slot_minutes)
