@@ -1708,7 +1708,7 @@ export default function ScheduleTab({
               </div>
 
               {/* Footer */}
-              <div className="shrink-0 flex flex-wrap gap-3 border-t border-gray-100 px-5 py-3">
+              <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3">
                 <button
                   type="button"
                   onClick={() => { setSchedulerFailure(null); void handleRunScheduler(true); }}
@@ -1717,19 +1717,24 @@ export default function ScheduleTab({
                 >
                   {isRunningScheduler ? "Re-running..." : "Re-run scheduler"}
                 </button>
-                <div className="group relative">
-                  <button
-                    type="button"
-                    onClick={() => { setSchedulerFailure(null); void handleRunScheduler(true, true); }}
-                    disabled={isRunningScheduler}
-                    className="rounded-lg bg-[#7c4f00] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#5e3b00] disabled:opacity-50"
-                  >
-                    {isRunningScheduler ? "Analyzing..." : "Run Debugger"}
-                  </button>
-                  <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-64 rounded-lg bg-gray-900 px-3 py-2 text-xs text-white shadow-lg group-hover:block">
-                    Tests every combination of hard/soft constraints (up to 10 min) to find the settings that schedule the most presentations.
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  title="Tests every combination of hard/soft constraints to find the settings that schedule the most presentations. Large symposia can take 10–15 minutes."
+                  onClick={async () => {
+                    const classCount = new Set(presentations.map((p) => p.class_id).filter(Boolean)).size;
+                    const isLargeRun = presentations.length > 100 || classCount > 15;
+                    const message = isLargeRun
+                      ? `This is a large symposium (${presentations.length} presentations across ${classCount} classes). The debugger will test every combination of hard/soft constraints — expect 10–15 minutes. Continue?`
+                      : "The debugger tests every combination of hard/soft constraints to find settings that schedule the most presentations. This usually finishes in under a minute. Continue?";
+                    if (!(await confirmDialog(message, "Run Debugger"))) return;
+                    setSchedulerFailure(null);
+                    void handleRunScheduler(true, true);
+                  }}
+                  disabled={isRunningScheduler}
+                  className="rounded-lg bg-[#b45309] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#92400e] disabled:opacity-50"
+                >
+                  {isRunningScheduler ? "Analyzing..." : "Run Debugger"}
+                </button>
                 <button
                   type="button"
                   onClick={() => setSchedulerFailure(null)}

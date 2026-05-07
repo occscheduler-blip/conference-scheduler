@@ -364,7 +364,12 @@ def build_schedule_for_symposium(
     if debug_mode and result.unscheduled_presentations:
         from .cp_sat_helpers import _run_exhaustive_debug
 
-        probe_hints, debug_best_assignments = _run_exhaustive_debug(problem, len(result.unscheduled_presentations), total_time_budget=540.0)
+        # Hierarchical probes run the full phase 1+2+3+5 pipeline per combo
+        # at num_search_workers=1 (for RAM safety) and need more wall time
+        # than flat probes to converge. With parallel_cap=2 and ~50 s per
+        # probe, 31 combos take ~13 min worst case.
+        debug_total_budget = 1500.0 if _should_use_hierarchical(problem) else 540.0
+        probe_hints, debug_best_assignments = _run_exhaustive_debug(problem, len(result.unscheduled_presentations), total_time_budget=debug_total_budget)
         result = ScheduleResult(
             status=result.status,
             assignments=result.assignments,

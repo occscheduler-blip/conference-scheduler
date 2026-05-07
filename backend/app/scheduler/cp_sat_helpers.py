@@ -236,9 +236,9 @@ def _run_exhaustive_debug(
     configuration that schedules the most presentations.
 
     All combos run concurrently in a thread pool.  CP-SAT releases the GIL so
-    threads genuinely run in parallel.  Each probe uses num_search_workers=1 to
-    avoid CPU thrashing: N parallel probes × 1 worker ≈ same CPU as 1 probe × N
-    workers, but wall time is ~N× faster.
+    threads genuinely run in parallel.  Each flat probe uses num_search_workers=1
+    to avoid CPU thrashing.  Hierarchical probes run CP-SAT at default parallelism
+    inside place_blocks, so we cap thread-pool fan-out lower for that path.
 
     The best result is chosen by (1) fewest unscheduled, then (2) fewest
     relaxations (prefer the minimal constraint change).
@@ -246,6 +246,9 @@ def _run_exhaustive_debug(
 
     if current_unscheduled == 0:
         return (), ()
+
+    # Deferred import to avoid the circular service ↔ cp_sat_helpers cycle.
+    from .service import _should_use_hierarchical, build_problem_from_symposium
 
     # Only hard constraints are candidates for relaxation. Each probe turns one
     # or more of them soft and re-runs the normal solver on that variant.
@@ -268,10 +271,20 @@ def _run_exhaustive_debug(
     n = len(hard_constraints)
     n_combos = 2 ** n - 1  # exclude the all-hard case already run
 
-    # Each probe gets 1 search worker; cap probe time at 30 s but ensure at
-    # least 10 s.  With parallel execution the wall time ≈ time_per_probe, not
-    # n_combos × time_per_probe.
-    time_per_probe = max(10.0, min(30.0, total_time_budget / n_combos))
+    use_hierarchical = _should_use_hierarchical(problem)
+
+    # Hierarchical probes run the full phase 1+2+3+5 pipeline with default
+    # CP-SAT parallelism, so each probe needs more wall time and fewer of them
+    # should run concurrently to avoid CPU oversubscription. Flat probes are
+    # lighter (single CP-SAT model, num_search_workers=1) so we keep the
+    # original budget.
+    if use_hierarchical:
+        # Each hierarchical probe runs CP-SAT with num_search_workers=1 to
+        # contain RAM, so it converges 3–4× slower than a default-parallelism
+        # solve. Compensate by giving each probe more wall time.
+        time_per_probe = max(40.0, min(90.0, total_time_budget / n_combos))
+    else:
+        time_per_probe = max(10.0, min(30.0, total_time_budget / n_combos))
 
     # Build all combos ordered by number of relaxations (fewest first) so that
     # when we pick among equally-good results we favour the minimal change.
@@ -283,12 +296,33 @@ def _run_exhaustive_debug(
     total_presentations = len(problem.presentations)
 
     def _probe(relaxed_attrs: dict[str, str]) -> tuple[dict[str, str], ScheduleResult]:
-        """Run one solver probe with a selected set of hard constraints relaxed."""
-        relaxed_problem = replace(problem, constraints=replace(problem.constraints, **cast(Any, relaxed_attrs)))
-        try:
-            from .cp_sat import solve_schedule
+        """Run one solver probe with a selected set of hard constraints relaxed.
 
-            result = solve_schedule(relaxed_problem, time_limit_seconds=time_per_probe, num_search_workers=1)
+        We rebuild the problem from the symposium id rather than using
+        dataclasses.replace on the existing problem because hard prof/student
+        windows are split into resource_windows vs soft_resource_windows during
+        problem construction, and hierarchical phase 1 bakes the hard windows
+        into block formation. Re-bucketing inline would duplicate that logic.
+        """
+        relaxed_constraints = replace(problem.constraints, **cast(Any, relaxed_attrs))
+        try:
+            relaxed_problem = build_problem_from_symposium(
+                symposium_id=problem.symposium_id,
+                slot_minutes=problem.slot_minutes,
+                constraints=relaxed_constraints,
+            )
+            if _should_use_hierarchical(relaxed_problem):
+                from .hierarchical import solve_hierarchical
+
+                result = solve_hierarchical(
+                    relaxed_problem,
+                    time_limit_seconds=time_per_probe,
+                    num_search_workers=1,
+                )
+            else:
+                from .cp_sat import solve_schedule
+
+                result = solve_schedule(relaxed_problem, time_limit_seconds=time_per_probe, num_search_workers=1)
             return relaxed_attrs, result
         except Exception:
             logger.debug("Exhaustive probe failed for %s", relaxed_attrs, exc_info=True)
@@ -298,9 +332,14 @@ def _run_exhaustive_debug(
                 unscheduled_presentations=tuple(p.id for p in problem.presentations),
             )
 
-    # Use min(n_combos, 8) workers — enough to saturate a typical server without
-    # spawning an unreasonable number of threads.
-    max_workers = min(n_combos, 8)
+    # Cap concurrency. Flat probes are tiny — 8 wide is fine. Hierarchical
+    # probes each rebuild the full ScheduleProblem and run a multi-phase
+    # CP-SAT pipeline; even with num_search_workers=1, two probes in flight
+    # still cap RAM at roughly 2× a single hierarchical solve. A previous run
+    # with cap=4 + default 4-worker CP-SAT inside place_blocks ate ~17 GB on
+    # a 102-presentation symposium and OOM-killed the worker.
+    parallel_cap = 2 if use_hierarchical else 8
+    max_workers = min(n_combos, parallel_cap)
     probe_results: list[tuple[dict[str, str], ScheduleResult]] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:

@@ -315,7 +315,10 @@ def _block_to_department(
 
 
 def place_blocks(
-    blocks: list[ClassBlock], problem: ScheduleProblem, time_limit_seconds: float
+    blocks: list[ClassBlock],
+    problem: ScheduleProblem,
+    time_limit_seconds: float,
+    num_search_workers: int = 4,
 ) -> tuple[list[PlacedBlock], list[ClassBlock], str]:
     """Phase 2: assign each block to a (room, start_slot) using CP-SAT.
 
@@ -810,7 +813,7 @@ def place_blocks(
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
-    solver.parameters.num_search_workers = 4
+    solver.parameters.num_search_workers = num_search_workers
 
     t0 = time.perf_counter()
     status = solver.Solve(model)
@@ -1127,7 +1130,9 @@ def verify_assignments_split(
 
 
 def solve_hierarchical(
-    problem: ScheduleProblem, time_limit_seconds: float = 30.0
+    problem: ScheduleProblem,
+    time_limit_seconds: float = 30.0,
+    num_search_workers: int = 4,
 ) -> ScheduleResult:
     """Run the full pipeline end-to-end and return a ScheduleResult."""
     t_total = time.perf_counter()
@@ -1149,7 +1154,7 @@ def solve_hierarchical(
     )
 
     placed, unscheduled_blocks, status_label = place_blocks(
-        blocks, problem, time_limit_seconds
+        blocks, problem, time_limit_seconds, num_search_workers=num_search_workers
     )
 
     if status_label == "infeasible":
@@ -1192,11 +1197,88 @@ def solve_hierarchical(
         unscheduled_pres.extend(block.presentation_ids)
 
     diagnostics: list[str] = []
+    suggestions: list[str] = []
     if unscheduled_pres:
         diagnostics.append(
             f"{len(unscheduled_pres)} presentation(s) across "
             f"{len(unscheduled_blocks)} class block(s) could not be placed."
         )
+
+        # Per-block root-cause analysis. Two common failure shapes:
+        #   (1) The class needs more contiguous time than any single window where
+        #       every class-professor is available. Softening
+        #       professor_availability or same_class_same_room unblocks it.
+        #   (2) The block fits in some window in isolation but couldn't share
+        #       rooms with the rest of the schedule. Adding rooms or extending
+        #       the symposium helps.
+        pres_by_id = {p.id: p for p in problem.presentations}
+        narrow_window_blocks = 0
+        capacity_blocks = 0
+        max_examples = 5
+        examples_emitted = 0
+        for block in unscheduled_blocks:
+            longest_window_min = max(
+                ((w.end - w.start).total_seconds() / 60.0 for w in block.allowed_windows),
+                default=0.0,
+            )
+            first_pres = pres_by_id.get(block.presentation_ids[0]) if block.presentation_ids else None
+            anchor = first_pres.title if first_pres and first_pres.title else (
+                first_pres.id if first_pres else "unknown"
+            )
+            if block.total_minutes > longest_window_min:
+                narrow_window_blocks += 1
+                if examples_emitted < max_examples:
+                    diagnostics.append(
+                        f'Class containing "{anchor}" needs {int(block.total_minutes)} min '
+                        f"of contiguous time but the longest window where all class professors "
+                        f"are available is only {int(longest_window_min)} min "
+                        f"({len(block.presentation_ids)} presentation(s) in this class)."
+                    )
+                    examples_emitted += 1
+            else:
+                capacity_blocks += 1
+                if examples_emitted < max_examples:
+                    diagnostics.append(
+                        f'Class containing "{anchor}" could not be placed in any room '
+                        f"without conflicting with other class blocks "
+                        f"({len(block.presentation_ids)} presentation(s) in this class)."
+                    )
+                    examples_emitted += 1
+        if narrow_window_blocks + capacity_blocks > examples_emitted:
+            diagnostics.append(
+                f"… and {narrow_window_blocks + capacity_blocks - examples_emitted} more "
+                f"class block(s) with similar issues."
+            )
+
+        # Actionable suggestions. The frontend's failure popup matches against
+        # the strings "professor availability", "same class", "student
+        # availability", "buffer", and "room" to show the matching Quick
+        # Actions controls — keep those phrasings.
+        if narrow_window_blocks > 0:
+            suggestions.append(
+                "Try changing professor availability from Hard to Soft. With it Hard, every "
+                "presentation in a class must land inside the intersection of all class "
+                "professors' availability windows; softening lets the solver place outside "
+                "that intersection when needed."
+            )
+            suggestions.append(
+                "Try changing same class → same room from Hard to Soft. With it Hard, all "
+                "of a class's presentations must share a single room — when any one "
+                "professor's window is shorter than the class's total run-time, the class "
+                "can't fit. Soft mode lets the class split across rooms."
+            )
+        if capacity_blocks > 0:
+            suggestions.append(
+                "Add more rooms or extend the symposium window — some class blocks have no "
+                "free room/time slot left after the others were placed."
+            )
+        # Reducing the per-presentation buffer often unblocks tight class
+        # blocks even without changing constraint modes.
+        if narrow_window_blocks > 0:
+            suggestions.append(
+                "Reduce the per-presentation buffer to shrink each class's total run-time."
+            )
+
     # Soft warnings (e.g. a student scheduled outside their stated window) are
     # passed through as diagnostics — the schedule is structurally sound, but
     # the admin should review these and either adjust the student's window or
@@ -1225,4 +1307,5 @@ def solve_hierarchical(
         assignments=assignments,
         unscheduled_presentations=tuple(unscheduled_pres),
         diagnostics=tuple(diagnostics),
+        suggestions=tuple(suggestions),
     )
