@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import type { CalendarDay, SavedProfessorRequest, StudentOption, StudentTab } from "./types";
 import {
   totalSlots,
-  formatTimeLabel,
   buildCalendarFromTimeframes,
   toBackendDateTime,
+  toErrorMessage,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut } from "../lib/api";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
+import { AvailabilityGrid } from "../components/AvailabilityGrid";
 
 // Renders the student page and manages its data and interactions.
 export default function StudentPage({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
@@ -69,7 +70,7 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
         }
       } catch (error) {
         if (ignore) return;
-        const message = error instanceof Error ? error.message : "Unknown error";
+        const message = toErrorMessage(error);
         setIdentityMessage(message);
         setStudentOptions([]);
         setSelectedStudentId("");
@@ -198,7 +199,7 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
         setCalendarMessage(nextCalendarDays.length === 0 ? "No symposium dates are configured yet." : "");
       } catch (error) {
         if (ignore) return;
-        const message = error instanceof Error ? error.message : "Unknown error";
+        const message = toErrorMessage(error);
         setStudentName("");
         setSymposiumName("");
         setClassName("");
@@ -264,7 +265,7 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
       setPreferredProfessorName("");
       setPreferredProfessorEmail("");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setPreferencesMessage(`Save failed: ${message}`);
     } finally {
       setSavingPreferences(false);
@@ -328,7 +329,7 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
       }, authHeaders);
       setAvailabilityMessage(`Saved ${timeframes.length} availability slot${timeframes.length === 1 ? "" : "s"}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setAvailabilityMessage(`Save failed: ${message}`);
     } finally {
       setSavingAvailability(false);
@@ -450,55 +451,14 @@ export default function StudentPage({ token, onSignOut, entityId }: { token: str
                 </div>
               )}
               <div className="w-full overflow-x-auto rounded-xl border border-[#cfcfcf] bg-white p-3">
-                <div className="min-w-[720px] select-none">
-                  <div
-                    className="grid text-center text-2xl font-bold text-[#222]"
-                    style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
-                  >
-                    <div />
-                    {weekPagination.visibleDayIndices.map((di) => (
-                      <div key={calendarDays[di].key} className="border-b border-[#777] pb-1 text-sm md:text-lg">
-                        {calendarDays[di].label}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div
-                    className="grid"
-                    style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
-                  >
-                    {Array.from({ length: totalSlots }, (_, slotIndex) => (
-                      <div key={slotIndex} className="contents">
-                        <div className="h-6 overflow-hidden pr-2 text-right text-sm leading-6 font-semibold text-[#444]">
-                          {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
-                        </div>
-
-                        {weekPagination.visibleDayIndices.map((dayIndex) => {
-                          const day = calendarDays[dayIndex];
-                          const available = availability[dayIndex]?.[slotIndex] ?? false;
-                          const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
-                          const showHourLine = slotIndex % 4 === 0;
-                          return (
-                            <button
-                              key={`${dayIndex}-${slotIndex}`}
-                              type="button"
-                              onMouseDown={() => handleCellMouseDown(dayIndex, slotIndex)}
-                              onMouseEnter={() => handleCellMouseEnter(dayIndex, slotIndex)}
-                              onDragStart={(event) => event.preventDefault()}
-                              disabled={!editable}
-                              className={`h-6 border-r border-l border-b border-[#333] ${
-                                showHourLine ? "border-t border-t-[#333]" : ""
-                              } ${
-                                !editable ? "cursor-not-allowed bg-[#d1d5db]" : available ? "bg-[#38a000]" : "bg-[#f0d7d9]"
-                              }`}
-                              aria-label={`${day.label} ${formatTimeLabel(slotIndex)}`}
-                            />
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <AvailabilityGrid
+                  calendarDays={calendarDays}
+                  availability={availability}
+                  editableSlots={editableSlots}
+                  weekPagination={weekPagination}
+                  handleCellMouseDown={handleCellMouseDown}
+                  handleCellMouseEnter={handleCellMouseEnter}
+                />
               </div>
               {calendarMessage ? <p className="mt-3 text-sm font-semibold text-[#9a1f1f]">{calendarMessage}</p> : null}
               <div className="mt-4 flex items-center gap-4">

@@ -114,7 +114,6 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
 
 def delete_professor(prof_id: UUID | list[UUID]) -> dict[str, int]:
     logger.info("DELETE professor: prof_id=%s", prof_id)
-    # TODO: What to do when the last professor in a class/presentation is removed?
     # Note: requests are linked to students (not professors) — no requests cleanup needed here.
     prof_ids = _to_uuid_list(prof_id)
     counts: dict[str, int] = {"professors": 0, "timeframes": 0}

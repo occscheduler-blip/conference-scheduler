@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toErrorMessage } from "../lib/utils";
 
 type HealthResponse = {
   status: string;
@@ -24,7 +25,7 @@ export function BackendStatus() {
         const data: HealthResponse = await response.json();
         setHealth(data);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
+        const message = toErrorMessage(err);
         setError(message);
       }
     }

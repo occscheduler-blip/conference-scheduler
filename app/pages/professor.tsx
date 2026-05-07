@@ -10,17 +10,18 @@ import type {
 } from "./types";
 import {
   totalSlots,
-  formatTimeLabel,
   normalizeId,
   parseCsvLine,
   isUuid,
   buildCalendarFromTimeframes,
   toBackendDateTime,
+  toErrorMessage,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut, apiDelete } from "../lib/api";
 import { confirmDialog } from "../lib/dialog";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
+import { AvailabilityGrid } from "../components/AvailabilityGrid";
 
 // Renders the professor page and manages its data and interactions.
 function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
@@ -125,7 +126,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         }
       } catch (error) {
         if (ignore) return;
-        const message = error instanceof Error ? error.message : "Unknown error";
+        const message = toErrorMessage(error);
         setIdentityMessage(message);
         setProfessorOptions([]);
         setSelectedProfessorId("");
@@ -276,7 +277,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         setCalendarMessage(nextCalendarDays.length === 0 ? "No symposium dates are configured yet." : "");
       } catch (error) {
         if (ignore) return;
-        const message = error instanceof Error ? error.message : "Unknown error";
+        const message = toErrorMessage(error);
         setIdentityMessage(message);
         setSymposiumName("");
         setUploadedStudents([]);
@@ -357,7 +358,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       }, authHeaders);
       setAvailabilityMessage(`Saved ${timeframes.length} availability slot${timeframes.length === 1 ? "" : "s"}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setAvailabilityMessage(`Save failed: ${message}`);
     } finally {
       setSavingAvailability(false);
@@ -443,7 +444,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setCsvFile(null);
       if (csvInputRef.current) csvInputRef.current.value = "";
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
         setCsvMessage("CSV upload failed: backend is unreachable at http://localhost:8000.");
       } else {
@@ -486,7 +487,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setManualStudentEmail("");
       setManualStudentMessage(`Added ${name}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setManualStudentMessage(`Add failed: ${message}`);
     } finally {
       setManualStudentSubmitting(false);
@@ -516,7 +517,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     } catch (error) {
       setUploadedStudents(previousStudents);
       setSelectedUploadedStudentKeys(previousSelectedKeys);
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setCsvMessage(`Delete failed: ${message}`);
     } finally {
       setDeletingStudentIds((current) => current.filter((id) => id !== studentId));
@@ -629,7 +630,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       removePresentationGroupFromUi(group.id, source);
       setEmailMessage("Deleted presentation group.");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setEmailMessage(`Delete failed: ${message}`);
     } finally {
       setDeletingPresentationGroupIds((current) => current.filter((id) => id !== group.id));
@@ -707,7 +708,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setEmailMessage("Presentation updated.");
       cancelEditDeployedPresentation();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setEmailMessage(`Save failed: ${message}`);
     } finally {
       setSavingEditedPresentationId(null);
@@ -804,7 +805,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       }
       setEmailMessage(`Saved ${insertedCount} presentation${insertedCount === 1 ? "" : "s"} and emailed ${emailCount} student${emailCount === 1 ? "" : "s"}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setEmailMessage(`Failed: ${message}`);
     } finally {
       setDeployingPresentations(false);
@@ -915,55 +916,14 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                 </div>
               )}
               <div className="w-full overflow-x-auto rounded-xl border border-[#cfcfcf] bg-white p-3">
-                <div className="min-w-[720px] select-none">
-                  <div
-                    className="grid text-center text-2xl font-bold text-[#222]"
-                    style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
-                  >
-                    <div />
-                    {weekPagination.visibleDayIndices.map((di) => (
-                      <div key={calendarDays[di].key} className="border-b border-[#777] pb-1 text-sm md:text-lg">
-                        {calendarDays[di].label}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div
-                    className="grid"
-                    style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
-                  >
-                    {Array.from({ length: totalSlots }, (_, slotIndex) => (
-                      <div key={slotIndex} className="contents">
-                        <div className="h-6 overflow-hidden pr-2 text-right text-sm leading-6 font-semibold text-[#444]">
-                          {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
-                        </div>
-
-                        {weekPagination.visibleDayIndices.map((dayIndex) => {
-                          const day = calendarDays[dayIndex];
-                          const available = availability[dayIndex]?.[slotIndex] ?? false;
-                          const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
-                          const showHourLine = slotIndex % 4 === 0;
-                          return (
-                            <button
-                              key={`${dayIndex}-${slotIndex}`}
-                              type="button"
-                              onMouseDown={() => handleCellMouseDown(dayIndex, slotIndex)}
-                              onMouseEnter={() => handleCellMouseEnter(dayIndex, slotIndex)}
-                              onDragStart={(event) => event.preventDefault()}
-                              disabled={!editable}
-                              className={`h-6 border-r border-l border-b border-[#333] ${
-                                showHourLine ? "border-t border-t-[#333]" : ""
-                              } ${
-                                !editable ? "cursor-not-allowed bg-[#d1d5db]" : available ? "bg-[#38a000]" : "bg-[#f0d7d9]"
-                              }`}
-                              aria-label={`${day.label} ${formatTimeLabel(slotIndex)}`}
-                            />
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <AvailabilityGrid
+                  calendarDays={calendarDays}
+                  availability={availability}
+                  editableSlots={editableSlots}
+                  weekPagination={weekPagination}
+                  handleCellMouseDown={handleCellMouseDown}
+                  handleCellMouseEnter={handleCellMouseEnter}
+                />
               </div>
               {calendarMessage ? <p className="mt-3 text-sm font-semibold text-[#9a1f1f]">{calendarMessage}</p> : null}
               <div className="mt-4">

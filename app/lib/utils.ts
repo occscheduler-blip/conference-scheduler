@@ -76,6 +76,16 @@ export function toMessage(detail: unknown, fallback: string): string {
   return fallback;
 }
 
+export function toErrorMessage(error: unknown, fallback = "Unknown error"): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return fallback;
+}
+
+export function isHamiltonEmail(email: string): boolean {
+  return /^[^\s@]+@hamilton\.edu$/i.test(email.trim());
+}
+
 export function normalizeId(value: string) {
   return value.trim().toLowerCase();
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { apiDelete, apiFetch, apiPost, apiPut } from "../lib/api";
+import { toErrorMessage } from "../lib/utils";
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
 import type {
   ClassRecord,
@@ -138,7 +139,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       const rows = await apiFetch<SymposiumOption>("/api/events/symposiums", { headers: authHeaders });
       setSymposiums(rows);
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to load symposia.", "error");
+      showMessage(toErrorMessage(error, "Failed to load symposia."), "error");
     } finally {
       setIsLoading(false);
     }
@@ -158,7 +159,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       setDepartments(rows);
       setSelectedDepartmentId((current) => (rows.some((row) => row.id === current) ? current : rows[0]?.id ?? ""));
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to load departments.", "error");
+      showMessage(toErrorMessage(error, "Failed to load departments."), "error");
       setDepartments([]);
     } finally {
       setIsLoading(false);
@@ -190,7 +191,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
         setDepartmentProfessors([]);
       }
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to load classes.", "error");
+      showMessage(toErrorMessage(error, "Failed to load classes."), "error");
       setClasses([]);
       setDepartmentProfessors([]);
     } finally {
@@ -216,7 +217,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       setProfessors(professorRows);
       setPresentations(presentationRows);
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to load class records.", "error");
+      showMessage(toErrorMessage(error, "Failed to load class records."), "error");
       setStudents([]);
       setProfessors([]);
       setPresentations([]);
@@ -306,7 +307,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
         setSelectedClassId(nextClassId);
       }
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to save class.", "error");
+      showMessage(toErrorMessage(error, "Failed to save class."), "error");
     }
   };
 
@@ -343,7 +344,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       }
       await fetchClassChildren(selectedClassId);
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to save professor.", "error");
+      showMessage(toErrorMessage(error, "Failed to save professor."), "error");
     }
   };
 
@@ -378,7 +379,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       resetStudentForm();
       await fetchClassChildren(selectedClassId);
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to save student.", "error");
+      showMessage(toErrorMessage(error, "Failed to save student."), "error");
     }
   };
 
@@ -429,7 +430,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       resetPresentationForm();
       await fetchClassChildren(selectedClassId);
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : "Failed to save presentation.", "error");
+      showMessage(toErrorMessage(error, "Failed to save presentation."), "error");
     }
   };
 
@@ -440,7 +441,7 @@ export default function ManageRecordsTab({ token }: { token: string }) {
       showMessage(`${label} deleted.`, "success");
       await refreshCurrentScope();
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : `Failed to delete ${label}.`, "error");
+      showMessage(toErrorMessage(error, `Failed to delete ${label}.`), "error");
     }
   };
 

@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { apiFetch, BACKEND_URL } from "./api";
+import { toErrorMessage } from "./utils";
 import type {
   ClassRecord,
   DepartmentRecord,
@@ -234,7 +235,7 @@ export function useSymposiumSchedule(
       });
       setData(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load schedule.");
+      setError(toErrorMessage(err, "Failed to load schedule."));
       setData(null);
     } finally {
       setIsLoading(false);

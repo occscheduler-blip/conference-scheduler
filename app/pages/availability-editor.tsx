@@ -2,17 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, apiPut, ApiError } from "../lib/api";
-import { toBackendDateTime } from "../lib/utils";
+import { toBackendDateTime, toErrorMessage } from "../lib/utils";
 import {
   buildCalendarWithGeometry,
   computeGridGeometry,
-  formatMinutesOfDay,
-  slotIsHourBoundary,
   type GridGeometry,
   type TimeframeLite,
 } from "../lib/useGridGeometry";
 import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
+import { Modal } from "../components/Modal";
+import { AvailabilityGrid } from "../components/AvailabilityGrid";
 import type { CalendarDay } from "./types";
 
 type Props = {
@@ -97,7 +97,7 @@ export default function AvailabilityEditor({
         }
       } catch (error) {
         if (ignore) return;
-        setErrorMessage(error instanceof Error ? error.message : "Failed to load availability.");
+        setErrorMessage(toErrorMessage(error, "Failed to load availability."));
       } finally {
         if (!ignore) setIsLoading(false);
       }
@@ -167,7 +167,7 @@ export default function AvailabilityEditor({
       } else if (error instanceof ApiError && error.isStale()) {
         setErrorMessage("These availability slots were changed by another tab — please reload the editor.");
       } else {
-        setErrorMessage(error instanceof Error ? error.message : "Save failed.");
+        setErrorMessage(toErrorMessage(error, "Save failed."));
       }
     } finally {
       setIsSaving(false);
@@ -175,14 +175,13 @@ export default function AvailabilityEditor({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
+    <Modal
+      onClose={onClose}
+      backdropClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
     >
       <div
         className="grid w-full max-w-5xl overflow-hidden rounded-xl border border-[#d6b676] bg-white shadow-2xl"
         style={{ height: "calc(100vh - 2rem)", gridTemplateRows: "auto minmax(0, 1fr) auto" }}
-        onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3 bg-[#1635a7] px-5 py-3 text-white">
           <div>
@@ -252,57 +251,17 @@ export default function AvailabilityEditor({
 
               {calendarDays.length > 0 ? (
                 <div className="w-full rounded-xl border border-[#cfcfcf] bg-white p-3">
-                  <div className="min-w-[720px] select-none">
-                    <div
-                      className="grid text-center font-bold text-[#222]"
-                      style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
-                    >
-                      <div />
-                      {weekPagination.visibleDayIndices.map((di) => (
-                        <div key={calendarDays[di].key} className="border-b border-[#777] pb-1 text-sm md:text-base">
-                          {calendarDays[di].label}
-                        </div>
-                      ))}
-                    </div>
-                    <div
-                      className="grid"
-                      style={{ gridTemplateColumns: `90px repeat(${weekPagination.visibleDayIndices.length}, minmax(120px, 1fr))` }}
-                    >
-                      {Array.from({ length: geometry.slotsPerDay }, (_, slotIndex) => {
-                        const minuteAtSlot = geometry.gridStartMinutes + slotIndex * geometry.slotMinutes;
-                        const showHourLine = slotIsHourBoundary(geometry, slotIndex);
-                        const labelText = showHourLine ? formatMinutesOfDay(minuteAtSlot) : "";
-                        return (
-                          <div key={slotIndex} className="contents">
-                            <div className="h-6 overflow-hidden pr-2 text-right text-sm leading-6 font-semibold text-[#444]">
-                              {labelText}
-                            </div>
-                            {weekPagination.visibleDayIndices.map((dayIndex) => {
-                              const day = calendarDays[dayIndex];
-                              const available = availability[dayIndex]?.[slotIndex] ?? false;
-                              const editable = editableSlots[dayIndex]?.[slotIndex] ?? false;
-                              return (
-                                <button
-                                  key={`${dayIndex}-${slotIndex}`}
-                                  type="button"
-                                  onMouseDown={() => handleCellMouseDown(dayIndex, slotIndex)}
-                                  onMouseEnter={() => handleCellMouseEnter(dayIndex, slotIndex)}
-                                  onDragStart={(event) => event.preventDefault()}
-                                  disabled={!editable}
-                                  className={`h-6 border-r border-l border-b border-[#333] ${
-                                    showHourLine ? "border-t border-t-[#333]" : ""
-                                  } ${
-                                    !editable ? "cursor-not-allowed bg-[#d1d5db]" : available ? "bg-[#38a000]" : "bg-[#f0d7d9]"
-                                  }`}
-                                  aria-label={`${day.label} ${formatMinutesOfDay(minuteAtSlot)}`}
-                                />
-                              );
-                            })}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <AvailabilityGrid
+                    calendarDays={calendarDays}
+                    availability={availability}
+                    editableSlots={editableSlots}
+                    geometry={geometry}
+                    weekPagination={weekPagination}
+                    handleCellMouseDown={handleCellMouseDown}
+                    handleCellMouseEnter={handleCellMouseEnter}
+                    dayHeaderClassName=""
+                    dayHeaderCellClassName="text-sm md:text-base"
+                  />
                 </div>
               ) : null}
             </>
@@ -329,6 +288,6 @@ export default function AvailabilityEditor({
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

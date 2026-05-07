@@ -5,6 +5,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import type { DepartmentOption, ProfessorRow, SavedClass } from "./types";
 import { apiFetch, apiPost, apiPut, apiDelete, BACKEND_URL } from "../lib/api";
 import { confirmDialog } from "../lib/dialog";
+import { toErrorMessage } from "../lib/utils";
 
 function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: string; onSignOut: () => void; entityId: string }) {
   const searchParams = useSearchParams();
@@ -85,7 +86,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
         });
       } catch (error) {
         if (ignore) return;
-        const text = error instanceof Error ? error.message : "Unknown error";
+        const text = toErrorMessage(error);
         setMessage(`Failed to load page data: ${text}`);
       } finally {
         if (!ignore) setLoading(false);
@@ -200,7 +201,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
         });
       } catch (error) {
         if (ignore) return;
-        const text = error instanceof Error ? error.message : "Unknown error";
+        const text = toErrorMessage(error);
         setMessage(`Failed to load page data: ${text}`);
       } finally {
         if (!ignore) setLoading(false);
@@ -299,7 +300,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
       setSavedClasses((current) => current.filter((item) => item.localId !== savedClass.localId));
       setMessage(`Deleted class "${savedClass.className}".`);
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
+      const text = toErrorMessage(error);
       setMessage(`Delete failed: ${text}`);
     } finally {
       setDeletingLocalId("");
@@ -388,7 +389,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
       cancelEditSavedClass();
       setMessage(`Updated class "${nextName}".`);
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
+      const text = toErrorMessage(error);
       setMessage(`Update failed: ${text}`);
     } finally {
       setUpdatingLocalId("");
@@ -406,7 +407,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
       const count = raw.emails_sent as number;
       setEmailMessage(`Emailed ${count} professor${count === 1 ? "" : "s"}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setEmailMessage(`Failed: ${message}`);
     }
   };
@@ -485,7 +486,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
       setIsSelfProfessor(false);
       setMessage(`Saved class "${newClass.className}" for ${departmentName}.`);
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Unknown error";
+      const text = toErrorMessage(error);
       if (text.toLowerCase().includes("load failed") || text.toLowerCase().includes("failed to fetch")) {
         setMessage(`Save failed: backend is unreachable at ${backendUrl}.`);
       } else {

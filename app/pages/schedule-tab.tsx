@@ -16,6 +16,7 @@ import {
   detectScheduleConflict,
   computeAllViolations,
   DEFAULT_CONSTRAINTS,
+  toErrorMessage,
   type ScheduleConstraints,
   type ConflictContext,
 } from "../lib/utils";
@@ -23,6 +24,7 @@ import { useGridGeometry } from "../lib/useGridGeometry";
 import { apiFetch, apiGet, apiPost, apiPut, ApiError } from "../lib/api";
 import { confirmDialog, alertDialog } from "../lib/dialog";
 import { useScheduleDrag, formatMinuteTime } from "../lib/useScheduleDrag";
+import { Modal } from "../components/Modal";
 import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 
 /** Convert a Date to a datetime-local input value (YYYY-MM-DDTHH:MM). */
@@ -117,7 +119,7 @@ export default function ScheduleTab({
         setSelectedSymposiumId(rows[0].id);
       }
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
+      const msg = toErrorMessage(error);
       setMessage(msg);
     } finally {
       setIsLoadingSymposia(false);
@@ -290,7 +292,7 @@ export default function ScheduleTab({
         );
         setSelectedDay((prev) => (days.includes(prev) ? prev : days[0] ?? ""));
       } catch (error) {
-        const msg = error instanceof Error ? error.message : "Unknown error";
+        const msg = toErrorMessage(error);
         setMessage(msg);
         setPresentations([]);
         setSymposiumTimeframes([]);
@@ -524,7 +526,7 @@ export default function ScheduleTab({
         }
       }
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
+      const msg = toErrorMessage(error);
       if (debugMode) {
         setSchedulerMessage("Debugger did not complete.");
         setDebuggerFindings([`The debugger encountered an error: ${msg}. No constraint recommendations could be generated.`]);
@@ -569,7 +571,7 @@ export default function ScheduleTab({
       setDefaultBuffer(pendingBuffer);
       setPendingBuffer(null);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Failed to update buffers.");
+      setMessage(toErrorMessage(err, "Failed to update buffers."));
     } finally {
       setIsApplyingBuffer(false);
     }
@@ -597,7 +599,7 @@ export default function ScheduleTab({
       // presentations state reflects those clears.
       await fetchScheduleData(selectedSymposiumId);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Failed to update rooms.");
+      setMessage(toErrorMessage(err, "Failed to update rooms."));
     } finally {
       setIsApplyingRooms(false);
     }
@@ -621,7 +623,7 @@ export default function ScheduleTab({
       }, authHeaders);
       setRoomsAvailable(newCount);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Failed to add room.");
+      setMessage(toErrorMessage(err, "Failed to add room."));
     } finally {
       setIsAddingRoom(false);
     }
@@ -810,7 +812,7 @@ export default function ScheduleTab({
       await apiPost("/api/events/publish_schedule", { symposium_id: selectedSymposiumId }, authHeaders);
       setPublishMessage("Schedule published successfully.");
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
+      const msg = toErrorMessage(error);
       setPublishMessage(`Error: ${msg}`);
     } finally {
       setIsPublishing(false);
@@ -935,7 +937,7 @@ export default function ScheduleTab({
       setBulkSaveMessage(`Saved ${total} change${total !== 1 ? "s" : ""}.`);
       await fetchScheduleData(selectedSymposiumId);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown error";
+      const msg = toErrorMessage(error);
       setBulkSaveMessage(msg);
     } finally {
       setIsBulkSaving(false);
@@ -1452,13 +1454,9 @@ export default function ScheduleTab({
 
       {/* Edit modal */}
       {editingPresentation ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
-          onClick={() => setEditingPresentation(null)}
-        >
+        <Modal onClose={() => setEditingPresentation(null)}>
           <div
             className="w-full max-w-lg overflow-hidden rounded-xl border border-[#d6b676] bg-white shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="bg-[#1635a7] px-5 py-3 text-lg font-semibold text-white">
               {editingPresentation.timeframe
@@ -1559,7 +1557,7 @@ export default function ScheduleTab({
               </div>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {/* Scheduler failure popup — appears whenever the scheduler leaves presentations unscheduled. */}
@@ -1615,14 +1613,10 @@ export default function ScheduleTab({
         const hasQuickActions = mentionedConstraints.length > 0 || needsBuffer || needsRooms;
 
         return (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
-            onClick={() => setSchedulerFailure(null)}
-          >
+          <Modal onClose={() => setSchedulerFailure(null)}>
             <div
               className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
               style={{ maxHeight: "90vh" }}
-              onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
               <div className="shrink-0 bg-[#9a1f1f] px-5 py-3">
@@ -1744,7 +1738,7 @@ export default function ScheduleTab({
                 </button>
               </div>
             </div>
-          </div>
+          </Modal>
         );
       })() : null}
 
@@ -1765,15 +1759,14 @@ export default function ScheduleTab({
         const summaryHints = debuggerFindings.filter((h) => !/\bto (soft|hard|off)\b/i.test(h));
 
         return (
-          <div
-            className="fixed inset-0 flex items-center justify-center bg-black/50 px-4"
-            style={{ zIndex: 60 }}
-            onClick={() => setDebuggerFindings(null)}
+          <Modal
+            onClose={() => setDebuggerFindings(null)}
+            backdropClassName="fixed inset-0 flex items-center justify-center bg-black/50 px-4"
+            backdropStyle={{ zIndex: 60 }}
           >
             <div
               className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
               style={{ maxHeight: "90vh" }}
-              onClick={(e) => e.stopPropagation()}
             >
               <div className="shrink-0 bg-[#7c4f00] px-5 py-3">
                 <p className="text-base font-semibold text-white">Debugger findings</p>
@@ -1854,7 +1847,7 @@ export default function ScheduleTab({
                         setDebugBestAssignments([]);
                         await fetchScheduleData(selectedSymposiumId);
                       } catch (err) {
-                        const msg = err instanceof Error ? err.message : "Unknown error";
+                        const msg = toErrorMessage(err);
                         setSchedulerMessage(`Error applying schedule: ${msg}`);
                       }
                     }}
@@ -1873,7 +1866,7 @@ export default function ScheduleTab({
                 </button>
               </div>
             </div>
-          </div>
+          </Modal>
         );
       })() : null}
     </div>

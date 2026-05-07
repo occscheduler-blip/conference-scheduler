@@ -10,12 +10,13 @@ import type {
   SymposiumOption,
   Timeframe,
 } from "./types";
-import { parseBackendDateTime, normalizeId, dayKey, dayLabel, timeLabel } from "../lib/utils";
+import { parseBackendDateTime, normalizeId, dayKey, dayLabel, timeLabel, toErrorMessage } from "../lib/utils";
 import { apiFetch, BACKEND_URL } from "../lib/api";
 import { fetchSymposiumSchedule } from "../lib/useSymposiumSchedule";
 import { buildPresentationColorMap, COLOR_SHADES, rgbToHex, getTextColor } from "../lib/scheduleColors";
 import { ScheduleGrid, getRoomLabel, type GridBlock } from "../lib/ScheduleGrid";
 import { useGridGeometry } from "../lib/useGridGeometry";
+import { Modal } from "../components/Modal";
 
 type ItineraryDetailItem = {
   presentation_id: string;
@@ -133,7 +134,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
         setSymposia(list);
         setSelectedSymposiumId(list[0]?.id ?? "");
       } catch (error) {
-        const msg = error instanceof Error ? error.message : "Unknown error";
+        const msg = toErrorMessage(error);
         setMessage(msg);
       }
     }
@@ -219,7 +220,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
           setMessage("No presentation times posted for this symposium yet.");
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : "Unknown error";
+        const msg = toErrorMessage(error);
         setMessage(msg);
         setTimeframes([]);
         setDepartments([]);
@@ -664,13 +665,9 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
       </div>
 
       {popupCard ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
-          onClick={() => setPopupCard(null)}
-        >
+        <Modal onClose={() => setPopupCard(null)}>
           <div
             className="w-full max-w-lg overflow-hidden rounded-xl border border-[#d6b676] bg-white shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="bg-[#1635a7] px-5 py-3 text-xl font-semibold text-white">
               {popupCard.timeframe ? timeLabel(popupCard.timeframe.start_time, popupCard.timeframe.end_time) : "Time TBD"}
@@ -714,17 +711,16 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
               </div>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {showItinerary ? (
-        <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm"
-          onClick={() => setShowItinerary(false)}
+        <Modal
+          onClose={() => setShowItinerary(false)}
+          backdropClassName="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm"
         >
           <div
             className="my-8 w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
             <div className="flex items-center justify-between bg-[#1635a7] px-6 py-4">
@@ -826,7 +822,7 @@ function HomeContent({ isAttendee, attendeeId, authToken, onSignOut }: { isAtten
               })()}
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
     </main>
   );

@@ -10,6 +10,7 @@ import HomePage from "./home";
 import ProfessorPage from "./professor";
 import StudentPage from "./student";
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
+import { toErrorMessage } from "../lib/utils";
 
 type AuthState = {
   token: string;
@@ -56,7 +57,7 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
         isSuperAdmin: Boolean(raw.is_superadmin),
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not reach the server.");
+      setError(toErrorMessage(err, "Could not reach the server."));
     } finally {
       setLoading(false);
     }
@@ -73,7 +74,7 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
       }
       setOtpSent(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not reach the server.");
+      setError(toErrorMessage(err, "Could not reach the server."));
     } finally {
       setLoading(false);
     }
@@ -91,7 +92,7 @@ function LoginScreen({ onLogin }: { onLogin: (auth: AuthState) => void }) {
         isSuperAdmin: false,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not reach the server.");
+      setError(toErrorMessage(err, "Could not reach the server."));
     } finally {
       setLoading(false);
     }

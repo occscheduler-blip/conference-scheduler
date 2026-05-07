@@ -10,12 +10,13 @@ import type {
 } from "./types";
 import {
   totalSlots,
-  formatTimeLabel,
   formatCalendarDate,
   dayKey,
   buildCalendarDates,
   buildTimeframesFromGrid,
   gridFromTimeframes,
+  toErrorMessage,
+  isHamiltonEmail,
 } from "../lib/utils";
 import { apiFetch, apiPost, apiPut, apiDelete, BACKEND_URL } from "../lib/api";
 import { confirmDialog } from "../lib/dialog";
@@ -23,6 +24,7 @@ import { useCalendarGrid } from "../lib/useCalendarGrid";
 import { useWeekPagination } from "../lib/useWeekPagination";
 import ScheduleTab from "./schedule-tab";
 import ManageRecordsTab from "./manage-records-tab";
+import { AvailabilityGrid } from "../components/AvailabilityGrid";
 import { FIELD_CLASS as fieldClass } from "../lib/styles";
 
 function normalizeRoomNames(roomNames: Array<string | null> | null | undefined, roomCount: number): string[] {
@@ -142,6 +144,14 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
   const editDateKeys = useMemo(() => editCalendarDates.map((d) => dayKey(d)), [editCalendarDates]);
   const createWeekPagination = useWeekPagination(createDateKeys);
   const editWeekPagination = useWeekPagination(editDateKeys);
+  const createCalendarDays = useMemo(
+    () => createCalendarDates.map((d) => ({ key: d.toISOString(), label: formatCalendarDate(d) })),
+    [createCalendarDates],
+  );
+  const editCalendarDays = useMemo(
+    () => editCalendarDates.map((d) => ({ key: d.toISOString(), label: formatCalendarDate(d) })),
+    [editCalendarDates],
+  );
 
   const fetchSymposia = useCallback(async () => {
     setIsLoadingSymposia(true);
@@ -150,7 +160,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       const rows = await apiFetch<SymposiumOption>("/api/events/symposiums", { headers: authHeaders });
       setSymposiumOptions(rows);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setSymposiumLoadError(`Load failed: ${message}`);
     } finally {
       setIsLoadingSymposia(false);
@@ -178,7 +188,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
           loaded.some((department) => department.id === current) ? current : loaded[0]?.id ?? ""
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
+        const message = toErrorMessage(error);
         setDepartmentLoadError(`Load failed: ${message}`);
         setDepartments([]);
       } finally {
@@ -238,7 +248,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
         setEditEndDate(grid.endDate);
         setEditAvailability(grid.availability);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
+        const message = toErrorMessage(error);
         setSymposiumEditMessage(`Load failed: ${message}`);
       } finally {
         setIsLoadingSymposiumDetails(false);
@@ -348,7 +358,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       if (raw.symposium_id) setSelectedSymposiumId(String(raw.symposium_id));
       setActiveTab("edit");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setCreateSaveMessage(message);
     } finally {
       setIsSavingCreate(false);
@@ -404,7 +414,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       await fetchSymposiumDetails(selectedSymposiumId);
       setSymposiumEditMessage("Event updated successfully.");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setSymposiumEditMessage(message);
     } finally {
       setIsSavingSymposiumEdit(false);
@@ -428,14 +438,12 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       setSelectedSymposiumId("");
       await fetchSymposia();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setSymposiumEditMessage(message);
     } finally {
       setIsDeletingSymposium(false);
     }
   };
-
-  const isHamiltonEmail = (value: string) => /^[^\s@]+@hamilton\.edu$/i.test(value.trim());
 
   const handleDepartmentSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -505,7 +513,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
 
       await fetchDepartments(selectedSymposiumId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setDepartmentMessage(message);
       setDepartmentMessageKind("error");
     } finally {
@@ -530,7 +538,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       setDepartmentMessageKind("success");
       await fetchDepartments(selectedSymposiumId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setDepartmentMessage(message);
       setDepartmentMessageKind("error");
     } finally {
@@ -555,7 +563,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       const rows = await apiFetch<AdminEntry>("/api/auth/admin/list", { headers: authHeaders });
       setAdminList(rows);
     } catch (err) {
-      setAdminListError(err instanceof Error ? err.message : "Failed to load admins.");
+      setAdminListError(toErrorMessage(err, "Failed to load admins."));
     } finally {
       setIsLoadingAdmins(false);
     }
@@ -567,7 +575,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
     setAdminMessageKind(null);
 
     const trimmedEmail = newAdminEmail.trim().toLowerCase();
-    if (!trimmedEmail || !/^[^\s@]+@hamilton\.edu$/i.test(trimmedEmail)) {
+    if (!trimmedEmail || !isHamiltonEmail(trimmedEmail)) {
       setAdminMessage("Enter a valid @hamilton.edu email.");
       setAdminMessageKind("error");
       return;
@@ -599,7 +607,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       setNewAdminConfirmPassword("");
       void fetchAdminList();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setAdminMessage(message);
       setAdminMessageKind("error");
     } finally {
@@ -609,7 +617,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
 
   const handleUpdateAdminEmail = async (adminId: string) => {
     const trimmed = editingAdminEmail.trim().toLowerCase();
-    if (!trimmed || !/^[^\s@]+@hamilton\.edu$/i.test(trimmed)) {
+    if (!trimmed || !isHamiltonEmail(trimmed)) {
       setAdminEditError("Enter a valid @hamilton.edu email.");
       return;
     }
@@ -620,7 +628,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       setAdminList((list) => list.map((a) => a.id === adminId ? { ...a, email: trimmed } : a));
       setEditingAdminId(null);
     } catch (err) {
-      setAdminEditError(err instanceof Error ? err.message : "Failed to update email.");
+      setAdminEditError(toErrorMessage(err, "Failed to update email."));
     } finally {
       setIsSavingAdminEdit(false);
     }
@@ -632,7 +640,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       await apiPut(`/api/auth/admin/${adminId}`, { is_superadmin: !current }, authHeaders);
       setAdminList((list) => list.map((a) => a.id === adminId ? { ...a, is_superadmin: !current } : a));
     } catch (err) {
-      setAdminListError(err instanceof Error ? err.message : "Failed to update admin.");
+      setAdminListError(toErrorMessage(err, "Failed to update admin."));
     } finally {
       setTogglingAdminId(null);
     }
@@ -657,7 +665,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       setShowResetPassword(false);
       setShowResetPasswordConfirm(false);
     } catch (err) {
-      setResetPasswordError(err instanceof Error ? err.message : "Failed to reset password.");
+      setResetPasswordError(toErrorMessage(err, "Failed to reset password."));
     } finally {
       setIsSavingResetPassword(false);
     }
@@ -671,7 +679,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       await apiDelete(`/api/auth/admin/${adminId}`, authHeaders);
       setAdminList((list) => list.filter((a) => a.id !== adminId));
     } catch (err) {
-      setAdminListError(err instanceof Error ? err.message : "Failed to delete admin.");
+      setAdminListError(toErrorMessage(err, "Failed to delete admin."));
     } finally {
       setDeletingAdminId(null);
     }
@@ -692,7 +700,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       const count = raw.emails_sent as number;
       setEmailEventMessage(`Emailed ${count} department head${count === 1 ? "" : "s"}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const message = toErrorMessage(error);
       setEmailEventMessage(message);
     }
   };
@@ -1206,49 +1214,17 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
                   {createCalendarDates.length === 0 ? (
                     <div className="px-2 py-4 text-sm font-semibold text-[#555]">Select start and end dates first.</div>
                   ) : (
-                    <div className="min-w-[760px] select-none">
-                      <div
-                        className="grid text-center text-base font-bold text-[#222]"
-                        style={{ gridTemplateColumns: `64px repeat(${createWeekPagination.visibleDayIndices.length}, minmax(80px, 1fr))` }}
-                      >
-                        <div />
-                        {createWeekPagination.visibleDayIndices.map((di) => (
-                          <div key={createCalendarDates[di].toISOString()} className="border-b border-[#777] pb-1">
-                            {formatCalendarDate(createCalendarDates[di])}
-                          </div>
-                        ))}
-                      </div>
-                      <div
-                        className="grid"
-                        style={{ gridTemplateColumns: `64px repeat(${createWeekPagination.visibleDayIndices.length}, minmax(80px, 1fr))` }}
-                      >
-                        {Array.from({ length: totalSlots }, (_, slotIndex) => (
-                          <div key={slotIndex} className="contents">
-                            <div className="h-4 overflow-hidden pr-1 text-right text-[11px] leading-4 font-semibold text-[#444]">
-                              {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
-                            </div>
-                            {createWeekPagination.visibleDayIndices.map((dayIndex) => {
-                              const date = createCalendarDates[dayIndex];
-                              const available = createAvailability[dayIndex]?.[slotIndex] ?? false;
-                              const showHourLine = slotIndex % 4 === 0;
-                              return (
-                                <button
-                                  key={`${date.toISOString()}-${slotIndex}`}
-                                  type="button"
-                                  onMouseDown={() => handleCreateCellMouseDown(dayIndex, slotIndex)}
-                                  onMouseEnter={() => handleCreateCellMouseEnter(dayIndex, slotIndex)}
-                                  onDragStart={(event) => event.preventDefault()}
-                                  className={`h-4 border-r border-l border-b border-[#333] ${
-                                    showHourLine ? "border-t border-t-[#333]" : ""
-                                  } ${available ? "bg-[#38a000]" : "bg-[#f0d7d9]"}`}
-                                  aria-label={`${formatCalendarDate(date)} ${formatTimeLabel(slotIndex)}`}
-                                />
-                              );
-                            })}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <AvailabilityGrid
+                      calendarDays={createCalendarDays}
+                      availability={createAvailability}
+                      weekPagination={createWeekPagination}
+                      handleCellMouseDown={handleCreateCellMouseDown}
+                      handleCellMouseEnter={handleCreateCellMouseEnter}
+                      cellSize="sm"
+                      minWidthPx={760}
+                      dayHeaderClassName="text-base"
+                      dayHeaderCellClassName=""
+                    />
                   )}
                 </div>
               </aside>
@@ -1430,49 +1406,17 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
                       {editCalendarDates.length === 0 ? (
                         <div className="px-2 py-4 text-sm font-semibold text-[#555]">Select start and end dates first.</div>
                       ) : (
-                        <div className="min-w-[760px] select-none">
-                          <div
-                            className="grid text-center text-base font-bold text-[#222]"
-                            style={{ gridTemplateColumns: `64px repeat(${editWeekPagination.visibleDayIndices.length}, minmax(80px, 1fr))` }}
-                          >
-                            <div />
-                            {editWeekPagination.visibleDayIndices.map((di) => (
-                              <div key={editCalendarDates[di].toISOString()} className="border-b border-[#777] pb-1">
-                                {formatCalendarDate(editCalendarDates[di])}
-                              </div>
-                            ))}
-                          </div>
-                          <div
-                            className="grid"
-                            style={{ gridTemplateColumns: `64px repeat(${editWeekPagination.visibleDayIndices.length}, minmax(80px, 1fr))` }}
-                          >
-                            {Array.from({ length: totalSlots }, (_, slotIndex) => (
-                              <div key={slotIndex} className="contents">
-                                <div className="h-4 overflow-hidden pr-1 text-right text-[11px] leading-4 font-semibold text-[#444]">
-                                  {slotIndex % 4 === 0 ? formatTimeLabel(slotIndex) : ""}
-                                </div>
-                                {editWeekPagination.visibleDayIndices.map((dayIndex) => {
-                                  const date = editCalendarDates[dayIndex];
-                                  const available = editAvailability[dayIndex]?.[slotIndex] ?? false;
-                                  const showHourLine = slotIndex % 4 === 0;
-                                  return (
-                                    <button
-                                      key={`${date.toISOString()}-${slotIndex}`}
-                                      type="button"
-                                      onMouseDown={() => handleEditCellMouseDown(dayIndex, slotIndex)}
-                                      onMouseEnter={() => handleEditCellMouseEnter(dayIndex, slotIndex)}
-                                      onDragStart={(event) => event.preventDefault()}
-                                      className={`h-4 border-r border-l border-b border-[#333] ${
-                                        showHourLine ? "border-t border-t-[#333]" : ""
-                                      } ${available ? "bg-[#38a000]" : "bg-[#f0d7d9]"}`}
-                                      aria-label={`${formatCalendarDate(date)} ${formatTimeLabel(slotIndex)}`}
-                                    />
-                                  );
-                                })}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                        <AvailabilityGrid
+                          calendarDays={editCalendarDays}
+                          availability={editAvailability}
+                          weekPagination={editWeekPagination}
+                          handleCellMouseDown={handleEditCellMouseDown}
+                          handleCellMouseEnter={handleEditCellMouseEnter}
+                          cellSize="sm"
+                          minWidthPx={760}
+                          dayHeaderClassName="text-base"
+                          dayHeaderCellClassName=""
+                        />
                       )}
                     </div>
                   </aside>
