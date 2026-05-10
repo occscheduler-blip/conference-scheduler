@@ -259,26 +259,32 @@ export default function ScheduleTab({
           if (sid) allResourceIds.add(sid);
         }
 
-        // Bulk-fetch availability timeframes for all professors and students in one call
+        // Bulk-fetch availability timeframes in batches — comma-joining hundreds of
+        // UUIDs into one query string trips proxy header-size limits (HTTP 431).
         const resAvailMap = new Map<string, Array<{ start_time: string; end_time: string }>>();
         const resourceIdList = Array.from(allResourceIds);
-        if (resourceIdList.length > 0) {
-          try {
-            const allAvailTfs = await apiFetch<Timeframe>(
-              `/api/events/timeframes?linked_id=${encodeURIComponent(resourceIdList.join(","))}`,
-            );
-            for (const tf of allAvailTfs) {
-              const key = normalizeId(tf.linked_id ?? "");
-              if (!key) continue;
-              const existing = resAvailMap.get(key);
-              if (existing) {
-                existing.push({ start_time: tf.start_time, end_time: tf.end_time });
-              } else {
-                resAvailMap.set(key, [{ start_time: tf.start_time, end_time: tf.end_time }]);
-              }
+        const BATCH_SIZE = 50;
+        const batches: string[][] = [];
+        for (let i = 0; i < resourceIdList.length; i += BATCH_SIZE) {
+          batches.push(resourceIdList.slice(i, i + BATCH_SIZE));
+        }
+        const batchResults = await Promise.all(
+          batches.map((batch) =>
+            apiFetch<Timeframe>(
+              `/api/events/timeframes?linked_id=${encodeURIComponent(batch.join(","))}`,
+            ).catch(() => [] as Timeframe[]),
+          ),
+        );
+        for (const tfs of batchResults) {
+          for (const tf of tfs) {
+            const key = normalizeId(tf.linked_id ?? "");
+            if (!key) continue;
+            const existing = resAvailMap.get(key);
+            if (existing) {
+              existing.push({ start_time: tf.start_time, end_time: tf.end_time });
+            } else {
+              resAvailMap.set(key, [{ start_time: tf.start_time, end_time: tf.end_time }]);
             }
-          } catch {
-            // skip — no availability means fully available
           }
         }
 
