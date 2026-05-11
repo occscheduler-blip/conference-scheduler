@@ -169,21 +169,29 @@ export async function fetchSymposiumSchedule(
   ]);
 
   // 5. Presentation timeframes — draft vs published endpoint chosen by mode.
-  const presentationIdParam = presentations
+  //    Batched in chunks of 50 IDs: comma-joining hundreds of UUIDs into one
+  //    query string trips proxy header-size limits (HTTP 431), and the joined
+  //    response could brush against PostgREST's 1000-row response cap.
+  const presentationIds = presentations
     .map((p) => p.id ?? "")
-    .filter((id) => id.length > 0)
-    .join(",");
+    .filter((id) => id.length > 0);
   const timeframeEndpoint = mode === "draft" ? "temporary_timeframes" : "timeframes";
   let presentationTimeframes: Timeframe[] = [];
-  if (presentationIdParam) {
-    try {
-      presentationTimeframes = await apiFetch<Timeframe>(
-        `/api/events/${timeframeEndpoint}?linked_id=${encodeURIComponent(presentationIdParam)}`,
-        { headers: authHeaders },
-      );
-    } catch {
-      /* keep empty */
+  if (presentationIds.length > 0) {
+    const BATCH_SIZE = 50;
+    const batches: string[][] = [];
+    for (let i = 0; i < presentationIds.length; i += BATCH_SIZE) {
+      batches.push(presentationIds.slice(i, i + BATCH_SIZE));
     }
+    const batchResults = await Promise.all(
+      batches.map((batch) =>
+        apiFetch<Timeframe>(
+          `/api/events/${timeframeEndpoint}?linked_id=${encodeURIComponent(batch.join(","))}`,
+          { headers: authHeaders },
+        ).catch(() => [] as Timeframe[]),
+      ),
+    );
+    presentationTimeframes = batchResults.flat();
   }
 
   return {
