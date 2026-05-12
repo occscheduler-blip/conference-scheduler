@@ -48,6 +48,7 @@ The live app is hosted at: **https://conference-scheduler-black.vercel.app**
 4. The admin runs the scheduler — the solver assigns each presentation a room and time, respecting all constraints.
 5. The admin reviews the draft, adjusts if needed, and publishes.
 
+
 ---
 
 ## Project Overview
