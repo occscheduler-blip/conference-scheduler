@@ -699,6 +699,7 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
       const { raw } = await apiPost("/api/events/email_symposium", { symposium_id: selectedSymposiumId }, authHeaders);
       const count = raw.emails_sent as number;
       setEmailEventMessage(`Emailed ${count} department head${count === 1 ? "" : "s"}.`);
+      setDepartments((current) => current.map((d) => ({ ...d, emailed: true })));
     } catch (error) {
       const message = toErrorMessage(error);
       setEmailEventMessage(message);
@@ -1533,6 +1534,9 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
                                 <p className="text-xs text-[#555]">
                                   {department.department_head_name} ({department.email})
                                 </p>
+                                {department.emailed ? (
+                                  <span className="mt-1 inline-block rounded-full bg-[#e6f4ea] px-2 py-0.5 text-xs font-semibold text-[#1b6e2b]">Emailed</span>
+                                ) : null}
                               </div>
                               <div className="flex items-center gap-2">
                                 <button

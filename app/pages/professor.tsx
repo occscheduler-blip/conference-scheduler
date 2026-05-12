@@ -48,6 +48,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const csvInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadedStudents, setUploadedStudents] = useState<UploadedStudent[]>([]);
   const [selectedUploadedStudentKeys, setSelectedUploadedStudentKeys] = useState<string[]>([]);
+  const [emailedStudentIds, setEmailedStudentIds] = useState<Set<string>>(new Set());
   const [presentationGroups, setPresentationGroups] = useState<PresentationGroup[]>([]);
   const [deployedPresentationGroups, setDeployedPresentationGroups] = useState<PresentationGroup[]>([]);
   const [groupMessage, setGroupMessage] = useState<string>("");
@@ -81,7 +82,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const fetchClassStudentNames = useCallback(
     async (targetClassId: string) => {
       if (!targetClassId) return [] as UploadedStudent[];
-      const rows = await apiFetch<{ id?: string; name?: string }>(
+      const rows = await apiFetch<{ id?: string; name?: string; emailed?: boolean }>(
         `/api/events/students?class_id=${encodeURIComponent(targetClassId)}`,
         { headers: authHeaders, cache: "no-store" }
       );
@@ -89,6 +90,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         .map((row, index) => ({
           id: row.id ?? `row-${index}`,
           name: (row.name ?? "").trim(),
+          emailed: row.emailed ?? false,
         }))
         .filter((row) => row.name.length > 0);
     },
@@ -243,6 +245,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         setSymposiumName(matchedSymposium?.name ?? matchedSymposium?.symposium_name ?? "");
         const groupedStudentIds = new Set(existingGroups.flatMap((group) => group.studentIds));
         setUploadedStudents(existingStudents.filter((student) => !groupedStudentIds.has(normalizeId(student.id))));
+        setEmailedStudentIds(new Set(existingStudents.filter((s) => s.emailed).map((s) => s.id)));
         setSelectedUploadedStudentKeys([]);
         setPresentationGroups([]);
         setDeployedPresentationGroups(existingGroups);
@@ -281,6 +284,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         setIdentityMessage(message);
         setSymposiumName("");
         setUploadedStudents([]);
+        setEmailedStudentIds(new Set());
         setSelectedUploadedStudentKeys([]);
         setPresentationGroups([]);
         setDeployedPresentationGroups([]);
@@ -395,21 +399,22 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       }
 
       const headers = parseCsvLine(lines[0]).map((header) => header.trim());
-      const requiredHeaders = ["Student Name", "Student ID", "Class Level", "Preferred Email"];
+      const requiredHeaders = ["Last Name", "First Name", "Username", "Last Access"];
       const missingHeaders = requiredHeaders.filter((header) => !headers.includes(header));
       if (missingHeaders.length > 0) {
         setCsvMessage(`CSV is missing required columns: ${missingHeaders.join(", ")}`);
         return;
       }
 
-      const studentNameIndex = headers.indexOf("Student Name");
-      const preferredEmailIndex = headers.indexOf("Preferred Email");
+      const lastNameIndex = headers.indexOf("Last Name");
+      const firstNameIndex = headers.indexOf("First Name");
+      const usernameIndex = headers.indexOf("Username");
       const students = lines
         .slice(1)
         .map((line) => parseCsvLine(line))
         .map((cells) => ({
-          name: (cells[studentNameIndex] ?? "").trim(),
-          email: (cells[preferredEmailIndex] ?? "").trim().toLowerCase(),
+          name: `${(cells[firstNameIndex] ?? "").trim()} ${(cells[lastNameIndex] ?? "").trim()}`.trim(),
+          email: (cells[usernameIndex] ?? "").trim().toLowerCase(),
         }))
         .filter((row) => row.name.length > 0 && row.email.length > 0);
 
@@ -803,6 +808,8 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         const { raw: emailResult } = await apiPost("/api/events/email_students", { presentation_id: group.id }, authHeaders);
         emailCount += (emailResult.emails_sent as number) ?? 0;
       }
+      const newlyEmailedIds = nextGroups.flatMap((g) => g.studentIds);
+      setEmailedStudentIds((current) => new Set([...current, ...newlyEmailedIds]));
       setEmailMessage(`Saved ${insertedCount} presentation${insertedCount === 1 ? "" : "s"} and emailed ${emailCount} student${emailCount === 1 ? "" : "s"}.`);
     } catch (error) {
       const message = toErrorMessage(error);
@@ -944,8 +951,20 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                 File with all students in thesis section:
               </p>
               <p className="text-sm text-[#3b4a7c]">
-                Required columns: Student Name, Student ID, Class Level, Preferred Email
+                Required columns: Last Name, First Name, Username, Last Access
               </p>
+              <details className="rounded-lg border border-[#d7e0ff] bg-[#f7f9ff]">
+                <summary className="cursor-pointer select-none px-4 py-2 text-sm font-semibold text-[#2d3d7a]">
+                  How to export this file from Blackboard
+                </summary>
+                <ol className="list-decimal space-y-1 px-8 py-3 text-sm text-[#3b4a7c]">
+                  <li>Navigate to your class in Blackboard</li>
+                  <li>Go to <strong>Grade Center</strong> &rarr; <strong>Full Grade Center</strong></li>
+                  <li>Select everyone, then choose <strong>Work Offline</strong> &rarr; <strong>Download</strong></li>
+                  <li>Select <strong>User Information Only</strong> and set the delimiter to <strong>Comma</strong></li>
+                  <li>Click <strong>Download</strong> and save the file</li>
+                </ol>
+              </details>
               <label className="flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#2f53c4] bg-[#f7f9ff] px-4 py-10 text-center transition hover:bg-[#edf2ff]">
                 <span className="text-base font-semibold text-[#1d2d63]">Drop CSV file here or click to upload</span>
                 <span className="text-sm text-[#4b5d99]">Accepted format: .csv</span>
@@ -1041,7 +1060,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                               disabled={isDeleting}
                               className="flex-1 px-3 py-2 text-left"
                             >
-                              {student.name}
+                              <span className="mr-2">{student.name}</span>
+                              {student.emailed ? (
+                                <span className="rounded-full bg-[#e6f4ea] px-2 py-0.5 text-xs font-semibold text-[#1b6e2b]">Emailed</span>
+                              ) : null}
                             </button>
                             <button
                               type="button"
@@ -1306,7 +1328,17 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                                 </p>
                               </>
                             )}
-                            <p className="text-xs text-[#444]">{group.studentNames.join(", ")}</p>
+                            <p className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-[#444]">
+                              {group.studentIds.map((studentId, i) => (
+                                <span key={studentId} className="flex items-center gap-1">
+                                  {i > 0 ? <span className="text-[#aaa]">,</span> : null}
+                                  {group.studentNames[i] ?? studentId}
+                                  {emailedStudentIds.has(studentId) ? (
+                                    <span className="rounded-full bg-[#e6f4ea] px-2 py-0.5 text-xs font-semibold text-[#1b6e2b]">Emailed</span>
+                                  ) : null}
+                                </span>
+                              ))}
+                            </p>
                           </div>
                         ))}
                       </div>
