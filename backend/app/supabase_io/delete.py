@@ -104,7 +104,7 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
         .in_("student_id", str_ids)
         .execute()
     )
-    affected_pres_ids = list({row["presentation_id"] for row in (affected_rows.data or [])})
+    affected_pres_ids = list({cast("dict[str, Any]", row)["presentation_id"] for row in (affected_rows.data or [])})
 
     del_stu_query = supabase.table("students").delete().in_("id", str_ids)
     del_presenting_student_query = (
@@ -128,8 +128,8 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
             .in_("presentation_id", affected_pres_ids)
             .execute()
         )
-        occupied_ids = {row["presentation_id"] for row in (still_occupied.data or [])}
-        now_empty = [UUID(pid) for pid in affected_pres_ids if pid not in occupied_ids]
+        occupied_ids = {cast("dict[str, Any]", row)["presentation_id"] for row in (still_occupied.data or [])}
+        now_empty = [UUID(str(pid)) for pid in affected_pres_ids if pid not in occupied_ids]
         if now_empty:
             _merge_counts(counts, delete_presentation(now_empty))
 
