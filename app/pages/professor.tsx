@@ -53,6 +53,11 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const [deployedPresentationGroups, setDeployedPresentationGroups] = useState<PresentationGroup[]>([]);
   const [groupMessage, setGroupMessage] = useState<string>("");
   const [emailMessage, setEmailMessage] = useState<string>("");
+
+  const timedCsvMessage = (msg: string | null) => { setCsvMessage(msg); if (msg) setTimeout(() => setCsvMessage(null), 3000); };
+  const timedManualMessage = (msg: string | null) => { setManualStudentMessage(msg); if (msg) setTimeout(() => setManualStudentMessage(null), 3000); };
+  const timedGroupMessage = (msg: string) => { setGroupMessage(msg); if (msg) setTimeout(() => setGroupMessage(""), 3000); };
+  const timedEmailMessage = (msg: string) => { setEmailMessage(msg); if (msg) setTimeout(() => setEmailMessage(""), 3000); };
   const [emailingPresentations, setDeployingPresentations] = useState<boolean>(false);
   const [deletingPresentationGroupIds, setDeletingPresentationGroupIds] = useState<string[]>([]);
   const [editingDeployedPresentationId, setEditingDeployedPresentationId] = useState<string | null>(null);
@@ -168,7 +173,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         const [classRows, departmentRows, symposiumRows] = await Promise.all([
           apiFetch<{ id?: string; name?: string; department_id?: string }>("/api/events/classes", { headers: authHeaders }),
           apiFetch<{ id?: string; symposium_id?: string }>("/api/events/departments", { headers: authHeaders }),
-          apiFetch<{ id?: string; name?: string; symposium_name?: string }>("/api/events/symposiums", { headers: authHeaders }),
+          apiFetch<{ id?: string; name?: string; symposium_name?: string; default_buffer?: number }>("/api/events/symposiums", { headers: authHeaders }),
         ]);
         const professor = professorOptions.find((row) => row.id === selectedProfessorId);
         if (!professor) {
@@ -269,10 +274,12 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
               .filter((value) => value.length > 0)
           )
         );
+        const symposiumDefaultBuffer =
+          matchedSymposium?.default_buffer != null ? String(matchedSymposium.default_buffer) : "";
         if (uniqueBuffers.length === 1) {
           setDefaultBufferDuration(uniqueBuffers[0]);
         } else {
-          setDefaultBufferDuration("");
+          setDefaultBufferDuration(symposiumDefaultBuffer);
         }
         setUsePerBufferDuration(false);
         setGroupMessage("");
@@ -374,11 +381,11 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   async function handleCsvUpload(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!classId) {
-      setCsvMessage("No class is linked to the selected professor.");
+      timedCsvMessage("No class is linked to the selected professor.");
       return;
     }
     if (!csvFile) {
-      setCsvMessage("Select a CSV file before uploading.");
+      timedCsvMessage("Select a CSV file before uploading.");
       return;
     }
 
@@ -394,7 +401,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         .filter((line) => line.trim().length > 0);
 
       if (lines.length < 2) {
-        setCsvMessage("CSV must include a header row and at least one student row.");
+        timedCsvMessage("CSV must include a header row and at least one student row.");
         return;
       }
 
@@ -402,7 +409,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       const requiredHeaders = ["Last Name", "First Name", "Username", "Last Access"];
       const missingHeaders = requiredHeaders.filter((header) => !headers.includes(header));
       if (missingHeaders.length > 0) {
-        setCsvMessage(`CSV is missing required columns: ${missingHeaders.join(", ")}`);
+        timedCsvMessage(`CSV is missing required columns: ${missingHeaders.join(", ")}`);
         return;
       }
 
@@ -414,12 +421,12 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         .map((line) => parseCsvLine(line))
         .map((cells) => ({
           name: `${(cells[firstNameIndex] ?? "").trim()} ${(cells[lastNameIndex] ?? "").trim()}`.trim(),
-          email: (cells[usernameIndex] ?? "").trim().toLowerCase(),
+          email: `${(cells[usernameIndex] ?? "").trim().toLowerCase()}@hamilton.edu`,
         }))
         .filter((row) => row.name.length > 0 && row.email.length > 0);
 
       if (students.length === 0) {
-        setCsvMessage("No valid student rows found. Ensure Student Name and Preferred Email are filled.");
+        timedCsvMessage("No valid student rows found. Ensure Student Name and Preferred Email are filled.");
         return;
       }
 
@@ -430,7 +437,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
       const inserted = (payload.records_inserted as { students?: number })?.students ?? students.length;
       const skipped = Math.max(0, lines.length - 1 - students.length);
-      setCsvMessage(`Upload successful: inserted ${inserted} student${inserted === 1 ? "" : "s"}${skipped > 0 ? `, skipped ${skipped}` : ""}.`);
+      timedCsvMessage(`Upload successful: inserted ${inserted} student${inserted === 1 ? "" : "s"}${skipped > 0 ? `, skipped ${skipped}` : ""}.`);
       const refreshedStudents = await fetchClassStudentNames(classId);
       const mergedStudents = [...refreshedStudents];
       const seen = new Set(mergedStudents.map((student) => student.name.trim().toLowerCase()));
@@ -451,9 +458,9 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     } catch (error) {
       const message = toErrorMessage(error);
       if (message.toLowerCase().includes("load failed") || message.toLowerCase().includes("failed to fetch")) {
-        setCsvMessage("CSV upload failed: backend is unreachable at http://localhost:8000.");
+        timedCsvMessage("CSV upload failed: backend is unreachable at http://localhost:8000.");
       } else {
-        setCsvMessage(`CSV upload failed: ${message}`);
+        timedCsvMessage(`CSV upload failed: ${message}`);
       }
     } finally {
       setCsvUploading(false);
@@ -464,18 +471,18 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const handleManualStudentAdd = async () => {
     setManualStudentMessage(null);
     if (!classId) {
-      setManualStudentMessage("No class is linked to the selected professor.");
+      timedManualMessage("No class is linked to the selected professor.");
       return;
     }
 
     const name = manualStudentName.trim();
     const email = manualStudentEmail.trim().toLowerCase();
     if (!name) {
-      setManualStudentMessage("Enter a student name.");
+      timedManualMessage("Enter a student name.");
       return;
     }
     if (!email) {
-      setManualStudentMessage("Enter a student email.");
+      timedManualMessage("Enter a student email.");
       return;
     }
 
@@ -490,10 +497,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       setUploadedStudents(refreshedStudents);
       setManualStudentName("");
       setManualStudentEmail("");
-      setManualStudentMessage(`Added ${name}.`);
+      timedManualMessage(`Added ${name}.`);
     } catch (error) {
       const message = toErrorMessage(error);
-      setManualStudentMessage(`Add failed: ${message}`);
+      timedManualMessage(`Add failed: ${message}`);
     } finally {
       setManualStudentSubmitting(false);
     }
@@ -518,12 +525,12 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     setDeletingStudentIds((current) => [...current, studentId]);
     try {
       await apiDelete(`/api/events/delete_student?student_id=${encodeURIComponent(studentId)}`, authHeaders);
-      setCsvMessage(`Deleted ${studentName}.`);
+      timedCsvMessage(`Deleted ${studentName}.`);
     } catch (error) {
       setUploadedStudents(previousStudents);
       setSelectedUploadedStudentKeys(previousSelectedKeys);
       const message = toErrorMessage(error);
-      setCsvMessage(`Delete failed: ${message}`);
+      timedCsvMessage(`Delete failed: ${message}`);
     } finally {
       setDeletingStudentIds((current) => current.filter((id) => id !== studentId));
     }
@@ -535,7 +542,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     const selectedNames = selectedEntries.map((entry) => entry.name);
     const selectedIds = selectedEntries.map((entry) => entry.id);
     if (selectedNames.length === 0) {
-      setGroupMessage("Select at least one student to make a presentation group.");
+      timedGroupMessage("Select at least one student to make a presentation group.");
       return;
     }
     setPresentationGroups((current) => [
@@ -621,11 +628,11 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
     if (source === "draft" && !isUuid(group.id)) {
       removePresentationGroupFromUi(group.id, source);
-      setEmailMessage("Removed unsaved presentation group.");
+      timedEmailMessage("Removed unsaved presentation group.");
       return;
     }
     if (!isUuid(group.id)) {
-      setEmailMessage("Delete failed: deployed presentation is missing a valid ID.");
+      timedEmailMessage("Delete failed: deployed presentation is missing a valid ID.");
       return;
     }
 
@@ -633,10 +640,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
     try {
       await apiDelete(`/api/events/delete_presentation?presentation_id=${encodeURIComponent(group.id)}`, authHeaders);
       removePresentationGroupFromUi(group.id, source);
-      setEmailMessage("Deleted presentation group.");
+      timedEmailMessage("Deleted presentation group.");
     } catch (error) {
       const message = toErrorMessage(error);
-      setEmailMessage(`Delete failed: ${message}`);
+      timedEmailMessage(`Delete failed: ${message}`);
     } finally {
       setDeletingPresentationGroupIds((current) => current.filter((id) => id !== group.id));
     }
@@ -659,31 +666,31 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
 
   const handleSaveEditedPresentation = async (group: PresentationGroup) => {
     if (!isUuid(group.id)) {
-      setEmailMessage("Save failed: deployed presentation is missing a valid ID.");
+      timedEmailMessage("Save failed: deployed presentation is missing a valid ID.");
       return;
     }
     const title = editingPresentationName.trim();
     const minutes = Number.parseInt(editingPresentationDuration.trim(), 10);
     const buffer = Number.parseInt(editingPresentationBuffer.trim(), 10);
     if (!title) {
-      setEmailMessage("Save failed: presentation title cannot be empty.");
+      timedEmailMessage("Save failed: presentation title cannot be empty.");
       return;
     }
     if (!Number.isFinite(minutes) || minutes < 1) {
-      setEmailMessage("Save failed: duration must be at least 1 minute.");
+      timedEmailMessage("Save failed: duration must be at least 1 minute.");
       return;
     }
     if (!Number.isFinite(buffer) || buffer < 0) {
-      setEmailMessage("Save failed: buffer must be 0 or more minutes.");
+      timedEmailMessage("Save failed: buffer must be 0 or more minutes.");
       return;
     }
     const studentIds = group.studentIds.filter((id) => isUuid(id));
     if (studentIds.length !== group.studentIds.length) {
-      setEmailMessage("Save failed: one or more presenting students have invalid IDs.");
+      timedEmailMessage("Save failed: one or more presenting students have invalid IDs.");
       return;
     }
     if (!classId || !isUuid(classId)) {
-      setEmailMessage("Save failed: class ID is missing or invalid.");
+      timedEmailMessage("Save failed: class ID is missing or invalid.");
       return;
     }
 
@@ -710,11 +717,11 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
             : candidate
         )
       );
-      setEmailMessage("Presentation updated.");
+      timedEmailMessage("Presentation updated.");
       cancelEditDeployedPresentation();
     } catch (error) {
       const message = toErrorMessage(error);
-      setEmailMessage(`Save failed: ${message}`);
+      timedEmailMessage(`Save failed: ${message}`);
     } finally {
       setSavingEditedPresentationId(null);
     }
@@ -724,18 +731,18 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
   const handleEmailPresentations = async () => {
     setEmailMessage("");
     if (!classId) {
-      setEmailMessage("No class is linked to the selected professor.");
+      timedEmailMessage("No class is linked to the selected professor.");
       return;
     }
     if (presentationGroups.length === 0) {
-      setEmailMessage("Create at least one presentation group before deploying.");
+      timedEmailMessage("Create at least one presentation group before deploying.");
       return;
     }
 
     for (let i = 0; i < presentationGroups.length; i += 1) {
       const group = presentationGroups[i];
       if (!group.presentationName.trim()) {
-        setEmailMessage(`Enter a presentation title for Group ${i + 1}.`);
+        timedEmailMessage(`Enter a presentation title for Group ${i + 1}.`);
         return;
       }
       const durationValue = usePerPresentationDuration
@@ -743,7 +750,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         : defaultPresentationDuration.trim();
       const parsedDuration = Number.parseInt(durationValue, 10);
       if (!Number.isFinite(parsedDuration) || parsedDuration < 1) {
-        setEmailMessage(
+        timedEmailMessage(
           usePerPresentationDuration
             ? `Enter a valid duration for Group ${i + 1}.`
             : "Enter a valid default presentation duration."
@@ -755,7 +762,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
         : defaultBufferDuration.trim();
       const parsedBuffer = Number.parseInt(bufferValue, 10);
       if (!Number.isFinite(parsedBuffer) || parsedBuffer < 0) {
-        setEmailMessage(
+        timedEmailMessage(
           usePerBufferDuration
             ? `Enter a valid buffer for Group ${i + 1}.`
             : "Enter a valid default buffer duration."
@@ -810,10 +817,10 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
       }
       const newlyEmailedIds = nextGroups.flatMap((g) => g.studentIds);
       setEmailedStudentIds((current) => new Set([...current, ...newlyEmailedIds]));
-      setEmailMessage(`Saved ${insertedCount} presentation${insertedCount === 1 ? "" : "s"} and emailed ${emailCount} student${emailCount === 1 ? "" : "s"}.`);
+      timedEmailMessage(`Saved ${insertedCount} presentation${insertedCount === 1 ? "" : "s"} and emailed ${emailCount} student${emailCount === 1 ? "" : "s"}.`);
     } catch (error) {
       const message = toErrorMessage(error);
-      setEmailMessage(`Failed: ${message}`);
+      timedEmailMessage(`Failed: ${message}`);
     } finally {
       setDeployingPresentations(false);
     }
@@ -946,101 +953,109 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
               </div>
             </div>
           ) : identityReady ? (
-            <form onSubmit={handleCsvUpload} className="mt-4 w-full space-y-3">
-              <p className="text-sm font-semibold text-[#2d3d7a] md:text-base">
-                File with all students in thesis section:
-              </p>
-              <p className="text-sm text-[#3b4a7c]">
-                Required columns: Last Name, First Name, Username, Last Access
-              </p>
-              <details className="rounded-lg border border-[#d7e0ff] bg-[#f7f9ff]">
-                <summary className="cursor-pointer select-none px-4 py-2 text-sm font-semibold text-[#2d3d7a]">
-                  How to export this file from Blackboard
-                </summary>
-                <ol className="list-decimal space-y-1 px-8 py-3 text-sm text-[#3b4a7c]">
-                  <li>Navigate to your class in Blackboard</li>
-                  <li>Go to <strong>Grade Center</strong> &rarr; <strong>Full Grade Center</strong></li>
-                  <li>Select everyone, then choose <strong>Work Offline</strong> &rarr; <strong>Download</strong></li>
-                  <li>Select <strong>User Information Only</strong> and set the delimiter to <strong>Comma</strong></li>
-                  <li>Click <strong>Download</strong> and save the file</li>
-                </ol>
-              </details>
-              <label className="flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#2f53c4] bg-[#f7f9ff] px-4 py-10 text-center transition hover:bg-[#edf2ff]">
-                <span className="text-base font-semibold text-[#1d2d63]">Drop CSV file here or click to upload</span>
-                <span className="text-sm text-[#4b5d99]">Accepted format: .csv</span>
-                <input
-                  ref={csvInputRef}
-                  type="file"
-                  accept=".csv,text/csv"
-                  className="hidden"
-                  onChange={(event) => {
-                    setCsvFile(event.target.files?.[0] ?? null);
-                    setCsvMessage(null);
-                  }}
-                />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="submit"
-                  disabled={csvUploading}
-                  className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60 md:text-base"
-                >
-                  {csvUploading ? "Uploading..." : "Upload"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowManualStudentEntry((current) => !current);
-                    setManualStudentMessage(null);
-                  }}
-                  className="rounded-lg border border-[#0f33a8] bg-white px-4 py-2 text-sm font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
-                >
-                  Enter Student Manually
-                </button>
-              </div>
-              {showManualStudentEntry ? (
-                <div className="rounded-lg border border-[#d7e0ff] bg-[#fdfdff] p-3">
-                  <p className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Manual Student Entry</p>
-                  <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                    <input
-                      value={manualStudentName}
-                      onChange={(event) => setManualStudentName(event.target.value)}
-                      placeholder="Student name"
-                      className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                    />
-                    <input
-                      type="email"
-                      value={manualStudentEmail}
-                      onChange={(event) => setManualStudentEmail(event.target.value)}
-                      placeholder="student@hamilton.edu"
-                      className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                    />
-                  </div>
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleManualStudentAdd()}
-                      disabled={manualStudentSubmitting}
-                      className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {manualStudentSubmitting ? "Adding..." : "Add Student"}
-                    </button>
-                  </div>
-                  {manualStudentMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{manualStudentMessage}</p> : null}
+            <form onSubmit={handleCsvUpload} className="mt-5 w-full space-y-5">
+
+              {/* ── Step 1: Upload Students ── */}
+              <div>
+                <div className="mb-4 flex items-center gap-2">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#0f33a8] text-xs font-bold text-white">1</span>
+                  <h3 className="text-base font-bold text-[#1d2d63]">Upload Students</h3>
                 </div>
-              ) : null}
-              {csvFile ? <p className="text-sm text-[#333]">Selected file: {csvFile.name}</p> : null}
-              {csvMessage ? <p className="text-sm text-[#222]">{csvMessage}</p> : null}
-              {uploadedStudents.length > 0 ||
-              presentationGroups.length > 0 ||
-              deployedPresentationGroups.length > 0 ? (
-                <div className="w-full rounded-lg border border-[#d7e0ff] bg-[#fdfdff] p-3">
-                  <p className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a]">Uploaded Students</p>
-                  <p className="mt-1 text-xs font-semibold text-[#4b5d99]">
-                    Click student names to select them, then click Make Presentation Group.
-                  </p>
+                <p className="mb-1 text-sm text-[#3b4a7c]">
+                  Required columns: <span className="font-semibold">Last Name, First Name, Username, Last Access</span>
+                </p>
+                <details className="mb-4 rounded-lg border border-[#d7e0ff] bg-[#f7f9ff]">
+                  <summary className="cursor-pointer select-none px-4 py-2 text-sm font-semibold text-[#2d3d7a]">
+                    How to export this file from Blackboard
+                  </summary>
+                  <ol className="list-decimal space-y-1 px-8 py-3 text-sm text-[#3b4a7c]">
+                    <li>Navigate to your class in Blackboard</li>
+                    <li>Go to <strong>Grade Center</strong> &rarr; <strong>Full Grade Center</strong></li>
+                    <li>Select everyone, then choose <strong>Work Offline</strong> &rarr; <strong>Download</strong></li>
+                    <li>Select <strong>User Information Only</strong> and set the delimiter to <strong>Comma</strong></li>
+                    <li>Click <strong>Download</strong> and save the file</li>
+                  </ol>
+                </details>
+                <label className="flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#2f53c4] bg-[#f7f9ff] px-4 py-10 text-center transition hover:bg-[#edf2ff]">
+                  <span className="text-base font-semibold text-[#1d2d63]">Drop CSV file here or click to upload</span>
+                  <span className="text-sm text-[#4b5d99]">Accepted format: .csv</span>
+                  <input
+                    ref={csvInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    onChange={(event) => {
+                      setCsvFile(event.target.files?.[0] ?? null);
+                      setCsvMessage(null);
+                    }}
+                  />
+                </label>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="submit"
+                    disabled={csvUploading}
+                    className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {csvUploading ? "Uploading..." : "Upload"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowManualStudentEntry((current) => !current);
+                      setManualStudentMessage(null);
+                    }}
+                    className="rounded-lg border border-[#0f33a8] bg-white px-4 py-2 text-sm font-semibold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+                  >
+                    {showManualStudentEntry ? "Hide Manual Entry" : "Enter Student Manually"}
+                  </button>
+                </div>
+                {showManualStudentEntry ? (
+                  <div className="mt-4 rounded-xl border border-[#d7e0ff] bg-[#f7f9ff] p-4">
+                    <p className="mb-3 text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Manual Student Entry</p>
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                      <input
+                        value={manualStudentName}
+                        onChange={(event) => setManualStudentName(event.target.value)}
+                        placeholder="Student name"
+                        className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                      />
+                      <input
+                        type="email"
+                        value={manualStudentEmail}
+                        onChange={(event) => setManualStudentEmail(event.target.value)}
+                        placeholder="student@hamilton.edu"
+                        className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                      />
+                    </div>
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={() => void handleManualStudentAdd()}
+                        disabled={manualStudentSubmitting}
+                        className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {manualStudentSubmitting ? "Adding..." : "Add Student"}
+                      </button>
+                    </div>
+                    {manualStudentMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{manualStudentMessage}</p> : null}
+                  </div>
+                ) : null}
+                {csvFile ? <p className="mt-3 text-sm text-[#333]">Selected file: <span className="font-semibold">{csvFile.name}</span></p> : null}
+                {csvMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{csvMessage}</p> : null}
+              </div>
+
+              {/* ── Step 2: Student Roster ── */}
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#0f33a8] text-xs font-bold text-white">2</span>
+                  <h3 className="text-base font-bold text-[#1d2d63]">Student Roster</h3>
+                </div>
+                <div className="rounded-xl border border-[#d7e0ff] bg-white p-4">
                   {uploadedStudents.length > 0 ? (
-                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <p className="mb-3 text-sm text-[#4b5d99]">Select students below, then click Make Presentation Group.</p>
+                  ) : null}
+                  {uploadedStudents.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                       {uploadedStudents.map((student) => {
                         const studentKey = student.id;
                         const isSelected = selectedUploadedStudentKeys.includes(studentKey);
@@ -1051,7 +1066,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                             className={`flex items-center rounded-lg border text-sm font-semibold transition ${
                               isSelected
                                 ? "border-[#0f33a8] bg-[#e9efff] text-[#0f33a8]"
-                                : "border-[#c7c7c7] bg-white text-[#222]"
+                                : "border-[#c7c7c7] bg-[#fafbff] text-[#222]"
                             }`}
                           >
                             <button
@@ -1060,10 +1075,7 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                               disabled={isDeleting}
                               className="flex-1 px-3 py-2 text-left"
                             >
-                              <span className="mr-2">{student.name}</span>
-                              {student.emailed ? (
-                                <span className="rounded-full bg-[#e6f4ea] px-2 py-0.5 text-xs font-semibold text-[#1b6e2b]">Emailed</span>
-                              ) : null}
+                              {student.name}
                             </button>
                             <button
                               type="button"
@@ -1072,280 +1084,219 @@ function ProfessorPageContent({ token, onSignOut, entityId }: { token: string; o
                               className="mr-2 rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f]"
                               aria-label={`Delete ${student.name}`}
                             >
-                              {isDeleting ? "..." : "X"}
+                              {isDeleting ? "..." : "✕"}
                             </button>
                           </div>
                         );
                       })}
                     </div>
                   ) : (
-                    <p className="mt-2 text-sm font-semibold text-[#555]">No ungrouped students remaining.</p>
+                    <p className="text-sm font-semibold text-[#555]">No ungrouped students remaining.</p>
                   )}
-                  <div className="mt-3">
+                  <div className="mt-4">
                     <button
                       type="button"
                       onClick={handleMakePresentationGroup}
-                      disabled={uploadedStudents.length === 0}
-                      className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d]"
+                      disabled={selectedUploadedStudentKeys.length === 0}
+                      className="rounded-lg bg-[#0f33a8] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(15,51,168,0.25)] transition hover:bg-[#0b2a8d] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Make Presentation Group
                     </button>
                     {groupMessage ? <p className="mt-2 text-sm font-semibold text-[#9a1f1f]">{groupMessage}</p> : null}
                   </div>
-                  {presentationGroups.length > 0 ? (
-                    <div className="mt-4 space-y-3">
-                      <div className="rounded-lg border border-[#cfd8ff] bg-white p-3">
-                        <div className="flex gap-4">
-                          <div className="flex flex-1 flex-col gap-1">
-                            <label className="flex flex-col gap-1">
-                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                                Presentation Duration (Minutes)
-                              </span>
-                              <input
-                                type="number"
-                                min={1}
-                                value={defaultPresentationDuration}
-                                onChange={(event) => setDefaultPresentationDuration(event.target.value)}
-                                placeholder="e.g. 15"
-                                disabled={usePerPresentationDuration}
-                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff] disabled:cursor-not-allowed disabled:bg-[#f3f4f6]"
-                              />
-                            </label>
-                            <label className="inline-flex items-center gap-2 text-sm font-semibold text-[#1f2937]">
-                              <input
-                                type="checkbox"
-                                checked={usePerPresentationDuration}
-                                onChange={(event) => setUsePerPresentationDuration(event.target.checked)}
-                              />
-                              Set duration per presentation
-                            </label>
-                          </div>
-                          <div className="flex flex-1 flex-col gap-1">
-                            <label className="flex flex-col gap-1">
-                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                                Buffer Duration (Minutes)
-                              </span>
-                              <input
-                                type="number"
-                                min={1}
-                                value={defaultBufferDuration}
-                                onChange={(event) => setDefaultBufferDuration(event.target.value)}
-                                placeholder="e.g. 5"
-                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                              />
-                            </label>
-                            <label className="inline-flex items-center gap-2 text-sm font-semibold text-[#1f2937]">
-                              <input
-                                type="checkbox"
-                                checked={usePerBufferDuration}
-                                onChange={(event) => setUsePerBufferDuration(event.target.checked)}
-                              />
-                              Set duration per presentation
-                            </label>
-                          </div>
+                </div>
+              </div>
+
+              {/* ── Step 3: Build Presentation Groups ── */}
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#0f33a8] text-xs font-bold text-white">3</span>
+                  <h3 className="text-base font-bold text-[#1d2d63]">Build Presentation Groups</h3>
+                </div>
+                <div className="rounded-xl border border-[#d7e0ff] bg-white p-4">
+                  {/* Draft group cards */}
+                  {presentationGroups.length === 0 ? (
+                    <p className="text-sm font-semibold text-[#555]">No presentation groups yet.</p>
+                  ) : null}
+                  <div className="space-y-3">
+                    {presentationGroups.map((group, groupIndex) => (
+                      <div key={group.id} className="rounded-xl border border-[#cfd8ff] bg-[#fafbff] p-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
+                            Group {groupIndex + 1}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeletePresentationGroup(group, "draft")}
+                            disabled={deletingPresentationGroupIds.includes(group.id)}
+                            className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {deletingPresentationGroupIds.includes(group.id) ? "..." : "Delete"}
+                          </button>
                         </div>
-                      </div>
-                      {presentationGroups.map((group, groupIndex) => (
-                        <div key={group.id} className="rounded-lg border border-[#cfd8ff] bg-white p-3">
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                              Group {groupIndex + 1}
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => void handleDeletePresentationGroup(group, "draft")}
-                              disabled={deletingPresentationGroupIds.includes(group.id)}
-                              className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {deletingPresentationGroupIds.includes(group.id) ? "..." : "Delete"}
-                            </button>
-                          </div>
-                          <p className="mt-1 text-sm text-[#222]">{group.studentNames.join(", ")}</p>
-                          <label className="mt-2 flex flex-col gap-1">
-                            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                              Presentation Name
-                            </span>
+                        <p className="mt-1 text-sm text-[#555]">{group.studentNames.join(", ")}</p>
+                        <div className="mt-3 flex flex-wrap items-end gap-4">
+                          <div className="flex min-w-0 flex-1 flex-col gap-1">
+                            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Presentation Name</span>
                             <input
                               value={group.presentationName}
                               onChange={(event) => setPresentationGroupName(group.id, event.target.value)}
                               placeholder="Enter presentation title"
                               className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
                             />
-                          </label>
-                          <div className="mt-2 flex gap-4">
-                            {usePerPresentationDuration ? (
-                              <label className="flex flex-1 flex-col gap-1">
-                                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                                  Duration (Minutes)
-                                </span>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={group.durationMinutes}
-                                  onChange={(event) => setPresentationGroupDuration(group.id, event.target.value)}
-                                  placeholder="e.g. 15"
-                                  className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                                />
-                              </label>
-                            ) : (
-                              <p className="flex-1 text-sm font-semibold text-[#2d3d7a]">
-                                Duration: {defaultPresentationDuration.trim() ? `${defaultPresentationDuration} minutes` : "Not set"}
-                              </p>
-                            )}
-                            {usePerBufferDuration ? (
-                              <label className="flex flex-1 flex-col gap-1">
-                                <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                                  Buffer (Minutes)
-                                </span>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={group.bufferMinutes}
-                                  onChange={(event) => setPresentationGroupBuffer(group.id, event.target.value)}
-                                  placeholder="e.g. 5"
-                                  className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                                />
-                              </label>
-                            ) : (
-                              <p className="flex-1 text-sm font-semibold text-[#2d3d7a]">
-                                Buffer: {defaultBufferDuration.trim() ? `${defaultBufferDuration} minutes` : "Not set"}
-                              </p>
-                            )}
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Duration</span>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                min={1}
+                                value={group.durationMinutes}
+                                onChange={(event) => setPresentationGroupDuration(group.id, event.target.value)}
+                                placeholder="e.g. 15"
+                                className="w-28 rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                              />
+                              <span className="text-sm text-[#555]">minutes</span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Buffer <span className="normal-case font-normal text-[#4b5d99]">(default set by admin)</span></span>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                min={0}
+                                value={group.bufferMinutes}
+                                onChange={(event) => setPresentationGroupBuffer(group.id, event.target.value)}
+                                placeholder={defaultBufferDuration.trim() || "e.g. 5"}
+                                className="w-28 rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                              />
+                              <span className="text-sm text-[#555]">minutes</span>
+                            </div>
                           </div>
                         </div>
-                      ))}
-                      <div className="pt-1">
-                        <button
-                          type="button"
-                          onClick={() => void handleEmailPresentations()}
-                          disabled={emailingPresentations}
-                          className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(27,110,43,0.25)] transition hover:bg-[#155622]"
-                        >
-                          {emailingPresentations ? "Sending Emails..." : "Send Emails"}
-                        </button>
-                        {emailMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{emailMessage}</p> : null}
                       </div>
-                    </div>
+                    ))}
+                  </div>
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={() => void handleEmailPresentations()}
+                      disabled={emailingPresentations || presentationGroups.length === 0}
+                      className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(27,110,43,0.25)] transition hover:bg-[#155622] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {emailingPresentations ? "Sending Emails..." : "Send Emails"}
+                    </button>
+                    {emailMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{emailMessage}</p> : null}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Step 4: Emailed Presentations ── */}
+              <div>
+                <h3 className="mb-2 text-base font-bold text-[#1d2d63]">Emailed Presentations</h3>
+                <div className="rounded-xl border border-[#d7e0ff] bg-white p-4">
+                  {deployedPresentationGroups.length === 0 ? (
+                    <p className="text-sm font-semibold text-[#555]">No emailed presentations yet.</p>
                   ) : null}
-                  {deployedPresentationGroups.length > 0 ? (
-                    <div className="mt-4 rounded-lg border border-[#d7e0ff] bg-white p-3">
-                      <h4 className="text-sm font-bold uppercase tracking-wide text-[#2d3d7a] md:text-base">
-                        Deployed Presentations
-                      </h4>
-                      <div className="mt-2 space-y-2">
-                        {deployedPresentationGroups.map((group, index) => (
-                          <div key={`deployed-${group.id}`} className="rounded border border-[#cfd8ff] bg-[#fdfdff] p-2">
-                            <div className="flex items-start justify-between gap-2">
-                              <p className="text-sm font-semibold text-[#111]">{`Presentation ${index + 1}`}</p>
-                              <div className="flex items-center gap-1">
-                                {editingDeployedPresentationId === group.id ? (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleSaveEditedPresentation(group)}
-                                      disabled={savingEditedPresentationId === group.id}
-                                      className="rounded border border-[#1b6e2b] bg-white px-2 py-0.5 text-xs font-bold text-[#1b6e2b] transition hover:bg-[#edf8f0] disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                      {savingEditedPresentationId === group.id ? "Saving..." : "Save"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={cancelEditDeployedPresentation}
-                                      disabled={savingEditedPresentationId === group.id}
-                                      className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#666]"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => startEditDeployedPresentation(group)}
-                                    className="rounded border border-[#0f33a8] bg-white px-2 py-0.5 text-xs font-bold text-[#0f33a8] transition hover:bg-[#eef3ff]"
-                                  >
-                                    Edit
-                                  </button>
-                                )}
+                  <div className="space-y-3">
+                    {deployedPresentationGroups.map((group, index) => (
+                      <div key={`deployed-${group.id}`} className="rounded-xl border border-[#cfd8ff] bg-[#fafbff] p-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm font-semibold text-[#1d2d63]">{`Presentation ${index + 1}`}</p>
+                          <div className="flex items-center gap-1">
+                            {editingDeployedPresentationId === group.id ? (
+                              <>
                                 <button
                                   type="button"
-                                  onClick={() => void handleDeletePresentationGroup(group, "deployed")}
-                                  disabled={deletingPresentationGroupIds.includes(group.id) || savingEditedPresentationId === group.id}
-                                  className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
+                                  onClick={() => void handleSaveEditedPresentation(group)}
+                                  disabled={savingEditedPresentationId === group.id}
+                                  className="rounded border border-[#1b6e2b] bg-white px-2 py-0.5 text-xs font-bold text-[#1b6e2b] transition hover:bg-[#edf8f0] disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                  {deletingPresentationGroupIds.includes(group.id) ? "..." : "Delete"}
+                                  {savingEditedPresentationId === group.id ? "Saving..." : "Save"}
                                 </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelEditDeployedPresentation}
+                                  disabled={savingEditedPresentationId === group.id}
+                                  className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#666]"
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => startEditDeployedPresentation(group)}
+                                className="rounded border border-[#0f33a8] bg-white px-2 py-0.5 text-xs font-bold text-[#0f33a8] transition hover:bg-[#eef3ff]"
+                              >
+                                Edit
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => void handleDeletePresentationGroup(group, "deployed")}
+                              disabled={deletingPresentationGroupIds.includes(group.id) || savingEditedPresentationId === group.id}
+                              className="rounded border border-[#bdbdbd] bg-white px-2 py-0.5 text-xs font-bold text-[#444] transition hover:border-[#9a1f1f] hover:text-[#9a1f1f] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deletingPresentationGroupIds.includes(group.id) ? "..." : "Delete"}
+                            </button>
+                          </div>
+                        </div>
+                        {editingDeployedPresentationId === group.id ? (
+                          <div className="mt-3 flex flex-wrap items-end gap-4">
+                            <div className="flex min-w-0 flex-1 flex-col gap-1">
+                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Presentation Name</span>
+                              <input
+                                value={editingPresentationName}
+                                onChange={(event) => setEditingPresentationName(event.target.value)}
+                                className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Duration</span>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={editingPresentationDuration}
+                                  onChange={(event) => setEditingPresentationDuration(event.target.value)}
+                                  className="w-28 rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                                />
+                                <span className="text-sm text-[#555]">minutes</span>
                               </div>
                             </div>
-                            {editingDeployedPresentationId === group.id ? (
-                              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
-                                <label className="flex flex-col gap-1">
-                                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                                    Presentation Name
-                                  </span>
-                                  <input
-                                    value={editingPresentationName}
-                                    onChange={(event) => setEditingPresentationName(event.target.value)}
-                                    className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                                  />
-                                </label>
-                                <label className="flex flex-col gap-1">
-                                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                                    Duration (Minutes)
-                                  </span>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    value={editingPresentationDuration}
-                                    onChange={(event) => setEditingPresentationDuration(event.target.value)}
-                                    className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                                  />
-                                </label>
-                                <label className="flex flex-col gap-1">
-                                  <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">
-                                    Buffer (Minutes)
-                                  </span>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    value={editingPresentationBuffer}
-                                    onChange={(event) => setEditingPresentationBuffer(event.target.value)}
-                                    className="w-full rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
-                                  />
-                                </label>
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs font-bold uppercase tracking-wide text-[#2d3d7a]">Buffer <span className="normal-case font-normal text-[#4b5d99]">(default set by admin)</span></span>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={editingPresentationBuffer}
+                                  onChange={(event) => setEditingPresentationBuffer(event.target.value)}
+                                  className="w-28 rounded-lg border border-[#c7c7c7] bg-white px-3 py-2 text-sm text-black shadow-sm outline-none transition focus:border-[#1237af] focus:ring-2 focus:ring-[#c7d4ff]"
+                                />
+                                <span className="text-sm text-[#555]">minutes</span>
                               </div>
-                            ) : (
-                              <>
-                                <p className="text-sm font-semibold text-[#111]">
-                                  {group.presentationName.trim() || `Presentation ${index + 1}`}
-                                </p>
-                                <p className="text-xs text-[#444]">
-                                  {group.durationMinutes.trim()
-                                    ? `${group.durationMinutes.trim()} minutes`
-                                    : "Duration not set"}
-                                  {group.bufferMinutes.trim()
-                                    ? ` | Buffer: ${group.bufferMinutes.trim()} min`
-                                    : ""}
-                                </p>
-                              </>
-                            )}
-                            <p className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-[#444]">
-                              {group.studentIds.map((studentId, i) => (
-                                <span key={studentId} className="flex items-center gap-1">
-                                  {i > 0 ? <span className="text-[#aaa]">,</span> : null}
-                                  {group.studentNames[i] ?? studentId}
-                                  {emailedStudentIds.has(studentId) ? (
-                                    <span className="rounded-full bg-[#e6f4ea] px-2 py-0.5 text-xs font-semibold text-[#1b6e2b]">Emailed</span>
-                                  ) : null}
-                                </span>
-                              ))}
-                            </p>
+                            </div>
                           </div>
-                        ))}
+                        ) : (
+                          <>
+                            <p className="mt-1 text-sm font-semibold text-[#111]">
+                              {group.presentationName.trim() || `Presentation ${index + 1}`}
+                            </p>
+                            <p className="text-xs text-[#555]">
+                              {group.durationMinutes.trim() ? `${group.durationMinutes.trim()} min` : "Duration not set"}
+                              {group.bufferMinutes.trim() ? ` · Buffer: ${group.bufferMinutes.trim()} min` : ""}
+                            </p>
+                          </>
+                        )}
+                        <p className="mt-1 text-xs text-[#666]">{group.studentNames.join(", ")}</p>
                       </div>
-                    </div>
-                  ) : null}
+                    ))}
+                  </div>
                 </div>
-              ) : null}
+              </div>
+
             </form>
           ) : null}
         </section>

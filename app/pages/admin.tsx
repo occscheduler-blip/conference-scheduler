@@ -1531,12 +1531,12 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
                             <div className="flex items-start justify-between gap-2">
                               <div>
                                 <p className="font-semibold">{department.department_name}</p>
-                                <p className="text-xs text-[#555]">
-                                  {department.department_head_name} ({department.email})
+                                <p className="flex items-center gap-2 text-xs text-[#555]">
+                                  <span>{department.department_head_name} ({department.email})</span>
+                                  {department.emailed ? (
+                                    <span className="rounded-full bg-[#e6f4ea] px-2 py-0.5 text-xs font-semibold text-[#1b6e2b]">Emailed</span>
+                                  ) : null}
                                 </p>
-                                {department.emailed ? (
-                                  <span className="mt-1 inline-block rounded-full bg-[#e6f4ea] px-2 py-0.5 text-xs font-semibold text-[#1b6e2b]">Emailed</span>
-                                ) : null}
                               </div>
                               <div className="flex items-center gap-2">
                                 <button
@@ -1562,15 +1562,15 @@ export default function AdminPage({ token, onSignOut, isSuperAdmin, entityId }: 
                     )}
                   </div>
 
-                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <div className="mt-4">
                     <button
                       type="button"
                       onClick={handleEmailEvent}
-                      className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#155622]"
+                      className="rounded-lg bg-[#1b6e2b] px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(27,110,43,0.25)] transition hover:bg-[#155622]"
                     >
                       Send Emails
                     </button>
-                    {emailEventMessage ? <p className="text-sm font-semibold text-[#222]">{emailEventMessage}</p> : null}
+                    {emailEventMessage ? <p className="mt-2 text-sm font-semibold text-[#222]">{emailEventMessage}</p> : null}
                   </div>
 
                 </div>
