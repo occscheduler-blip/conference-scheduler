@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
 
     backend_cors_origins: str = "http://localhost:3000"
-    site_url: str = ""  # public frontend URL used in emails; falls back to first CORS origin
+    site_url: str = "https://conference-scheduler-black.vercel.app"  # public frontend URL used in emails; falls back to first CORS origin
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_db_url: str = ""
@@ -26,8 +26,11 @@ class Settings(BaseSettings):
     jwt_secret_key: str = ""
     jwt_ttl_hours: int = 24
 
-    resend_api_key: str = ""
-    resend_from: str = "noreply@hamilton.edu"
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""  # e.g. 'Conference Scheduler <conferences@hamilton.edu>'; defaults to smtp_username
 
     @property
     def cors_origins(self) -> list[str]:

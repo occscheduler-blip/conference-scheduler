@@ -38,6 +38,13 @@ router = APIRouter()
 
 _SINGLETON_INDEX = "scheduler_jobs_active_singleton"
 
+# A pending/running row whose updated_at hasn't advanced past this is assumed
+# dead — the daemon thread that owned it died with its worker (Render recycle,
+# OOM, crash) before it could write back a terminal status. Budget covers the
+# worst-case live run: ~25 min for a hierarchical debug-mode solve, plus
+# headroom for Supabase write latency.
+_STALE_ACTIVE_JOB_SECONDS = 30 * 60
+
 
 def _is_singleton_violation(exc: Exception) -> bool:
     """True if exc looks like a unique-violation on the active-job partial index."""
@@ -49,13 +56,36 @@ def _is_singleton_violation(exc: Exception) -> bool:
 def _existing_active_job(symposium_id: str) -> dict[str, Any] | None:
     resp = (
         supabase.table("scheduler_jobs")
-        .select("id,status")
+        .select("id,status,updated_at")
         .eq("symposium_id", symposium_id)
         .in_("status", ["pending", "running"])
         .execute()
     )
     rows = cast(list[dict[str, Any]], resp.data or [])
     return rows[0] if rows else None
+
+
+def _is_stale_active_job(job: dict[str, Any]) -> bool:
+    raw_updated = job.get("updated_at")
+    if not raw_updated:
+        return False
+    try:
+        updated_at = parse_app_datetime(raw_updated)
+    except Exception:
+        return False
+    age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+    return age > _STALE_ACTIVE_JOB_SECONDS
+
+
+def _mark_job_failed(job_id: str, error: str) -> None:
+    try:
+        supabase.table("scheduler_jobs").update({
+            "status": "failed",
+            "error": error,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", job_id).execute()
+    except Exception:
+        logger.exception("failed to mark stale scheduler_jobs row %s as failed", job_id)
 
 
 def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConstraints, slot_minutes: int, debug_mode: bool = False) -> None:
@@ -119,27 +149,52 @@ def run_schedule(
         symposium_id_str = str(body.symposium_id)
 
         with symposium_lock(symposium_id_str):
-            try:
-                job_row = (
+            def _try_insert() -> dict[str, Any]:
+                resp = (
                     supabase.table("scheduler_jobs")
                     .insert({"symposium_id": symposium_id_str, "status": "pending"})
                     .execute()
                 )
+                return cast(dict[str, Any], resp.data[0])
+
+            try:
+                row = _try_insert()
             except Exception as exc:
-                if _is_singleton_violation(exc):
-                    existing = _existing_active_job(symposium_id_str)
-                    if existing is not None:
+                if not _is_singleton_violation(exc):
+                    raise
+                existing = _existing_active_job(symposium_id_str)
+                if existing is None:
+                    raise
+                if _is_stale_active_job(existing):
+                    logger.warning(
+                        "scheduler_jobs row %s for symposium %s is stale (updated_at=%s); resetting and retrying insert",
+                        existing["id"], symposium_id_str, existing.get("updated_at"),
+                    )
+                    _mark_job_failed(
+                        existing["id"],
+                        "Marked stale by next run: previous worker likely died before completing.",
+                    )
+                    try:
+                        row = _try_insert()
+                    except Exception as retry_exc:
+                        logger.exception(
+                            "retry insert after clearing stale job %s failed", existing["id"]
+                        )
                         raise HTTPException(
-                            status_code=409,
-                            detail={
-                                "code": "scheduler_busy",
-                                "message": "A scheduler run is already in progress for this symposium.",
-                                "job_id": existing["id"],
-                                "status": existing["status"],
-                            },
-                        ) from exc
-                raise
-            job_id = cast(dict[str, Any], job_row.data[0])["id"]
+                            status_code=500,
+                            detail=f"Failed to start scheduler after clearing stale job: {retry_exc}",
+                        ) from retry_exc
+                else:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "scheduler_busy",
+                            "message": "A scheduler run is already in progress for this symposium.",
+                            "job_id": existing["id"],
+                            "status": existing["status"],
+                        },
+                    ) from exc
+            job_id = row["id"]
 
         thread = threading.Thread(target=_run_schedule_job, args=(job_id, symposium_id_str, constraints, slot_minutes, body.debug_mode), daemon=True)
         thread.start()

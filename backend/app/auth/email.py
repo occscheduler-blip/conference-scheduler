@@ -1,6 +1,6 @@
 import logging
-
-import resend
+import smtplib
+from email.message import EmailMessage
 
 from app.config import get_settings
 
@@ -12,30 +12,6 @@ _BODY_TEMPLATE = (
     "<h2 style='letter-spacing:4px'>{code}</h2>"
     "<p>This code expires in 10 minutes. Do not share it with anyone.</p>"
 )
-
-
-def send_otp_email(to_email: str, otp_code: str) -> None:
-    """Send the OTP to *to_email* via Resend.
-
-    If RESEND_API_KEY is not configured, logs the code at WARNING level
-    so local development works without email credentials.
-    """
-    settings = get_settings()
-
-    if not settings.resend_api_key:
-        logger.warning("[DEV] OTP for %s: %s", to_email, otp_code)
-        return
-
-    resend.api_key = settings.resend_api_key
-    resend.Emails.send(
-        {
-            "from": settings.resend_from,
-            "to": [to_email],
-            "subject": _SUBJECT,
-            "html": _BODY_TEMPLATE.format(code=otp_code),
-        }
-    )
-
 
 _DEPT_HEAD_SUBJECT = "You've been invited to Conference Scheduler"
 _DEPT_HEAD_BODY = (
@@ -63,13 +39,32 @@ _STUDENT_BODY = (
 
 
 def _send(to_email: str, subject: str, html: str) -> None:
-    """Shared Resend dispatch. Logs in dev if no API key is set."""
+    """Shared SMTP dispatch. Logs in dev if SMTP credentials are not set."""
     settings = get_settings()
-    if not settings.resend_api_key:
+    if not settings.smtp_username or not settings.smtp_password:
         logger.warning("[DEV] Email to %s | %s", to_email, subject)
         return
-    resend.api_key = settings.resend_api_key
-    resend.Emails.send({"from": settings.resend_from, "to": [to_email], "subject": subject, "html": html})
+
+    msg = EmailMessage()
+    msg["From"] = settings.smtp_from or settings.smtp_username
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content("This email requires an HTML-capable client.")
+    msg.add_alternative(html, subtype="html")
+
+    with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as smtp:
+        smtp.starttls()
+        smtp.login(settings.smtp_username, settings.smtp_password)
+        smtp.send_message(msg)
+
+
+def send_otp_email(to_email: str, otp_code: str) -> None:
+    """Send the OTP to *to_email* via SMTP.
+
+    If SMTP credentials are not configured, logs the code at WARNING level
+    so local development works without email credentials.
+    """
+    _send(to_email, _SUBJECT, _BODY_TEMPLATE.format(code=otp_code))
 
 
 def send_dept_head_notification(to_email: str, name: str, symposium_name: str, login_url: str) -> None:
@@ -82,4 +77,3 @@ def send_professor_notification(to_email: str, name: str, symposium_name: str, l
 
 def send_student_notification(to_email: str, name: str, symposium_name: str, login_url: str) -> None:
     _send(to_email, _STUDENT_SUBJECT, _STUDENT_BODY.format(name=name, symposium_name=symposium_name, login_url=login_url))
-

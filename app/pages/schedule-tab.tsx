@@ -425,6 +425,7 @@ export default function ScheduleTab({
     setDebugBestAssignments([]);
     try {
       let jobId: string;
+      let attachedToExisting = false;
       try {
         const { raw: startRaw } = await apiPost("/api/events/schedule", {
           symposium_id: selectedSymposiumId,
@@ -451,8 +452,8 @@ export default function ScheduleTab({
           const detail = (err.body as { detail?: { job_id?: string } }).detail;
           const existingId = detail?.job_id;
           if (typeof existingId === "string") {
-            setSchedulerMessage("A scheduler run is already in progress for this symposium. Tracking it…");
             jobId = existingId;
+            attachedToExisting = true;
           } else {
             throw err;
           }
@@ -462,7 +463,11 @@ export default function ScheduleTab({
           throw err;
         }
       }
-      setSchedulerMessage(debugMode ? "Testing all constraint combinations... (up to 10 minutes)" : "Scheduler running...");
+      if (attachedToExisting) {
+        setSchedulerMessage("A scheduler run is already in progress for this symposium. Tracking it…");
+      } else {
+        setSchedulerMessage(debugMode ? "Testing all constraint combinations... (up to 10 minutes)" : "Scheduler running...");
+      }
 
       const POLL_TIMEOUT_MS = debugMode ? 10 * 60 * 1000 : 5 * 60 * 1000;
       const pollStart = Date.now();
