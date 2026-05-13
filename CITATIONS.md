@@ -29,4 +29,3 @@ It applies to frontend code, backend code, and architecture/process documentatio
 ## Diagram and Documentation Syntax
 
 1. Mermaid Documentation. Mermaid. https://mermaid.js.org/intro/
-
