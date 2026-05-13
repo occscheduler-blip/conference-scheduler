@@ -55,6 +55,8 @@ def email_symposium(
         )
         emails_sent = 0
         for department in departments:
+            if department.get("emailed"):
+                continue
             email = str(department.get("email") or "").strip().lower()
             if not email:
                 continue
@@ -64,6 +66,7 @@ def email_symposium(
                 symposium_name,
                 _login_url(),
             )
+            supabase.table("departments").update({"emailed": True}).eq("id", str(department["id"])).execute()
             emails_sent += 1
         return {"status": "sent", "emails_sent": emails_sent}
     except HTTPException:
@@ -103,6 +106,8 @@ def email_classes(
         )
         emails_sent = 0
         for professor in professors:
+            if professor.get("emailed"):
+                continue
             email = str(professor.get("email") or "").strip().lower()
             if not email:
                 continue
@@ -112,6 +117,7 @@ def email_classes(
                 symposium_name,
                 _login_url(),
             )
+            supabase.table("professors").update({"emailed": True}).eq("id", str(professor["id"])).execute()
             emails_sent += 1
         return {"status": "sent", "emails_sent": emails_sent}
     except HTTPException:
@@ -175,6 +181,8 @@ def email_students(
 
         emails_sent = 0
         for student in students:
+            if student.get("emailed"):
+                continue
             email = str(student.get("email") or "").strip().lower()
             if not email:
                 continue
@@ -184,6 +192,7 @@ def email_students(
                 symposium_name,
                 _login_url(),
             )
+            supabase.table("students").update({"emailed": True}).eq("id", str(student["id"])).execute()
             emails_sent += 1
         return {"status": "sent", "emails_sent": emails_sent}
     except HTTPException:

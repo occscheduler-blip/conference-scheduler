@@ -155,6 +155,7 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
                   id: professor.id,
                   name: professor.name ?? "",
                   email: professor.email ?? "",
+                  emailed: (professor as { emailed?: boolean }).emailed ?? false,
                 }));
                 const professorIds = professorRows
                   .map((professor) => professor.id)
@@ -406,6 +407,13 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
       const { raw } = await apiPost("/api/events/email_classes", { department_id: selectedDepartmentId }, authHeaders);
       const count = raw.emails_sent as number;
       setEmailMessage(`Emailed ${count} professor${count === 1 ? "" : "s"}.`);
+      setSavedClasses((current) =>
+        current.map((cls) =>
+          cls.departmentId === selectedDepartmentId
+            ? { ...cls, professors: cls.professors.map((p) => ({ ...p, emailed: true })) }
+            : cls
+        )
+      );
     } catch (error) {
       const message = toErrorMessage(error);
       setEmailMessage(`Failed: ${message}`);
@@ -694,8 +702,11 @@ function DepartmentHeadPageContent({ token, onSignOut, entityId }: { token: stri
                     {editingLocalId !== savedClass.localId ? (
                       <ul className="mt-2 space-y-1 text-sm text-[#333]">
                         {savedClass.professors.map((professor, index) => (
-                          <li key={`${savedClass.localId}-${index}`}>
-                            {professor.name} ({professor.email})
+                          <li key={`${savedClass.localId}-${index}`} className="flex items-center gap-2">
+                            <span>{professor.name} ({professor.email})</span>
+                            {professor.emailed ? (
+                              <span className="rounded-full bg-[#e6f4ea] px-2 py-0.5 text-xs font-semibold text-[#1b6e2b]">Emailed</span>
+                            ) : null}
                           </li>
                         ))}
                       </ul>

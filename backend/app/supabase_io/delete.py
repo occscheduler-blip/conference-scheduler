@@ -84,11 +84,11 @@ def delete_timeframes(linked_id: UUID | list[UUID]) -> int:
 
 def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
     logger.info("DELETE student: student_id=%s", student_id)
-    # TODO: Make sure that if the last student is deleted from a presentation, the presentation is deleted as well.
     student_ids = _to_uuid_list(student_id)
     counts: dict[str, int] = {
         "students": 0,
         "presenting_students": 0,
+        "presentations": 0,
         "requests": 0,
         "timeframes": 0,
     }
@@ -96,6 +96,16 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
         return counts
 
     str_ids = [str(uid) for uid in student_ids]
+
+    # Record which presentations these students belong to before deleting.
+    affected_rows = (
+        supabase.table("presenting_students")
+        .select("presentation_id")
+        .in_("student_id", str_ids)
+        .execute()
+    )
+    affected_pres_ids = list({cast("dict[str, Any]", row)["presentation_id"] for row in (affected_rows.data or [])})
+
     del_stu_query = supabase.table("students").delete().in_("id", str_ids)
     del_presenting_student_query = (
         supabase.table("presenting_students").delete().in_("student_id", str_ids)
@@ -109,6 +119,20 @@ def delete_student(student_id: UUID | list[UUID]) -> dict[str, int]:
     counts["presenting_students"] = _rows_affected(del_presenting_student_query.execute())
     counts["requests"] = _rows_affected(del_prof_request_query.execute())
     counts["students"] = _rows_affected(del_stu_query.execute())
+
+    # Cascade: delete any presentations that now have no remaining students.
+    if affected_pres_ids:
+        still_occupied = (
+            supabase.table("presenting_students")
+            .select("presentation_id")
+            .in_("presentation_id", affected_pres_ids)
+            .execute()
+        )
+        occupied_ids = {cast("dict[str, Any]", row)["presentation_id"] for row in (still_occupied.data or [])}
+        now_empty = [UUID(str(pid)) for pid in affected_pres_ids if pid not in occupied_ids]
+        if now_empty:
+            _merge_counts(counts, delete_presentation(now_empty))
+
     return counts
 
 

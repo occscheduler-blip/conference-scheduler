@@ -37,6 +37,7 @@ export type DepartmentRecord = {
   department_name: string;
   department_head_name: string;
   email?: string;
+  emailed?: boolean;
 };
 
 // A class (course) linked to a department
@@ -80,6 +81,7 @@ export type ProfessorRow = {
   id?: string;
   name: string;
   email: string;
+  emailed?: boolean;
 };
 
 // A class that has been saved locally during the admin create flow
@@ -103,6 +105,7 @@ export type CalendarDay = {
 export type UploadedStudent = {
   id: string;
   name: string;
+  emailed?: boolean;
 };
 
 // A group of students presenting together, with a name and duration
