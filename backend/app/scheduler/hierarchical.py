@@ -1131,7 +1131,7 @@ def verify_assignments_split(
 
 def solve_hierarchical(
     problem: ScheduleProblem,
-    time_limit_seconds: float = 30.0,
+    time_limit_seconds: float = 3600.0,
     num_search_workers: int = 4,
 ) -> ScheduleResult:
     """Run the full pipeline end-to-end and return a ScheduleResult."""

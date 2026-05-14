@@ -303,13 +303,14 @@ def _should_use_hierarchical(problem: ScheduleProblem) -> bool:
 def build_schedule_for_symposium(
     symposium_id: str | UUID,
     slot_minutes: int = 5,
-    time_limit_seconds: float = 30.0,
+    time_limit_seconds: float = 3600.0,
     constraints: ScheduleConstraints | None = None,
     debug_mode: bool = False,
 ) -> ScheduleResult:
     if debug_mode:
         time_limit_seconds = 60.0  # quick initial solve; exhaustive search uses remaining budget
 
+    t_wall = time.perf_counter()
     problem = build_problem_from_symposium(
         symposium_id=symposium_id,
         slot_minutes=slot_minutes,
@@ -379,4 +380,8 @@ def build_schedule_for_symposium(
             debug_best_assignments=debug_best_assignments,
         )
 
+    logger.info(
+        "build_schedule_for_symposium total wall: %.2fs  status=%s  assignments=%d",
+        time.perf_counter() - t_wall, result.status, len(result.assignments),
+    )
     return result

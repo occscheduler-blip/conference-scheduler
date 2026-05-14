@@ -56,7 +56,7 @@ def _objective_weighted_sum(
 
 
 def solve_schedule(
-    problem: ScheduleProblem, time_limit_seconds: float = 30.0, num_search_workers: int = 4
+    problem: ScheduleProblem, time_limit_seconds: float = 3600.0, num_search_workers: int = 4
 ) -> ScheduleResult:
     """Build and solve the CP-SAT schedule model for a symposium.
 
