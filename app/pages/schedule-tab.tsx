@@ -463,18 +463,20 @@ export default function ScheduleTab({
           throw err;
         }
       }
+      const POLL_TIMEOUT_MS = debugMode ? 45 * 60 * 1000 : 30 * 60 * 1000;
+      const pollTimeoutMinutes = Math.round(POLL_TIMEOUT_MS / 60000);
+
       if (attachedToExisting) {
         setSchedulerMessage("A scheduler run is already in progress for this symposium. Tracking it…");
       } else {
-        setSchedulerMessage(debugMode ? "Testing all constraint combinations... (up to 10 minutes)" : "Scheduler running...");
+        setSchedulerMessage(debugMode ? `Testing all constraint combinations... (up to ${pollTimeoutMinutes} minutes)` : "Scheduler running...");
       }
 
-      const POLL_TIMEOUT_MS = debugMode ? 10 * 60 * 1000 : 5 * 60 * 1000;
       const pollStart = Date.now();
       const raw = await new Promise<Record<string, unknown>>((resolve, reject) => {
         const poll = async () => {
           if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
-            reject(new Error(debugMode ? "Debugger timed out after 10 minutes." : "Scheduler timed out after 5 minutes."));
+            reject(new Error(`${debugMode ? "Debugger" : "Scheduler"} timed out after ${pollTimeoutMinutes} minutes.`));
             return;
           }
           try {
