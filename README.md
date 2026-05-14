@@ -73,9 +73,9 @@ Every constraint is configurable per run as **hard / soft / off** (room conflict
 | Backend | FastAPI (Python), Uvicorn |
 | Database | Supabase (managed PostgreSQL) |
 | Optimizer | Google OR-Tools CP-SAT |
-| Auth | JWT (HS256), bcrypt, OTP via Resend email |
+| Auth | JWT (HS256), bcrypt, OTP via Gmail SMTP |
 | Testing | Vitest (frontend), pytest + mypy (backend) |
-| Deployment | Vercel (frontend), Render (backend) |
+| Deployment | Vercel (frontend), Oracle Cloud Always Free VM + Caddy + systemd (backend) |
 
 ### Key features
 
@@ -170,8 +170,11 @@ SUPABASE_URL=http://127.0.0.1:54321
 SUPABASE_KEY=<SERVICE_ROLE_KEY from supabase status>
 SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
 JWT_SECRET_KEY=any-random-string
-RESEND_API_KEY=            # optional — needed to send OTP emails
-RESEND_FROM=noreply@example.com
+SMTP_HOST=smtp.gmail.com   # optional in local dev — without it, OTPs are logged instead of sent
+SMTP_PORT=587
+SMTP_USERNAME=your.email@hamilton.edu
+SMTP_PASSWORD=xxxxxxxxxxxxxxxx     # 16-char Google App Password (requires 2-Step Verification)
+SMTP_FROM=Conference Scheduler <your.email@hamilton.edu>
 ```
 
 Full list of backend environment variables:
@@ -182,8 +185,11 @@ Full list of backend environment variables:
 | `SUPABASE_KEY` | Yes | — | Supabase service role key |
 | `JWT_SECRET_KEY` | Yes | — | HS256 signing secret |
 | `SUPABASE_DB_URL` | Tests only | — | Direct PostgreSQL URL (used by `tests/db_helper.py`) |
-| `RESEND_API_KEY` | No | — | Email OTP delivery; if unset, OTPs are logged at WARNING instead of sent |
-| `RESEND_FROM` | No | `noreply@hamilton.edu` | OTP sender address (must be a Resend-verified domain) |
+| `SMTP_HOST` | No | `smtp.gmail.com` | SMTP server hostname |
+| `SMTP_PORT` | No | `587` | SMTP STARTTLS port |
+| `SMTP_USERNAME` | No | — | Sending mailbox address. If unset, OTPs are logged at WARNING instead of sent |
+| `SMTP_PASSWORD` | No | — | Mailbox app password (Gmail: 16-char App Password) |
+| `SMTP_FROM` | No | `SMTP_USERNAME` | `Name <addr@example.com>` format; defaults to `SMTP_USERNAME` |
 | `BACKEND_CORS_ORIGINS` | No | `http://localhost:3000` | Comma-separated allowed origins |
 | `SITE_URL` | No | first CORS origin | Public frontend URL embedded in OTP emails |
 | `JWT_TTL_HOURS` | No | `24` | Token lifetime |
@@ -223,6 +229,127 @@ uvicorn app.main:app --reload --port 8000
 npm run dev
 # App: http://localhost:3000
 ```
+
+---
+
+## Production Backend Deployment
+
+The production backend runs on an Oracle Cloud "Always Free" VM with Caddy as a TLS-terminating reverse proxy and systemd supervising uvicorn. Gmail SMTP is used for OTP and notification emails — the sender mailbox is a Hamilton Google Workspace address, so DKIM/SPF authenticate as `hamilton.edu` and mail lands in the inbox.
+
+```
+Internet → Caddy (443/TLS, Let's Encrypt) → uvicorn (127.0.0.1:8000) → FastAPI
+```
+
+| Layer | Detail |
+|-------|--------|
+| Host | Oracle Cloud Always Free, `VM.Standard.E2.1.Micro` (AMD, 1/8 OCPU + 1 GB RAM), Ubuntu 24.04, `us-ashburn-1` |
+| Public DNS | `occscheduler.duckdns.org` — DuckDNS A record pointing at the VM's public IPv4 |
+| TLS | Caddy auto-provisions and renews a Let's Encrypt cert on first start |
+| Process supervision | `systemd` unit `conference-scheduler` (`Restart=on-failure`, starts on boot) |
+| Python | 3.14 via `uv`-managed install; venv at `/home/ubuntu/conference-scheduler/backend/.venv` |
+| Swap | 2 GB swap file at `/swapfile` — the 1 GB-RAM micro relies on it for OR-Tools spikes |
+| Outbound SMTP | Gmail SMTP on port 587. Reason for not running on Render: Render's free tier blocks outbound SMTP; OCI allows it |
+| Solver wall-clock cap | 3600s (set in `backend/app/scheduler/service.py:build_schedule_for_symposium`). The throttled micro takes ~110s for a 200-presentation symposium; expect a faster shape (Ampere A1 ARM when capacity allows) to drop this to under 30s |
+
+### Routine update — pushing new code
+
+After merging changes to `main`:
+
+```bash
+# From your laptop
+git push origin main
+
+# Then on the VM
+ssh occs-vm
+cd ~/conference-scheduler && git pull
+# Only if backend/requirements.txt changed:
+#   source backend/.venv/bin/activate && uv pip install -r backend/requirements.txt
+sudo systemctl restart conference-scheduler
+sudo journalctl -u conference-scheduler -n 30 --no-pager   # sanity-check the restart
+```
+
+The frontend deploys itself on every `main` push via Vercel — nothing to do there.
+
+### Changing the production `.env`
+
+`backend/.env` lives only on the VM (it holds the Supabase service-role key, JWT secret, and Gmail App Password — none of which belong in git). To edit:
+
+```bash
+ssh occs-vm
+nano ~/conference-scheduler/backend/.env
+sudo systemctl restart conference-scheduler
+```
+
+If you ever lose the file, copy your laptop's working copy back over:
+
+```bash
+# On your laptop
+scp ~/Desktop/conference-scheduler/backend/.env occs-vm:~/conference-scheduler/backend/.env
+ssh occs-vm 'chmod 600 ~/conference-scheduler/backend/.env && sudo systemctl restart conference-scheduler'
+```
+
+### Diagnostics
+
+```bash
+# Live log tail (Ctrl+C to exit)
+sudo journalctl -u conference-scheduler -f
+
+# Last 200 lines, no paging
+sudo journalctl -u conference-scheduler -n 200 --no-pager
+
+# Just schedule-timing lines
+sudo journalctl -u conference-scheduler | grep -E "place_blocks|hierarchical complete|build_schedule_for_symposium total wall"
+
+# OOM kills (memory hypothesis check)
+sudo journalctl -k --since "1 hour ago" | grep -i -E 'oom|killed|out of memory'
+
+# Live memory + CPU
+watch -n 1 free -h
+```
+
+### Where things live on the VM
+
+| Path | Contents |
+|------|----------|
+| `~/conference-scheduler` | Git checkout (`origin/main`) |
+| `~/conference-scheduler/backend/.venv` | Python 3.14 venv (uv-managed) |
+| `~/conference-scheduler/backend/.env` | Runtime secrets, `chmod 600`, NOT in git |
+| `/etc/systemd/system/conference-scheduler.service` | systemd unit |
+| `/etc/caddy/Caddyfile` | Reverse proxy + TLS config |
+| `/etc/iptables/rules.v4` | Persistent firewall rules (22, 80, 443 allowed) |
+| `/swapfile` | 2 GB swap |
+
+### Updating Caddy (TLS / domain) config
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+sudo journalctl -u caddy -f   # watch cert renewal / proxy errors
+```
+
+The current Caddyfile is essentially:
+
+```
+occscheduler.duckdns.org {
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+### If the VM is lost — building a new one from scratch
+
+The free-tier VM could theoretically be reclaimed (idle for 7+ days, account inactivity, capacity change). Rebuild path:
+
+1. **Provision** an Ubuntu 24.04 instance in Oracle Cloud Always Free. Ampere A1 ARM (`VM.Standard.A1.Flex`, 2 OCPU / 12 GB) is preferred if `us-ashburn-1` has capacity; otherwise the AMD `VM.Standard.E2.1.Micro` works. Assign a public IPv4 and paste the `id_ed25519_occscheduler.pub` key.
+2. **Open ports 80 + 443** in two places — the OCI VCN's Default Security List (Ingress Rules for TCP/80 and TCP/443 from `0.0.0.0/0`), and host iptables (`sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 80 -j ACCEPT`, same for 443, then `sudo apt install -y iptables-persistent && sudo netfilter-persistent save`).
+3. **System prep**: 2 GB swap (`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab`), `sudo apt update && sudo apt -y upgrade`, install `git build-essential curl ca-certificates`, then install uv (`curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.local/bin/env`).
+4. **Python + repo**: `uv python install 3.14`, `cd ~ && git clone https://github.com/occscheduler-blip/conference-scheduler.git`, `cd ~/conference-scheduler/backend && uv venv --python 3.14 .venv && source .venv/bin/activate && uv pip install -r requirements.txt`.
+5. **`.env`**: `scp` from your laptop, `chmod 600`. Verify `APP_ENV=production`, that `SUPABASE_DB_URL` references the current Supabase project, and that the SMTP App Password is current.
+6. **systemd**: write `/etc/systemd/system/conference-scheduler.service` running `.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000` as user `ubuntu`. `sudo systemctl daemon-reload && sudo systemctl enable --now conference-scheduler`.
+7. **DuckDNS**: update the `occscheduler` record to point at the new VM's public IPv4.
+8. **Caddy**: install from the Cloudsmith repo (per [Caddy's install docs](https://caddyserver.com/docs/install#debian-ubuntu-raspbian)), write the Caddyfile shown above, `sudo systemctl reload caddy`. The Let's Encrypt cert issues in 5–15s; tail `journalctl -u caddy -f` to confirm.
+9. **Vercel**: only if the backend domain changed — update the `BACKEND_URL` env var in the Vercel project and redeploy.
+
+The full play-by-play (with the gotchas we hit the first time: iptables rule ordering vs. REJECT, the AMD vs ARM shape, the OCI shape picker hiding the resource sliders behind a ▶, etc.) is in the git history of `README.md` if needed.
 
 ---
 
@@ -328,12 +455,12 @@ conference-scheduler/
 │   │   ├── config.py           # Env var schema (Pydantic Settings)
 │   │   ├── request_context.py  # Per-request id middleware + log filter
 │   │   ├── utils.py            # force_uuid helper
-│   │   ├── auth/               # JWT, bcrypt, OTP, Resend email
+│   │   ├── auth/               # JWT, bcrypt, OTP, SMTP email
 │   │   │   ├── password.py      # hash_password / verify_password (bcrypt)
 │   │   │   ├── jwt_utils.py     # encode_jwt / decode_jwt, JWTClaims
 │   │   │   ├── dependencies.py  # require_jwt() FastAPI dependency factory
 │   │   │   ├── otp.py           # OTP generation + verification
-│   │   │   └── email.py         # OTP email delivery (Resend)
+│   │   │   └── email.py         # OTP email delivery via smtplib (default: Gmail SMTP)
 │   │   ├── routers/            # API route handlers, split by entity
 │   │   │   ├── events.py            # Aggregator: imports + mounts the per-entity routers below
 │   │   │   ├── events_symposiums.py # /add_symposium, /update_symposium, /delete_symposium, /symposiums
