@@ -270,6 +270,16 @@ sudo journalctl -u conference-scheduler -n 30 --no-pager   # sanity-check the re
 
 The frontend deploys itself on every `main` push via Vercel — nothing to do there.
 
+### Applying a Supabase migration to production
+
+Local `supabase start` re-applies every migration in `supabase/migrations/` automatically. The hosted Supabase project does **not** — new migrations have to be applied by hand. The safe path:
+
+1. Open the **Supabase dashboard → SQL editor** for the project referenced by `SUPABASE_URL`.
+2. Paste the SQL from the new migration file (`supabase/migrations/<timestamp>_<name>.sql`) and run it.
+3. Confirm by running a quick `SELECT` that exercises the change, or just retry the action that needed it.
+
+The migration files are intentionally small and idempotent (each starts with `DROP CONSTRAINT IF EXISTS` etc.), so running one twice is safe.
+
 ### Changing the production `.env`
 
 `backend/.env` lives only on the VM (it holds the Supabase service-role key, JWT secret, and Gmail App Password — none of which belong in git). To edit:

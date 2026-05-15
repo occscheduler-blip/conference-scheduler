@@ -56,7 +56,10 @@ def _objective_weighted_sum(
 
 
 def solve_schedule(
-    problem: ScheduleProblem, time_limit_seconds: float = 3600.0, num_search_workers: int = 4
+    problem: ScheduleProblem,
+    time_limit_seconds: float = 3600.0,
+    num_search_workers: int = 4,
+    job_id: str | None = None,
 ) -> ScheduleResult:
     """Build and solve the CP-SAT schedule model for a symposium.
 
@@ -714,12 +717,14 @@ def solve_schedule(
     model.Minimize(unscheduled_count * scheduling_penalty_weight + quality_objective)
 
     # Phase 10: solve the model within the configured time/worker budget.
+    from app.scheduler.cancellation import register_solver
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
     solver.parameters.num_search_workers = num_search_workers
 
     logger.info("Starting CP-SAT solver with %d variables", len(assignment_vars))
-    status = solver.Solve(model)
+    with register_solver(job_id, solver):
+        status = solver.Solve(model)
     logger.info("CP-SAT solver finished: status=%s  wall_time=%.2fs", solver.StatusName(status), solver.WallTime())
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         all_unscheduled = tuple(

@@ -306,6 +306,7 @@ def build_schedule_for_symposium(
     time_limit_seconds: float = 3600.0,
     constraints: ScheduleConstraints | None = None,
     debug_mode: bool = False,
+    job_id: str | None = None,
 ) -> ScheduleResult:
     if debug_mode:
         time_limit_seconds = 60.0  # quick initial solve; exhaustive search uses remaining budget
@@ -325,9 +326,9 @@ def build_schedule_for_symposium(
             len(problem.presentations),
             len({p.class_id for p in problem.presentations if p.class_id}),
         )
-        result = solve_hierarchical(problem, time_limit_seconds=time_limit_seconds)
+        result = solve_hierarchical(problem, time_limit_seconds=time_limit_seconds, job_id=job_id)
     else:
-        result = solve_schedule(problem, time_limit_seconds=time_limit_seconds)
+        result = solve_schedule(problem, time_limit_seconds=time_limit_seconds, job_id=job_id)
         # Run the cross-block verification sweep on the flat solver's output too.
         # Catches double-major / cross-listed-faculty conflicts that the flat
         # solver doesn't model (it groups by row-id, not by email-identity).

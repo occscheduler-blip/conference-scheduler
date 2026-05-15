@@ -33,6 +33,18 @@ function toDatetimeLocal(d: Date): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
+/** Format milliseconds-elapsed as ``mm:ss`` (or ``h:mm:ss`` past an hour). */
+function formatElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) ms = 0;
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+  return `${m}:${pad(s)}`;
+}
+
 type PendingScheduleChange = {
   room: number;
   start_time: string;
@@ -76,6 +88,9 @@ export default function ScheduleTab({
   // Scheduler
   const [isRunningScheduler, setIsRunningScheduler] = useState(false);
   const [schedulerMessage, setSchedulerMessage] = useState<string | null>(null);
+  const [activeScheduleJobId, setActiveScheduleJobId] = useState<string | null>(null);
+  const [runStartedAtMs, setRunStartedAtMs] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [schedulerFailure, setSchedulerFailure] = useState<{ unscheduledCount: number; diagnostics: string[]; suggestions: string[] } | null>(null);
   const [debuggerFindings, setDebuggerFindings] = useState<string[] | null>(null);
   const [debuggerRecommendations, setDebuggerRecommendations] = useState<Partial<Record<"professorAvailability" | "studentAvailability" | "sameClassSameRoom" | "roomConflicts" | "personConflicts", "off" | "soft" | "hard">>>({});
@@ -412,57 +427,88 @@ export default function ScheduleTab({
   // covers scheduler runs, drag-drops, bulk saves, and constraint toggles.
   const scheduleViolations = useMemo(() => computeAllViolations(conflictContext), [conflictContext]);
 
+  // Tracks which symposium the active scheduler poll is "owned by". If the
+  // user switches symposia mid-run, the old poll's resolved-state writes are
+  // skipped so the new symposium's view isn't clobbered by stale results.
+  const selectedSymposiumIdRef = useRef(selectedSymposiumId);
+  useEffect(() => {
+    selectedSymposiumIdRef.current = selectedSymposiumId;
+  }, [selectedSymposiumId]);
+
+  // Tick a `now` clock once per second while the scheduler is running so the
+  // elapsed-time display in the running-state banner updates live. No-op
+  // when no run is in flight, so we don't burn renders on idle pages.
+  useEffect(() => {
+    if (!isRunningScheduler || runStartedAtMs === null) return;
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [isRunningScheduler, runStartedAtMs]);
+
   // Handlers
-  const handleRunScheduler = async (skipConfirm: boolean = false, debugMode: boolean = false) => {
+  const handleRunScheduler = async (skipConfirm: boolean = false, debugMode: boolean = false, existingJobId?: string) => {
     if (!selectedSymposiumId) return;
-    if (!skipConfirm && !(await confirmDialog("This will regenerate the schedule. Existing assignments will be replaced. Continue?", "Regenerate schedule"))) return;
+    if (!existingJobId && !skipConfirm && !(await confirmDialog("This will regenerate the schedule. Existing assignments will be replaced. Continue?", "Regenerate schedule"))) return;
+
+    const ownerSymposiumId = selectedSymposiumId;
 
     setIsRunningScheduler(true);
-    setSchedulerMessage(debugMode ? "Running exhaustive constraint analysis (up to 10 minutes)..." : "Starting scheduler...");
+    setSchedulerMessage(debugMode ? "Running exhaustive constraint analysis (up to 10 minutes)..." : (existingJobId ? "Re-attaching to in-flight scheduler run..." : "Starting scheduler..."));
     setSchedulerFailure(null);
     setDebuggerFindings(null);
     setDebuggerRecommendations({});
     setDebugBestAssignments([]);
     try {
       let jobId: string;
-      let attachedToExisting = false;
-      try {
-        const { raw: startRaw } = await apiPost("/api/events/schedule", {
-          symposium_id: selectedSymposiumId,
-          debug_mode: debugMode,
-          constraints: {
-            room_conflicts: constraints.roomConflicts,
-            person_conflicts: constraints.personConflicts,
-            symposium_windows: constraints.symposiumWindows,
-            professor_availability: constraints.professorAvailability,
-            student_availability: constraints.studentAvailability,
-            same_class_same_room: constraints.sameClassSameRoom,
-            slot_alignment: constraints.slotAlignment,
-            minimize_makespan: constraints.minimizeMakespan,
-            minimize_class_span: constraints.minimizeClassSpan,
-            minimize_professor_span: constraints.minimizeProfessorSpan,
-            balance_rooms: constraints.balanceRooms,
-          },
-        }, authHeaders);
-        jobId = startRaw.job_id as string;
-      } catch (err) {
-        // If a run is already in flight for this symposium (singleton index +
-        // 423 lock), attach to it instead of failing.
-        if (err instanceof ApiError && err.isSchedulerBusy()) {
-          const detail = (err.body as { detail?: { job_id?: string } }).detail;
-          const existingId = detail?.job_id;
-          if (typeof existingId === "string") {
-            jobId = existingId;
-            attachedToExisting = true;
+      let attachedToExisting = existingJobId !== undefined;
+      if (existingJobId) {
+        jobId = existingJobId;
+      } else {
+        try {
+          const { raw: startRaw } = await apiPost("/api/events/schedule", {
+            symposium_id: selectedSymposiumId,
+            debug_mode: debugMode,
+            constraints: {
+              room_conflicts: constraints.roomConflicts,
+              person_conflicts: constraints.personConflicts,
+              symposium_windows: constraints.symposiumWindows,
+              professor_availability: constraints.professorAvailability,
+              student_availability: constraints.studentAvailability,
+              same_class_same_room: constraints.sameClassSameRoom,
+              slot_alignment: constraints.slotAlignment,
+              minimize_makespan: constraints.minimizeMakespan,
+              minimize_class_span: constraints.minimizeClassSpan,
+              minimize_professor_span: constraints.minimizeProfessorSpan,
+              balance_rooms: constraints.balanceRooms,
+            },
+          }, authHeaders);
+          jobId = startRaw.job_id as string;
+        } catch (err) {
+          // If a run is already in flight for this symposium (singleton index +
+          // 423 lock), attach to it instead of failing.
+          if (err instanceof ApiError && err.isSchedulerBusy()) {
+            const detail = (err.body as { detail?: { job_id?: string } }).detail;
+            const existingId = detail?.job_id;
+            if (typeof existingId === "string") {
+              jobId = existingId;
+              attachedToExisting = true;
+            } else {
+              throw err;
+            }
+          } else if (err instanceof ApiError && err.isBusy()) {
+            throw new Error("Symposium is busy with another change — please retry.");
           } else {
             throw err;
           }
-        } else if (err instanceof ApiError && err.isBusy()) {
-          throw new Error("Symposium is busy with another change — please retry.");
-        } else {
-          throw err;
         }
       }
+      setActiveScheduleJobId(jobId);
+      // Only initialise the start time if the auto-attach effect didn't
+      // already set it from the job's created_at. Use functional setState so
+      // we don't depend on a stale value in this closure.
+      setRunStartedAtMs((prev) => prev ?? Date.now());
+      setNowMs(Date.now());
+
       const POLL_TIMEOUT_MS = debugMode ? 45 * 60 * 1000 : 30 * 60 * 1000;
       const pollTimeoutMinutes = Math.round(POLL_TIMEOUT_MS / 60000);
 
@@ -472,11 +518,22 @@ export default function ScheduleTab({
         setSchedulerMessage(debugMode ? `Testing all constraint combinations... (up to ${pollTimeoutMinutes} minutes)` : "Scheduler running...");
       }
 
+      const cancelOnServer = async (): Promise<void> => {
+        try {
+          await apiPost(`/api/events/schedule_job/${encodeURIComponent(jobId)}/cancel`, {}, authHeaders);
+        } catch (cancelErr) {
+          // Swallow — server is presumably either already terminal or unreachable;
+          // either way the local poll is about to give up regardless.
+          console.warn("Cancel request failed", cancelErr);
+        }
+      };
+
       const pollStart = Date.now();
       const raw = await new Promise<Record<string, unknown>>((resolve, reject) => {
         const poll = async () => {
           if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
-            reject(new Error(`${debugMode ? "Debugger" : "Scheduler"} timed out after ${pollTimeoutMinutes} minutes.`));
+            await cancelOnServer();
+            reject(new Error(`${debugMode ? "Debugger" : "Scheduler"} timed out after ${pollTimeoutMinutes} minutes — the run has been cancelled.`));
             return;
           }
           try {
@@ -489,6 +546,8 @@ export default function ScheduleTab({
               resolve(job.result as Record<string, unknown>);
             } else if (jobStatus === "failed") {
               reject(new Error((job.error as string) ?? "Scheduler failed"));
+            } else if (jobStatus === "cancelled") {
+              reject(new Error("__cancelled__"));
             } else {
               setTimeout(() => void poll(), 2000);
             }
@@ -498,6 +557,14 @@ export default function ScheduleTab({
         };
         void poll();
       });
+
+      // If the user has switched symposia while we were polling, don't clobber
+      // the new view with this run's result UI. The data refresh still happens
+      // for the run's owner symposium so its cache is up to date next time.
+      if (selectedSymposiumIdRef.current !== ownerSymposiumId) {
+        await fetchScheduleData(ownerSymposiumId);
+        return;
+      }
 
       const status = raw.status as string;
       const assignments = (raw.assignments as unknown[]) ?? [];
@@ -510,7 +577,7 @@ export default function ScheduleTab({
       );
       setPendingChanges(new Map());
       setBulkSaveMessage(null);
-      await fetchScheduleData(selectedSymposiumId);
+      await fetchScheduleData(ownerSymposiumId);
       if (unscheduledIds.length > 0) {
         const hints = suggestions.filter((s) => s.startsWith("[Debugger]")).map((s) => s.replace(/^\[Debugger\]\s*/, ""));
         const regularSuggestions = suggestions.filter((s) => !s.startsWith("[Debugger]"));
@@ -539,8 +606,14 @@ export default function ScheduleTab({
         }
       }
     } catch (error) {
+      if (selectedSymposiumIdRef.current !== ownerSymposiumId) {
+        // User has navigated away — surface nothing on the new symposium's view.
+        return;
+      }
       const msg = toErrorMessage(error);
-      if (debugMode) {
+      if (msg === "__cancelled__") {
+        setSchedulerMessage(debugMode ? "Debugger cancelled." : "Scheduler cancelled.");
+      } else if (debugMode) {
         setSchedulerMessage("Debugger did not complete.");
         setDebuggerFindings([`The debugger encountered an error: ${msg}. No constraint recommendations could be generated.`]);
       } else {
@@ -552,9 +625,77 @@ export default function ScheduleTab({
         });
       }
     } finally {
-      setIsRunningScheduler(false);
+      // Only clear the global running state if the user is still on the
+      // symposium this run was kicked off for. Otherwise we'd erase the new
+      // symposium's own running state (which the symposium-change effect just set).
+      if (selectedSymposiumIdRef.current === ownerSymposiumId) {
+        setIsRunningScheduler(false);
+        setActiveScheduleJobId(null);
+        setRunStartedAtMs(null);
+      }
     }
   };
+
+  const handleCancelScheduler = async () => {
+    if (!activeScheduleJobId) return;
+    if (!(await confirmDialog("Cancel the running scheduler? Any partial progress will be discarded.", "Cancel scheduler"))) return;
+    try {
+      await apiPost(`/api/events/schedule_job/${encodeURIComponent(activeScheduleJobId)}/cancel`, {}, authHeaders);
+      // The poll loop will see status='cancelled' on its next tick and resolve
+      // the run into "Scheduler cancelled." via the __cancelled__ sentinel.
+    } catch (err) {
+      setSchedulerMessage(`Error cancelling scheduler: ${toErrorMessage(err)}`);
+    }
+  };
+
+  // When the user opens the tab on a symposium (or switches to one), check if
+  // there's already a scheduler run in flight on the backend and attach to it
+  // so they see the running state and a cancel button. The data lives in
+  // scheduler_jobs, so this survives page reloads and symposium switches.
+  useEffect(() => {
+    if (!selectedSymposiumId) return;
+    const symposiumIdAtMount = selectedSymposiumId;
+    let cancelled = false;
+
+    // Reset transient scheduler UI when arriving on a new symposium. If this
+    // symposium has its own running job we'll attach to it below; otherwise
+    // the view should be idle for the new symposium.
+    setIsRunningScheduler(false);
+    setActiveScheduleJobId(null);
+    setSchedulerMessage(null);
+    setRunStartedAtMs(null);
+
+    (async () => {
+      try {
+        const resp = await apiGet(
+          `/api/events/symposium/${encodeURIComponent(symposiumIdAtMount)}/active_schedule_job`,
+          authHeaders,
+        );
+        if (cancelled) return;
+        const active = (resp as { active: { job_id: string; status: string; created_at?: string } | null }).active;
+        if (!active) return;
+        // Race guard: user may have switched away during the fetch.
+        if (selectedSymposiumIdRef.current !== symposiumIdAtMount) return;
+        // Seed the elapsed-time counter from created_at so re-attached runs
+        // show the true age, not "0:00" from when the page loaded.
+        if (active.created_at) {
+          const parsed = Date.parse(active.created_at);
+          if (Number.isFinite(parsed)) setRunStartedAtMs(parsed);
+        }
+        void handleRunScheduler(true, false, active.job_id);
+      } catch (err) {
+        if (!cancelled) console.warn("Failed to check for active scheduler job", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // handleRunScheduler is a stable closure for our purposes — including it
+    // would re-run this effect on every render. selectedSymposiumId is the
+    // only trigger we actually want.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSymposiumId]);
 
   const [isAddingRoom, setIsAddingRoom] = useState(false);
   const [pendingRooms, setPendingRooms] = useState<number | null>(null);
@@ -1050,9 +1191,25 @@ export default function ScheduleTab({
             ) : null}
           </div>
           {schedulerMessage ? (
-            <p className={`text-sm font-medium ${schedulerMessage.startsWith("Error") ? "text-[#9a1f1f]" : "text-[#1b6e2b]"}`}>
-              {schedulerMessage}
-            </p>
+            <div className="flex items-center gap-3">
+              <p className={`text-sm font-medium ${schedulerMessage.startsWith("Error") ? "text-[#9a1f1f]" : "text-[#1b6e2b]"}`}>
+                {schedulerMessage}
+              </p>
+              {isRunningScheduler && runStartedAtMs !== null ? (
+                <span className="rounded bg-[#e8f1ff] px-2 py-0.5 font-mono text-xs font-semibold tabular-nums text-[#1b338f]">
+                  {formatElapsed(nowMs - runStartedAtMs)}
+                </span>
+              ) : null}
+              {isRunningScheduler && activeScheduleJobId ? (
+                <button
+                  type="button"
+                  onClick={() => void handleCancelScheduler()}
+                  className="rounded-lg border border-[#9a1f1f] bg-white px-3 py-1 text-xs font-semibold text-[#9a1f1f] transition hover:bg-[#fbeaea]"
+                >
+                  Cancel scheduler
+                </button>
+              ) : null}
+            </div>
           ) : null}
           {publishMessage ? (
             <p className={`text-sm font-medium ${publishMessage.startsWith("Error") ? "text-[#9a1f1f]" : "text-[#1b6e2b]"}`}>

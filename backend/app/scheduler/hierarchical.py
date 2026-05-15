@@ -319,6 +319,7 @@ def place_blocks(
     problem: ScheduleProblem,
     time_limit_seconds: float,
     num_search_workers: int = 4,
+    job_id: str | None = None,
 ) -> tuple[list[PlacedBlock], list[ClassBlock], str]:
     """Phase 2: assign each block to a (room, start_slot) using CP-SAT.
 
@@ -811,12 +812,14 @@ def place_blocks(
     unscheduled_count = n_sched - sum(is_scheduled.values())
     model.Minimize(unscheduled_count * unscheduled_penalty + quality)
 
+    from app.scheduler.cancellation import register_solver
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
     solver.parameters.num_search_workers = num_search_workers
 
     t0 = time.perf_counter()
-    status = solver.Solve(model)
+    with register_solver(job_id, solver):
+        status = solver.Solve(model)
     logger.info(
         "place_blocks: blocks=%d  status=%s  wall=%.2fs  soft_violations=%d  soft_avail_misses=%d",
         len(schedulable),
@@ -1133,6 +1136,7 @@ def solve_hierarchical(
     problem: ScheduleProblem,
     time_limit_seconds: float = 3600.0,
     num_search_workers: int = 4,
+    job_id: str | None = None,
 ) -> ScheduleResult:
     """Run the full pipeline end-to-end and return a ScheduleResult."""
     t_total = time.perf_counter()
@@ -1154,7 +1158,7 @@ def solve_hierarchical(
     )
 
     placed, unscheduled_blocks, status_label = place_blocks(
-        blocks, problem, time_limit_seconds, num_search_workers=num_search_workers
+        blocks, problem, time_limit_seconds, num_search_workers=num_search_workers, job_id=job_id
     )
 
     if status_label == "infeasible":

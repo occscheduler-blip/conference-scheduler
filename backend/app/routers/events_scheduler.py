@@ -18,6 +18,7 @@ from app.routers.events_helpers import (
     _room_label,
 )
 from app.scheduler import build_schedule_for_symposium
+from app.scheduler.cancellation import cancel_job, clear_cancelled, is_cancelled
 from app.scheduler.conflicts import (
     build_conflict_index,
     format_person_conflict_pair,
@@ -103,7 +104,18 @@ def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConst
 
     try:
         _update({"status": "running"})
-        result = build_schedule_for_symposium(symposium_id, slot_minutes=slot_minutes, constraints=constraints, debug_mode=debug_mode)
+        result = build_schedule_for_symposium(
+            symposium_id,
+            slot_minutes=slot_minutes,
+            constraints=constraints,
+            debug_mode=debug_mode,
+            job_id=job_id,
+        )
+        if is_cancelled(job_id):
+            logger.info("schedule job %s cancelled mid-solve; not writing result", job_id)
+            _update({"status": "cancelled"})
+            clear_cancelled(job_id)
+            return
         logger.info("schedule job %s complete: status=%s  assignments=%d", job_id, result.status, len(result.assignments))
         result_payload = {
             "status": result.status,
@@ -121,6 +133,11 @@ def _run_schedule_job(job_id: str, symposium_id: str, constraints: ScheduleConst
         }
         _update({"status": "completed", "result": result_payload})
     except Exception as exc:
+        if is_cancelled(job_id):
+            logger.info("schedule job %s cancelled (exception during cancel teardown is expected)", job_id)
+            _update({"status": "cancelled"})
+            clear_cancelled(job_id)
+            return
         logger.exception("schedule job %s failed", job_id)
         _update({"status": "failed", "error": str(exc)})
 
@@ -261,6 +278,82 @@ def get_schedule_job(
     except Exception as exc:
         logger.exception("get_schedule_job failed: job_id=%s", job_id)
         raise HTTPException(status_code=500, detail=f"Failed to fetch job: {exc}") from exc
+
+
+@router.post("/schedule_job/{job_id}/cancel")
+def cancel_schedule_job(
+    job_id: str,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object]:
+    """Mark a running scheduler job as cancelled and stop its solver(s).
+
+    Idempotent — calling on a completed/failed/already-cancelled job is a no-op
+    that returns the current status. The DB write is conditional on the job
+    being pending/running so we don't clobber a terminal status that landed
+    between the user clicking cancel and us getting here.
+    """
+    try:
+        rows = supabase.table("scheduler_jobs").select("id,status").eq("id", job_id).execute()
+        if not rows.data:
+            raise HTTPException(status_code=404, detail="Job not found")
+        current_status = cast(str, rows.data[0]["status"])
+
+        if current_status in ("pending", "running"):
+            supabase.table("scheduler_jobs").update({
+                "status": "cancelled",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", job_id).in_("status", ["pending", "running"]).execute()
+            stopped = cancel_job(job_id)
+            logger.info("cancel_schedule_job: job_id=%s stopped_solvers=%d", job_id, stopped)
+            return {"status": "cancelled", "solvers_stopped": stopped}
+
+        logger.info("cancel_schedule_job: job_id=%s already terminal (status=%s) — no-op", job_id, current_status)
+        return {"status": current_status, "solvers_stopped": 0}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("cancel_schedule_job failed: job_id=%s", job_id)
+        raise HTTPException(status_code=500, detail=f"Failed to cancel job: {exc}") from exc
+
+
+@router.get("/symposium/{symposium_id}/active_schedule_job")
+def get_active_schedule_job(
+    symposium_id: str,
+    _claims: JWTClaims = Depends(require_jwt(required_roles=["admin"])),
+) -> dict[str, object | None]:
+    """Return the in-flight scheduler_jobs row for *symposium_id*, or ``{active: null}``.
+
+    Stale rows (no heartbeat for `_STALE_ACTIVE_JOB_SECONDS`) are reported as
+    inactive — the next call to `/schedule` will reset them. This lets the
+    frontend show the running state when the user comes back to a symposium
+    whose scheduler is still chugging in the background.
+    """
+    try:
+        active = _existing_active_job(symposium_id)
+        if active is None or _is_stale_active_job(active):
+            return {"active": None}
+        # created_at lets the frontend show a counter that reflects the true
+        # run age (e.g. "1:23" if the user comes back after the run has been
+        # going for 83 seconds), not just time-since-page-load.
+        full = (
+            supabase.table("scheduler_jobs")
+            .select("id,status,created_at,updated_at")
+            .eq("id", active["id"])
+            .limit(1)
+            .execute()
+        )
+        row = cast(dict[str, Any], full.data[0]) if full.data else active
+        return {
+            "active": {
+                "job_id": row["id"],
+                "status": row["status"],
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+        }
+    except Exception as exc:
+        logger.exception("get_active_schedule_job failed: symposium_id=%s", symposium_id)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch active schedule job: {exc}") from exc
 
 
 @router.get("/temporary_timeframes")
