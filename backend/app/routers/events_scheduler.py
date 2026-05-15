@@ -296,7 +296,8 @@ def cancel_schedule_job(
         rows = supabase.table("scheduler_jobs").select("id,status").eq("id", job_id).execute()
         if not rows.data:
             raise HTTPException(status_code=404, detail="Job not found")
-        current_status = cast(str, rows.data[0]["status"])
+        job = cast(dict[str, Any], rows.data[0])
+        current_status = cast(str, job["status"])
 
         if current_status in ("pending", "running"):
             supabase.table("scheduler_jobs").update({
